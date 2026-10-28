@@ -84,6 +84,19 @@ struct QEvent {
     int button;
     char text[32];
 };
+// ImGui's failed checks (third_party/imgui/imconfig.h IM_ASSERT): logged with the host backtrace the first time at
+// each place, then ImGui goes on as it would past an ignored assert.
+extern "C" void plat_print_backtrace(void);
+extern "C" void imgui_check_failed(const char *expr, const char *file, int line) {
+    static const char *seen_file[32];
+    static int seen_line[32], nseen;
+    for (int i = 0; i < nseen; i++)
+        if (seen_line[i] == line && seen_file[i] == file) return;
+    if (nseen < 32) seen_file[nseen] = file, seen_line[nseen++] = line;
+    LOG("[imgui] check failed: %s (%s:%d)\n", expr, file, line);
+    plat_print_backtrace();
+}
+
 static pthread_mutex_t q_lock = PTHREAD_MUTEX_INITIALIZER;
 static std::vector<QEvent> q_events;
 static float g_pixel_density = 1;
