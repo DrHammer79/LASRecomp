@@ -17,6 +17,7 @@
 
 #include "../game_addresses.h"
 #include "../hle.h"
+#include "../input_bind.h"
 #include "../settings.h"
 
 #define COOP_MAX 8
@@ -497,19 +498,18 @@ static bool player_screen(int i, float lift, float w, float h, float *sx, float 
     return true;
 }
 
-// ---- The camera zoomed out (setting coop_camera): its field of view widened by this (runtime/hle/widescreen.c
-// rt_fovy, also the culling pass's, and the sky and sea's reach) - a set amount, and with coop_camera_fit further out
-// as far as it takes to keep every player who is up in view, eased in and out, up to ZOOM_MAX. 1 out of play and
+// ---- The camera zoomed out (settings coop_zoom, coop_camera_fit, coop_zoom_fit): its field of view widened by this
+// (runtime/hle/widescreen.c rt_fovy, also the culling pass's, and the sky and sea's reach). coop_zoom 10% steps out
+// always (up to 60%); with coop_camera_fit, further out as far as it takes to keep every player who is up in view, up
+// to coop_zoom_fit steps (up to 100%: twice the view), never in of coop_zoom, eased in and out. 1 out of play and
 // without co-op.
-#define ZOOM_MAX 1.5f
 static float g_zoom = 1.0f;
 float coop_camera_zoom(void) { return g_zoom; }
 
 static void zoom_tick(bool play) {
-    static const float set[] = {1.0f, 1.05f, 1.1f, 1.25f, 1.5f};
-    int mode = g_settings.coop_camera;
-    float base = mode >= COOP_CAM_NORMAL && mode <= COOP_CAM_150 ? set[mode] : 1.0f, want = base;
-    bool fit = g_settings.coop_camera_fit && base < ZOOM_MAX;
+    float base = 1.0f + 0.1f * g_settings.coop_zoom, top = fmaxf(base, 1.0f + 0.1f * g_settings.coop_zoom_fit);
+    float want = base;
+    bool fit = g_settings.coop_camera_fit && top > base;
     if (!play || !rt_coop_on()) want = 1.0f;
     else if (fit) {  // (how far out each player is at the game's own view: x, y beyond 0.7 zoom out; never in of base)
         extern float widescreen_factor(void);  // (runtime/hle/widescreen.c: the window's aspect over 16:9)
@@ -518,7 +518,7 @@ static void zoom_tick(bool play) {
         for (int i = 1; i < g_n; i++)
             if (!g_down[i] && player_pos(g_extra[i], p) && view_point(p, aspect, &nx, &ny, &front) && front)
                 far = fmaxf(far, fmaxf(fabsf(nx), fabsf(ny)) * g_zoom);
-        want = fminf(fmaxf(far / 0.7f, base), ZOOM_MAX);
+        want = fminf(fmaxf(far / 0.7f, base), top);
     }
     if (!fit || !play) g_zoom = want;
     else g_zoom += (want - g_zoom) * (want > g_zoom ? 0.06f : 0.02f);  // (out quicker than back in)
@@ -604,6 +604,79 @@ static void lost_tick(void) {
         }
     }
 }
+
+// The pause menu takes "the player's" spot as it opens - for its map, and for a save's restart point - from the first
+// Link made: another player's (Player 1's is made last: the scene's camera is the last Link's; made first, the camera
+// wasn't Player 1's). Not through the actors' name map (its "Player" entry repointed at Player 1 didn't change the
+// file), nor from a pointer kept anywhere found, nor at save time (his position copies all on Player 1 while paused
+// didn't change it). A file saved with him far away - fallen through ground that isn't loaded - loaded with Link
+// falling forever (user 2026-10-28; with 2 players, saved with Player 2 9 units away, the file held Player 2's spot).
+// So as Player 1 presses + or - (the pause menu, the map), every other Link's position - every copy his components
+// keep - is Player 1's for the pause, put back once it is over (checked: saved with Player 2 away, the file holds
+// Player 1's spot, and Player 2 is back on his own after the menu closes, walking).
+static const uint16_t k_pos_copies[][2] = {  // ([Link + component] + offset: found 2026-10-28 by value)
+    {0x80, 0x80}, {0x80, 0xb0}, {0x80, 0x350}, {0x2a8, 0xb0}, {0x2d8, 0x80}, {0x2d8, 0xb0}, {0x2d8, 0x350},
+    {0x2e8, 0xb0}, {0x318, 0x380}, {0x328, 0xb0}, {0x378, 0xb0}, {0x388, 0xb0}, {0x3c0, 0x350}, {0x3d0, 0x1f0},
+    {0x4a0, 0xb0}, {0x5b8, 0x290}, {0x1358, 0x290}, {0x1850, 0x2f0}, {0x19d0, 0x1f0}};
+#define NPOS (sizeof k_pos_copies / sizeof k_pos_copies[0])
+static uint64_t g_p1_updated;          // (the frame Player 1's update last ran)
+static uint64_t g_held_at;             // (the frame the other Links were put on Player 1; 0: they aren't)
+
+static struct { uint64_t addr; float v[3]; } g_held[COOP_MAX * NPOS];
+static int g_nheld;
+
+static void hold_on_p1(void) {
+    float h[3];
+    if (g_held_at || !player_pos(host_player(), h)) return;
+    g_nheld = 0;
+    for (int i = 1; i < g_n; i++) {
+        if (!collision_of(g_extra[i])) continue;
+        for (size_t k = 0; k < NPOS; k++) {
+            uint64_t comp = LD64(g_extra[i] + k_pos_copies[k][0]), a = comp + k_pos_copies[k][1];
+            bool dup = false;
+            for (int j = 0; j < g_nheld && !dup; j++) dup = g_held[j].addr == a;
+            if (!heap_ptr(comp) || dup) continue;
+            g_held[g_nheld].addr = a;
+            memcpy(g_held[g_nheld].v, (const void *)(uintptr_t)a, 12);
+            memcpy((void *)(uintptr_t)a, h, sizeof h);
+            g_nheld++;
+        }
+    }
+    g_held_at = renderer_present_count();
+    CLOG("[coop] pause menu: the other players on Player 1's spot (%d copies)\n", g_nheld);
+}
+
+static void hold_release(void) {
+    for (int j = g_nheld - 1; j >= 0; j--) memcpy((void *)(uintptr_t)g_held[j].addr, g_held[j].v, 12);
+    CLOG("[coop] pause over: the other players back (%d copies)\n", g_nheld);
+    g_nheld = 0, g_held_at = 0;
+}
+
+static bool g_hold_next;  // (+ or - pressed: hold as Player 1's update - which opens the menu - runs)
+static void pause_tick(void) {
+    extern uint64_t input_buttons_now(void);  // (runtime/hle/input.c: Player 1's buttons, by BIND_*)
+    static uint64_t last;
+    uint64_t b = input_buttons_now();
+    uint64_t pressed = b & ~last & (1ull << BIND_PLUS | 1ull << BIND_MINUS);
+    last = b;
+    if (pressed && !g_p1_event) g_hold_next = true;
+}
+
+// An actor's update about to run. Player 1's on the frame + or - was pressed holds the others on his spot (the menu
+// opens after the frame's updates); theirs don't run while they're held - their own code never sees the copies
+// changed - and once Player 1's runs again after the pause (or 8 frames on, no menu), they're let go. True: skip it.
+static bool pause_updated(uint64_t actor) {
+    if (!actor) return false;
+    uint64_t now = renderer_present_count();
+    if (actor == host_player()) {
+        if (g_held_at && (now >= g_p1_updated + 2 || now > g_held_at + 8)) hold_release();
+        g_p1_updated = now;
+        if (g_hold_next) g_hold_next = false, hold_on_p1();
+        return false;
+    }
+    return g_held_at && coop_index(actor);
+}
+RT_ON_RESET(coop_pause_reset) { g_p1_updated = g_held_at = 0, g_nheld = 0; }
 
 bool coop_player_screen(int i, float w, float h, float *sx, float *sy, bool *edge) {
     return i >= 1 && player_screen(i, 1.0f, w, h, sx, sy, edge);
@@ -784,18 +857,14 @@ static uint64_t made_take_back(void) {  // (a live Link made earlier that no pla
     return 0;
 }
 
-// Player 1's Link is made first. The actors' name map (an unordered_map: name -> node; the creator's "exists already"
-// check, COOP_DUP_SITE, finds it) keeps one "Player" entry, the first Link made's: whatever finds "the Player" by name
-// gets him. Made after the others (as it was), that was another player's Link, and the save's restart point was his
-// spot: a file saved with him far away - in water, fallen - loaded with Link falling forever (user 2026-10-28; with 2
-// players, saved with Player 2 9 units away, the file held Player 2's spot). Repointing the entry afterwards hung the
-// next level change (each Link's teardown takes out its own entry). The creator leaves the game manager's player
-// (+0x4b8) on the last Link made: Player 1's again after the others.
+// The creator, once for each other player, then for Player 1 - last: the scene's camera is the last Link's (made first,
+// the camera wasn't his), and it leaves the game manager's player (+0x4b8) on him. (The pause menu still finds the
+// first one made: see hold_on_p1.)
 static int coop_create(Cpu *c) {
     if (g_creating >= 0) return 0;  // (our own call: the creator as it is)
-    uint64_t args[8], me = 0;
+    uint64_t args[8];
     memcpy(args, c->x, sizeof args);
-    for (int i = 0; i < g_n; i++) {
+    for (int i = g_n - 1; i >= 0; i--) {
         if (i > 0 && g_extra[i] && LD64(g_extra[i]) == GA(PLAYER_VTABLE)) continue;
         if (i > 0 && (g_extra[i] = made_take_back())) {
             LOG("[coop] player %d: Link %#llx (taken back)\n", i + 1, (unsigned long long)g_extra[i]);
@@ -804,17 +873,15 @@ static int coop_create(Cpu *c) {
         g_creating = i;
         memcpy(c->x, args, sizeof args);
         guest_call(c, GA(COOP_CREATE_SITE));
-        if (i == 0) me = host_player();
-        else {
+        if (i > 0) {
             g_extra[i] = host_player();
             made_add(g_extra[i]);
             LOG("[coop] player %d: Link %#llx\n", i + 1, (unsigned long long)g_extra[i]);
         }
     }
     g_creating = -1;
-    uint64_t gm = LD64(GA(GAME_MGR));
-    if (gm && me && LD64(gm + 0x4b8) != me) ST64(gm + 0x4b8, me);
     CLOG("[coop] creator: player 1 Link %#llx\n", (unsigned long long)host_player());
+
     return 2;  // (to the creator's ret)
 }
 
@@ -1264,6 +1331,7 @@ int rt_coop_hook(Cpu *c, int which) {
         ST64(c->x[0] + 8, 0);
         return 1;
     case 2:  // COOP_DUP_SITE - cbnz x0: "a Link exists already" let through while the creator makes the other Links
+
         return g_creating >= 0 ? 1 : 0;
     case 3:  // COOP_PLACE_SITE
         return coop_place(c);
@@ -1319,6 +1387,10 @@ int rt_coop_hook(Cpu *c, int which) {
         if (!on_game_thread()) return 0;
         uint64_t a = heap_ptr(c->x[0]) ? LD64(c->x[0] + 8) : 0;
         g_updating = heap_ptr(a) ? a : 0;
+        if (pause_updated(g_updating)) {  // (held on Player 1's spot for the pause menu: see hold_on_p1)
+            g_updating = 0;
+            return 1;
+        }
         int made = made_index(g_updating);
         if (made >= 0) {
             g_made[made].seen = renderer_present_count();
@@ -1583,9 +1655,37 @@ void coop_tick(Cpu *c) {
             memcpy((void *)(uintptr_t)(p + 0x80), v, sizeof v);
         }
     }
+    {   // (investigating, temporary: LARECOMP_SCAN_SNAP=<frame> - where player 2's spot, snapped to 0.75, is kept)
+        static int done;
+        unsigned long at;
+        float p[3];
+        if (!done && ENV("LARECOMP_SCAN_SNAP") && sscanf(ENV("LARECOMP_SCAN_SNAP"), "%lu", &at) == 1 &&
+            renderer_present_count() >= at && g_n > 1 && player_pos(g_extra[1], p)) {
+            done = 1;
+            float sx = roundf(p[0] / 0.75f) * 0.75f, sz = roundf(p[2] / 0.75f) * 0.75f;
+            LOG("[scan] player 2 at (%.2f %.2f %.2f): looking for x %.2f z %.2f\n", p[0], p[1], p[2], sx, sz);
+            uint64_t gm = LD64(GA(GAME_MGR));
+            #define SNAP_HIT(a) (fabsf(*(const float *)(uintptr_t)(a) - sx) < 0.01f && \
+                                 fabsf(*(const float *)(uintptr_t)((a) + 8) - sz) < 0.01f)
+            for (uint64_t a = MAIN_BASE + GA(MAIN_CODE_SIZE); a + 12 <= GA(MAIN_IMAGE_SCAN_END); a += 4)
+                if (SNAP_HIT(a)) LOG("[scan] main+%#llx\n", (unsigned long long)(a - MAIN_BASE));
+            for (uint64_t o = 0; o < 0x8000; o += 4)
+                if (SNAP_HIT(GA(LIVE_SAVE) + o)) LOG("[scan] live save +%#llx\n", (unsigned long long)o);
+            for (uint64_t o = 0; o < 0x4000; o += 8) {
+                uint64_t q = LD64(gm + o);
+                if (SNAP_HIT(gm + o)) LOG("[scan] game manager +%#llx\n", (unsigned long long)o);
+                if (heap_ptr(q))
+                    for (uint64_t r = 0; r < 0x2000; r += 4)
+                        if (heap_ptr(q + r) && SNAP_HIT(q + r))
+                            LOG("[scan] [game manager +%#llx] +%#llx\n", (unsigned long long)o, (unsigned long long)r);
+            }
+            #undef SNAP_HIT
+            LOG("[scan] done\n");
+        }
+    }
     hearts_tick(c);
     sleep_tick(c);
-    if (play) lost_tick(), leash_tick(), room_follow_tick();
+    if (play) pause_tick(), lost_tick(), leash_tick(), room_follow_tick();
     extern uint64_t input_coop_buttons(int player);
     uint64_t frame = renderer_present_count();
     static int test_die;  // LARECOMP_COOP_DIE=<player>,... (test): those players sent to the dead state 3 s after they
