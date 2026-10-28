@@ -16,6 +16,8 @@
 extern "C" {
 #include "../input_bind.h"
 #include "../settings.h"
+
+extern "C" int coop_players_setting(void);  // (runtime/hle/coop.c: 1 once the game is a version without co-op)
 int input_pad_family(void);              // runtime/hle/input.c
 SDL_JoystickID input_active_pad(void);   // runtime/hle/input.c: the controller the game reads (0: none yet)
 void input_apply_background(void);
@@ -307,6 +309,69 @@ extern "C" void controls_tab_draw(float scale) {
     opt_toggle("Buttons match labels", &g_settings.face_by_label, false,
                "On Xbox and PlayStation controllers, A, B, X and Y work as printed on the controller, so the bottom "
                "button is A. Off keeps the Switch layout. Nintendo controllers aren't affected.");
+
+    // Local co-op (runtime/hle/coop.c). The player count applies from the next file loaded (the extra Links are made
+    // with Link's own as a save loads); the tunic colours' file is part of the game's data from when it starts.
+    opt_section("Co-op");
+    bool coop_version = g_settings.coop_players <= 1 || coop_players_setting() > 1;
+    {
+        static const char *const players[] = {"Off", "2 players", "3 players", "4 players", "5 players", "6 players",
+                                              "7 players", "8 players"};
+        int i = g_settings.coop_players - 1;
+        if (i < 0 || i > 7) i = 0;
+        if (!coop_version) opt_disable_next();
+        if (opt_choice("Players", &i, players, 8, 0,
+                       coop_version
+                           ? "Local co-op: one Link per player. Player 1 uses the keyboard and the first controller, "
+                             "each other player the next controller connected. Applies from the next file you load; "
+                             "if co-op was off when LAS Recomp started, restart it for the players' tunic colours."
+                           : "Local co-op needs the game files of version 1.0.1 or 1.1.0.",
+                       false))
+            g_settings.coop_players = i + 1;
+    }
+    if (g_settings.coop_players > 1 && coop_version) {
+        opt_indent(1);
+        opt_toggle("Player collision", &g_settings.coop_collision, false,
+                   "The Links block each other. Off: they walk through each other. Every player still arrives on "
+                   "Player 1 when entering an area.");
+        opt_toggle("Enemies target the nearest player", &g_settings.coop_targets, true,
+                   "Each enemy goes after the nearest player who is up. Once it's fighting him it stays on him until "
+                   "he's knocked out, and it only changes to a clearly nearer player after a few seconds. Off: they "
+                   "all go after Player 1.");
+        opt_toggle("Only Player 1 uses exits", &g_settings.coop_host_exits, true,
+                   "Doors, stairs and other exits only lead everyone out when Player 1 walks into them; the other "
+                   "players can stand in them. Off: any player's step takes everyone along.");
+        static const char *const health[] = {"Shared", "Each player's own"};
+        opt_choice("Hearts", &g_settings.coop_health, health, 2, COOP_HEALTH_OWN,
+                   "Shared: one set of hearts for everyone, as the game's. Each player's own: a hit only costs that "
+                   "player's hearts, and any hearts picked up go to everyone.", false);
+        if (g_settings.coop_health == COOP_HEALTH_OWN) {
+            opt_indent(1);
+            static const char *const ko[] = {"Knocked out", "Game over"};
+            opt_choice("Out of hearts", &g_settings.coop_knockout, ko, 2, COOP_KO_REVIVE,
+                       "Knocked out: the player can't act (Zzz) until another player holds A beside him, or everyone "
+                       "reaches another area; he is back with 30% of his hearts and can't be hurt for 2 seconds. "
+                       "Game over: for everyone, as when Player 1 runs out.", false);
+            if (g_settings.coop_knockout == COOP_KO_REVIVE)
+                opt_int("Revive time", &g_settings.coop_revive_s, 1, 10, 1, 4, "%d s",
+                        "How long another player holds A beside a knocked-out player to revive him.");
+            static const char *const hud[] = {"Bottom left", "Bottom right", "Top right"};
+            opt_choice("Hearts shown", &g_settings.coop_hud, hud, 3, COOP_HUD_BOTTOM_LEFT,
+                       "Where the other players' hearts are shown (Player 1's are the game's own).", false);
+            opt_toggle("Hearts in player colours", &g_settings.coop_heart_colours, true,
+                       "Each player's hearts in his colour, Player 1's own hearts too.");
+            opt_indent(-1);
+        }
+        static const char *const colours[COOP_COLOURS] = {"Green", "Red", "Blue", "Yellow", "Purple", "Pink", "Black",
+                                                          "White"};
+        for (int i = 0; i < g_settings.coop_players && i < 8; i++) {
+            char label[32];
+            snprintf(label, sizeof label, "Player %d colour", i + 1);
+            opt_choice(label, &g_settings.coop_colour[i], colours, COOP_COLOURS, i,
+                       "The colour of this player's tunic (and hearts).", true);
+        }
+        opt_indent(-1);
+    }
 
     opt_end();
 }

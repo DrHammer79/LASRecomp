@@ -406,7 +406,9 @@ static void rom_index(void) {
     // (in a copy) to point them at data appended past the end of the image; reads there go to host files.
     for (int i = 0; i < rom_nfiles; i++) {
         char host[1200];
-        if (!rando_romfs_override(rom_files[i].path, host, sizeof host)) continue;
+        extern bool coop_romfs_override(const char *path, char *out, size_t cap);  // (runtime/hle/coop.c)
+        if (!rando_romfs_override(rom_files[i].path, host, sizeof host) &&
+            !coop_romfs_override(rom_files[i].path, host, sizeof host)) continue;
         struct stat sb;
         if (stat(host, &sb)) continue;
         if (!ov_meta) {
@@ -430,6 +432,18 @@ static void rom_index(void) {
     }
     if (ov_n) LOG("[fs] randomizer: %d romfs files replaced\n", ov_n);
     if (ov_meta) { patches[npatches++] = (Patch){ov_meta_off, ov_meta_size, ov_meta}; }
+    {   // a few bytes of the game's own files changed (local co-op only: runtime/hle/coop.c)
+        extern bool coop_romfs_patch(const char *path, uint64_t off, uint64_t size,
+                                     ssize_t (*rd)(void *, uint64_t, uint64_t), uint64_t *at, uint32_t *val);
+        for (int i = 0; i < rom_nfiles && npatches < (int)(sizeof patches / sizeof *patches) - 3; i++) {
+            uint64_t at;
+            uint32_t val;
+            if (!coop_romfs_patch(rom_files[i].path, rom_files[i].off, rom_files[i].size, base_pread, &at, &val)) continue;
+            uint8_t *d = malloc(4);
+            memcpy(d, &val, 4);
+            patches[npatches++] = (Patch){at, 4, d};
+        }
+    }
     // The game's own files (before a seed's added files; the crash dialog checks them), their sizes summed, and the
     // files that aren't the game's named. Copies of the game code at the root (game_romfs_exefs_copy) are left out.
     char game_dir[1100] = "";
@@ -463,13 +477,14 @@ static void rom_index(void) {
     LOG("[fs] romfs index: %d files\n", rom_nfiles);
 }
 
-// Virtual RomFS image read: original bytes, with the patched file table and appended replacement files.
+// Virtual RomFS image read: original bytes, with the patched file table (and co-op's few bytes) and appended
+// replacement files.
 static ssize_t romfs_read(uint8_t *dst, uint64_t size, uint64_t off) {
-    if (!ov_n) return base_pread(dst, size, off);
+    if (!ov_n && !npatches) return base_pread(dst, size, off);
     uint64_t done = 0;
     while (done < size) {
         uint64_t o = off + done, n = size - done;
-        if (o >= ov[0].start) {  // appended region
+        if (ov_n && o >= ov[0].start) {  // appended region
             int i = 0;
             while (i < ov_n && !(o >= ov[i].start && o < ov[i].start + ((ov[i].size + 0xF) & ~0xFull))) i++;
             if (i == ov_n) { memset(dst + done, 0, n); done += n; break; }
@@ -501,7 +516,7 @@ static ssize_t romfs_read(uint8_t *dst, uint64_t size, uint64_t off) {
             if (r < 0) r = 0;
             if ((uint64_t)r < n) memset(dst + done + r, 0, n - r);
         } else {
-            if (o + n > ov[0].start) n = ov[0].start - o;
+            if (ov_n && o + n > ov[0].start) n = ov[0].start - o;
             ssize_t r = base_pread(dst + done, n, o);
             if (r < 0) r = 0;
             if ((uint64_t)r < n) memset(dst + done + r, 0, n - r);

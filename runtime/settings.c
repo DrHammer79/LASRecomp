@@ -48,6 +48,16 @@ Settings g_settings = {
     .diff_damage = 1.0f,
     .walk_speed = 1.0f,
     .walk_speed_dungeons = false,
+    .coop_players = 1,
+    .coop_collision = false,
+    .coop_targets = true,
+    .coop_host_exits = true,
+    .coop_health = COOP_HEALTH_OWN,
+    .coop_knockout = COOP_KO_REVIVE,
+    .coop_revive_s = 4,
+    .coop_heart_colours = true,
+    .coop_hud = COOP_HUD_BOTTOM_LEFT,
+    .coop_colour = {0, 1, 2, 3, 4, 5, 6, 7},
     .upscaler = UPSCALE_SHARP,  // (MetalFX on macOS, AMD FSR 1 on Windows)
     .upscaler_auto = true,
     .res_auto = true,
@@ -260,6 +270,25 @@ void settings_load(void) {
         else if (!strcmp(key, "diff_damage")) g_settings.diff_damage = (float)atof(val);
         else if (!strcmp(key, "walk_speed")) g_settings.walk_speed = (float)atof(val);
         else if (!strcmp(key, "walk_speed_dungeons")) g_settings.walk_speed_dungeons = atoi(val) != 0;
+        else if (!strcmp(key, "coop_collision")) g_settings.coop_collision = atoi(val) != 0;
+        else if (!strcmp(key, "coop_players")) g_settings.coop_players = atoi(val) < 1 ? 1 : atoi(val) > 8 ? 8 : atoi(val);
+        else if (!strcmp(key, "coop_targets")) g_settings.coop_targets = atoi(val) != 0;
+        else if (!strcmp(key, "coop_host_exits")) g_settings.coop_host_exits = atoi(val) != 0;
+        else if (!strcmp(key, "coop_health")) g_settings.coop_health = atoi(val) ? COOP_HEALTH_OWN : COOP_HEALTH_SHARED;
+        else if (!strcmp(key, "coop_knockout")) g_settings.coop_knockout = atoi(val) ? COOP_KO_GAME_OVER : COOP_KO_REVIVE;
+        else if (!strcmp(key, "coop_revive_s")) g_settings.coop_revive_s = atoi(val) < 1 ? 1 : atoi(val) > 10 ? 10 : atoi(val);
+        else if (!strcmp(key, "coop_heart_colours")) g_settings.coop_heart_colours = atoi(val) != 0;
+        else if (!strcmp(key, "coop_hud")) g_settings.coop_hud = atoi(val) < 0 || atoi(val) > 2 ? 0 : atoi(val);
+        else if (!strcmp(key, "coop_colours")) {  // (one colour set per player, comma-separated)
+            const char *p = val;
+            for (int i = 0; i < 8 && *p; i++) {
+                int v = atoi(p);
+                g_settings.coop_colour[i] = v < 0 || v >= COOP_COLOURS ? i : v;
+                p = strchr(p, ',');
+                if (!p) break;
+                p++;
+            }
+        }
         else if (!strcmp(key, "diff_ohko")) g_settings.diff_ohko = atoi(val) != 0;
         else if (!strcmp(key, "diff_hero")) g_settings.diff_hero = atoi(val) != 0;
         else if (!strcmp(key, "timer")) g_settings.timer = atoi(val) != 0;
@@ -347,6 +376,14 @@ void settings_save(void) {
             g_settings.diff_hero);
     fprintf(f, "walk_speed = %.2f\n", g_settings.walk_speed);
     fprintf(f, "walk_speed_dungeons = %d\n", g_settings.walk_speed_dungeons);
+    fprintf(f, "coop_players = %d\ncoop_collision = %d\n", g_settings.coop_players, g_settings.coop_collision);
+    fprintf(f, "coop_targets = %d\ncoop_host_exits = %d\ncoop_health = %d\ncoop_knockout = %d\ncoop_revive_s = %d\n"
+            "coop_heart_colours = %d\ncoop_hud = %d\n", g_settings.coop_targets, g_settings.coop_host_exits,
+            g_settings.coop_health, g_settings.coop_knockout, g_settings.coop_revive_s, g_settings.coop_heart_colours,
+            g_settings.coop_hud);
+    fprintf(f, "coop_colours = %d,%d,%d,%d,%d,%d,%d,%d\n", g_settings.coop_colour[0], g_settings.coop_colour[1],
+            g_settings.coop_colour[2], g_settings.coop_colour[3], g_settings.coop_colour[4], g_settings.coop_colour[5],
+            g_settings.coop_colour[6], g_settings.coop_colour[7]);
     fprintf(f, "timer_position = %s\n", g_settings.timer_pos == TIMER_POS_RIGHT ? "right" : "left");
     fprintf(f, "timer = %d\nlivesplit = %d\nlivesplit_host = %s\n", g_settings.timer, g_settings.livesplit,
             g_settings.livesplit_host);

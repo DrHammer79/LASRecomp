@@ -891,7 +891,8 @@ static float srgb_lin(int c) { float v = c / 255.0f; return v <= 0.04045f ? v / 
 void texpatch_heart_tint(int kind, float tint[8]) {
     cosmetics_test();
     uint32_t rgb;
-    if (!kind || !col_target(&g_settings.hearts, COL_SLOT_HEARTS, &rgb)) return;
+    extern bool coop_heart_rgb(uint32_t *rgb);  // (local co-op: Player 1's colour - runtime/hle/coop.c)
+    if (!kind || (!coop_heart_rgb(&rgb) && !col_target(&g_settings.hearts, COL_SLOT_HEARTS, &rgb))) return;
     for (int k = 0; k < 3; k++) tint[k] = srgb_lin((int)(rgb >> (16 - 8 * k) & 255)) / 0.319f;
     tint[3] = 1;
     tint[4] = tint[5] = tint[6] = 0;

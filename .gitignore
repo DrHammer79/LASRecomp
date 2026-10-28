@@ -4,6 +4,8 @@ extracted/
 generated/
 generated-*/
 /rando/
+# the co-op mod's files (its Playerlink.bfres for the players' tunic colours: runtime/hle/coop.c)
+/coop/
 # Nintendo fonts (users import their own; only the README ships)
 /fonts/*
 !/fonts/README.md

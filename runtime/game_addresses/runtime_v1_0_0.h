@@ -85,3 +85,7 @@ GA_ADDR(ENEMY_LIFE_VTABLE,               0x7001b5be00)
 GA_ADDR(MAIN_CODE_SIZE,                  0x16a0000)
 GA_ADDR(DELEGATE_JOB_VTABLE_LIVE,         0x7001c51308)
 GA_ADDR(DELEGATE_JOB_VTABLE_BASE,         0x7001c51358)
+// Local co-op (runtime/hle/coop.c): 1.0.1 only
+GA_ADDR(PLAYER_VTABLE,                    0x0)
+GA_ADDR(PLAYER_MAX_HEALTH,                0x0)
+GA_ADDR(PLAY_ANIMATION,                   0x0)

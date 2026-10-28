@@ -761,6 +761,8 @@ extern "C" void chaos_overlay_draw(ImVec2 display, ImFont *font);
 extern "C" void inventory_overlay_draw(ImVec2 display, ImFont *font);
 extern "C" bool race_overlay_wanted(void);
 extern "C" void race_overlay_draw(ImVec2 display, ImFont *font, float scale);
+extern "C" bool coop_hud_wanted(void);  // (local co-op: the other players' hearts - coop_hud.mm)
+extern "C" void coop_hud_draw(ImVec2 display, ImFont *font, float scale);
 extern "C" bool pickup_flyin_wanted(void);  // (silent pickups: pickup_flyin.mm)
 extern "C" void pickup_flyin_draw(ImVec2 display, ImFont *font, float scale);
 extern "C" bool race_overlay_key(char *out, size_t cap);
@@ -1104,9 +1106,10 @@ void menu_tabs_draw(float scale, ImFont *font, ImFont *font_big, bool in_game, v
 }
 
 // Whether menu_render draws anything: the menu, the keyboard, an overlay (FPS, inventory, tracker, chaos, race, a
-// pickup card).
-static bool render_needed(bool open, bool kbd, bool inv, bool trk, bool trkd, bool chaos, bool race, bool flyin, bool dpad) {
-    return open || kbd || g_settings.show_fps || inv || trk || trkd || chaos || race || flyin || dpad;
+// pickup card, the d-pad cross, the co-op hearts).
+static bool render_needed(bool open, bool kbd, bool inv, bool trk, bool trkd, bool chaos, bool race, bool flyin,
+                          bool dpad, bool coop) {
+    return open || kbd || g_settings.show_fps || inv || trk || trkd || chaos || race || flyin || dpad || coop;
 }
 
 #ifdef __APPLE__
@@ -1125,12 +1128,13 @@ void menu_render(void *cmd, uint32_t target_w, uint32_t target_h) {
     bool race = race_overlay_wanted();  // (run timer, race seed hash: race_overlay.mm)
     bool flyin = pickup_flyin_wanted() && !open;  // (a silent pickup's card)
     bool dpad = !open && dpad_overlay_wanted();
+    bool coop = !open && coop_hud_wanted();       // (local co-op: the other players' hearts)
 #ifdef __APPLE__
     plastic_perf_note(cb, open);  // (LARECOMP_UI_PERF test only)
 #else
     plastic_perf_note_vk(open);
 #endif
-    if (!render_needed(open, kbd, inv, trk, trkd, chaos, race, flyin, dpad)) {
+    if (!render_needed(open, kbd, inv, trk, trkd, chaos, race, flyin, dpad, coop)) {
         if (g_inited) { pthread_mutex_lock(&q_lock); q_events.clear(); pthread_mutex_unlock(&q_lock); }
         g_ov_same = 0;  // (shown again: built afresh first)
         return;
@@ -1156,7 +1160,7 @@ void menu_render(void *cmd, uint32_t target_w, uint32_t target_h) {
         char rk[64], dk[160] = "";
         // (only the FPS counter, the run timer and the d-pad cross; input only reaches ImGui while the menu or the name
         // entry is up)
-        if (!open && !kbd && !inv && !trk && !trkd && !chaos && !flyin && race_overlay_key(rk, sizeof rk)) {
+        if (!open && !kbd && !inv && !trk && !trkd && !chaos && !flyin && !coop && race_overlay_key(rk, sizeof rk)) {
             pthread_mutex_lock(&q_lock);
             bool events = !q_events.empty();
             pthread_mutex_unlock(&q_lock);
@@ -1239,6 +1243,7 @@ void menu_render(void *cmd, uint32_t target_w, uint32_t target_h) {
 
     if (race) race_overlay_draw(io.DisplaySize, g_menu_font_big, scale);
     if (dpad) dpad_overlay_draw(io.DisplaySize, g_font_big ? g_font_big : ImGui::GetFont(), scale);
+    if (coop) coop_hud_draw(io.DisplaySize, g_menu_font_big, scale);
     if (flyin) pickup_flyin_draw(io.DisplaySize, g_font_big ? g_font_big : ImGui::GetFont(), scale);
     if (trk) tracker_overlay_draw(io.DisplaySize, g_font_big ? g_font_big : ImGui::GetFont());
     if (chaos) chaos_overlay_draw(io.DisplaySize, g_font_big ? g_font_big : ImGui::GetFont());
