@@ -24,6 +24,14 @@ Player 1's Link, as without co-op. The creator's zone set-up runs for Player 1
 only (`COOP_ZONE_SITE`), and its "a Link exists already" check is let through
 while the extras are made (`COOP_DUP_SITE`).
 
+The creator can run again for one area: a dungeon loaded fresh, a door's
+failed entry. The extras it made the first time were still alive, so every run
+added another set: copies of a player standing about, moving with his
+controller. Each Link the creator makes is remembered (`g_made`). A run takes
+back a live one that no player holds before making a new one. One that is left
+over anyway is put out of the way (under the map) and its update is skipped
+(`COOP_ACTOR_EXEC_SITE`).
+
 **Spawns.** A placement at a spawn point (`COOP_PLACE_SITE`) is run for each
 player on the same spot, Player 1 last (`COOP_PLACE_PLAYER_SITE` picks the
 Link). A spawn check whose object is gone with more Links is skipped
@@ -36,12 +44,22 @@ for players 2.. (npad ids 1..7, `GetNpadStyleSet` reports them as FullKey).
 and tell the controller applet it has that many players. A knocked-out player's
 input is blocked. Both sticks pressed in (L3+R3) puts a player on Player 1.
 
+The game reads which controllers are connected when the npad's "style set
+changed" event is signalled. A controller turned on after the game had read
+them (at the start screen) gave a Link that never moved. Those events are kept
+(`hid_bind_style_event`), and `input_style_changed()` signals them again
+whenever the player count changes out of play.
+
 **Colours.** `COOP_COLOR_SITE` picks each Link's tunic frame from the mod's
 `Playerlink.bfres`: 24 colour frames, 3 per colour set. It is served from
 `<data root>/coop/romfs/region_common/actor/Playerlink.bfres` when that file
 exists (`coop_romfs_override`, `runtime/services/fs.c`). The repository can't
 ship it: it is the mod's edit of a game file. Without it the game still plays,
-and every Link wears Player 1's tunic.
+and every Link wears Player 1's tunic. The file is picked up when the RomFS is
+indexed, at boot; the Controls tab says when it is missing, or when co-op was
+turned on after boot and LAS Recomp needs a restart for it (`coop_colours_state`).
+Red is a deeper crimson (0xb41d2c) than the game's heart red, so a red
+player's hearts don't read as the game's own.
 
 **Walking through each other.** Every character controller gets the other
 characters as user capsules in its PhysX sweep (TouchedGeomType 1). With
@@ -62,6 +80,15 @@ check is "is it a Link", not "which Link".
 - When a contact with a door ends, the door forgets its pending exit, whoever
   left (`main+0x76b20`). Another player's Link leaving doesn't make it forget
   (`COOP_EXIT_LEAVE_*`).
+- **New rooms.** When Player 1's camera scrolls to a new camera area indoors,
+  or he moves more than 10 units in one frame (stairs into a side-view room),
+  the others follow him (`room_follow_tick`). That waits for Player 1 to stand
+  in the room (state kind 0, no event), then puts each player more than 4
+  units away on him once that player is on his own feet. Put on him while the
+  stairs still carried him, they were in the floor. A player still falling had
+  the game's fall respawn put him back where he fell from, over the move. Each
+  player gets at most 10 s. A knocked-out player stands up in a new room
+  indoors (`room_changed`).
 
 **Camera areas.** Every Link gets his own camera (`actor+0x318`), and every
 camera listens to the camera-area manager, which follows Player 1. A camera
@@ -103,6 +130,16 @@ alone.
   scene, whoever opened the chest.
 - `+0x4b8` is only moved for the components' checks. The camera, the HUD,
   events, saving and the camera areas still follow Player 1.
+
+**Events** (`p1_event_tick`). While Player 1 is in an event (walked by a
+cutscene, an item held up, a talk), the others get no input
+(`coop_input_blocked`, which also blocks the scripted test input). Link's
+state kind tells it: slot `+0x4ed`, states at `+0x1340`, kind at the state's
+`+0x28`. The event kinds are the ones the game's "can he go" check
+(`main+0xd58d70`) holds apart: 18, 19, 22, 23, 24 and 26. Before, the others
+walked about during Marin's talk with the walrus, and a door's slam played
+again for each player walking in.
+
 **Walk-ins.** Through a door and at a dungeon's room change Player 1 is walked
 in (Link state kind 16). The game's "can he go" check lets that kind go, so the
 others were put on him at its start only and then walked on ahead of him into
@@ -160,7 +197,16 @@ after. The rules:
   on his event component, played again after each of his own updates) with a
   breathing "Zzz" bubble over him. Another player holding A beside him (within
   1.6) for `coop_revive_s` seconds revives him with 30% of the maximum and 2 s
-  of no damage (`REVIVE_SAFE`).
+  of no damage (`REVIVE_SAFE`). An "(A) Revive" prompt shows under a player
+  who can revive someone (`coop_revive_prompt`).
+- **Getting up:** a hit that knocks a player out leaves him in the knocked-back
+  state (kind 11), which never ended under the lying pose, so a revived player
+  couldn't move until a door reset him. The pose waits for his state to be
+  back at kind 0 (`sleep_tick`), and isn't played again after his update while
+  it isn't (`coop_actor_updated`).
+- **Left behind:** a knocked-out player stands up in a new room indoors, and
+  after 30 s out of the camera's view (`LEASH_DOWN`), when he is also put on
+  Player 1.
 
 **HUD** (`runtime/ui/coop_hud.mm`).
 - **Layout:** a "P1" tag beside the game's hearts, and the other players'
@@ -172,8 +218,26 @@ after. The rules:
   - Top right is a single column below the X/Y items, the rupee count and the
     compass.
   - Bottom right moves up above the "Now saving" note and the run timer.
-- **Zzz bubbles:** projected from the camera seen at `COOP_CAMERA_SITE`.
+- **Zzz bubbles:** projected from Player 1's camera (`host+0x318`, else the
+  one seen at `COOP_CAMERA_SITE`), with the zoom's field of view. A player
+  out of view has his bubble pinned to the screen's edge on his side, with a
+  rim in his colour (`player_screen`). The revive bar is green on a dark
+  track, so it shows on the white player's bubble.
 - **Hidden** on the pause menu's Items and Map pages.
+
+**Camera zoom** (`coop_camera`, `coop_camera_fit`, `zoom_tick`). `rt_fovy`
+(`runtime/hle/widescreen.c`) multiplies the field of view's tangent by
+`coop_camera_zoom()`. The base is 1, 1.05, 1.1, 1.25 or 1.5 (`ZOOM_MAX`).
+With "fit everyone" on, the camera zooms out further until every player who is
+up is inside 70% of the view (at most 1.5), eased in and out, and never closer
+than the base. The sky and sea margin (`rt_skysea_margin`) grows with it. Out
+of play, and with co-op off, it is 1.
+
+**Bring back players off screen** (`coop_leash`, `leash_tick`). A player out of
+Player 1's view for 3 s (`LEASH_FRAMES`) while standing (kind 0), or for 10 s
+whatever he is doing (`LEASH_ANYWAY`), is put on Player 1. A knocked-out one
+waits 30 s (`LEASH_DOWN`), then is revived and put on him. Nothing happens
+while Player 1 is in an event.
 
 **The game's countdown** (Dampé's timed chamber challenges, `Dg_TimeCount`)
 sits in the bottom left, where the hearts go. With co-op on, its pane
@@ -231,6 +295,9 @@ end and in both `patches_v1_0_*.h` tables, in the same order.
 | coop_knockout | 0 | 0 knocked out until revived, 1 game over |
 | coop_revive_s | 4 | seconds of holding A to revive |
 | coop_hud | 0 | 0 bottom left, 1 bottom right, 2 top right |
+| coop_camera | 0 | the least zoom: 0 normal, 1 out 5%, 2 out 10%, 3 out 25%, 4 out 50% |
+| coop_camera_fit | 1 | zoom out further to keep every player in view (up to 50%) |
+| coop_leash | 1 | players off screen are brought back to Player 1 |
 | coop_heart_colours | 1 | hearts in each player's colour |
 | coop_colours | 0,1,2,... | each player's colour set (Green, Red, Blue, Yellow, Purple, Pink, Black, White) |
 
@@ -250,6 +317,8 @@ Test switches (environment):
 | `LARECOMP_COOP_LOG=1` | `[coop]` lines: Links made and placed, hits, knock-outs, exits, target changes, positions every 30 frames |
 | `LARECOMP_COOP_DOWN=<p>,...` | those players knocked out 2 s after they are placed |
 | `LARECOMP_COOP_DIE=<p>,...` | those players sent to the dead state 3 s after they are placed |
+| `LARECOMP_COOP_HP=<p>:<q>` | player p's hearts set to q quarters 2 s after he is placed |
+| `LARECOMP_COOP_AT=<frame>:<n>` | the player count changed to n at that frame, as from the menu (late controllers) |
 | `LARECOMP_INPUT_P2..P8=<frame>:<button>:<frames>,...` | scripted input for players 2..8, as `LARECOMP_INPUT` |
 
 What was checked on 1.0.1, mostly with the test inputs above and
@@ -270,6 +339,21 @@ What was checked on 1.0.1, mostly with the test inputs above and
   first; a field warp hole and a dungeon warp hole with Player 2 on it, then
   Player 1.
 - **Enemies:** spear Moblins changing targets only after their lock.
+- **This round** (`build/full_check.sh` runs the triggers, doors, A-button,
+  side-view and HUD checks in turn):
+  - Tail Cave loaded twice: one set of extras, no copies.
+  - Players turned on at the start screen (`LARECOMP_COOP_AT`): every Link
+    moves.
+  - A real hit knocking Player 2 out, then a revive: he walks again.
+  - Player 2 left behind in the open: back on Player 1 after 3 s; knocked out,
+    revived and back after 30 s.
+  - Stairs into a side-view room: the others arrive on Player 1, on the floor.
+  - Each zoom setting, and the bubble pinned to the screen's edge.
+
+**ImGui checks.** `IM_ASSERT` (`third_party/imgui/imconfig.h`) calls
+`imgui_check_failed` (`runtime/ui/menu.mm`), which logs the failed check and a
+backtrace once per place instead of stopping the game with a dialog. One was
+seen in play with co-op on and its cause isn't known yet: the log line names it.
 - **A-button actions** (`build/interact_check.sh`): Player 2 lifting and
   throwing a rock and a pot, opening a chest (the seashell at Field 07M),
   reading a sign (Field 04P),
@@ -287,8 +371,6 @@ What was checked on 1.0.1, mostly with the test inputs above and
 - **Instant kills:** none was found to try. The dead-state change was checked
   with `LARECOMP_COOP_DIE` for Player 2 (knocked out); sent that way Player 1
   doesn't die, so the game over itself wasn't seen.
-- **Player 1 in another room:** the others stay where they are, off the
-  camera's view, until they walk over or press L3+R3.
 - **A-button actions** not tried with the other players: talking to people,
   pushing and pulling blocks, shop counters. Event actions other than chests
   and signs are routed the same way (any type but the lift), unchecked.
