@@ -818,6 +818,19 @@ extern "C" void launcher_play_seed(const char *seed) {
 }
 static float g_menu_gap = 0.35f;  // space under each item, in line heights
 
+// The item just drawn, selected, takes A / Space / Enter while ImGui's nav cursor is hidden. ImGui activates the
+// selected item only with the cursor shown, and a selection made from code (SetKeyboardFocusHere,
+// SetItemDefaultFocus) doesn't show it; a mouse move hides it again. PLAY looked selected at start, but A did
+// nothing until the stick moved off it and back (user report, 2026-10-28).
+static bool nav_activate_hidden(void) {
+    ImGuiContext &g = *GImGui;  // (ImGuiKey_NavGamepadActivate reads it)
+    if (g.NavCursorVisible || !ImGui::IsItemFocused()) return false;
+    bool k = ImGui::IsKeyPressed(ImGuiKey_NavGamepadActivate, false) || ImGui::IsKeyPressed(ImGuiKey_Space, false) ||
+             ImGui::IsKeyPressed(ImGuiKey_Enter, false) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, false);
+    if (k) ImGui::SetNavCursorVisible(true);
+    return k;
+}
+
 // The first PLAY ever (settings.menu_tip_seen): a note on opening the LAS Recomp menu in game (it isn't obvious),
 // OK starts the game. Returns true once OK is pressed.
 static bool g_tip_test;  // (LARECOMP_LAUNCHER_SHOT=<frame>:tip)
@@ -846,9 +859,10 @@ static bool aspect_prompt(float s) {
         ImGui::SetCursorPosX((ImGui::GetWindowWidth() - 2 * bw - gap) * 0.5f);
         int pick = -1;
         ImGui::SetItemDefaultFocus();
-        if (ImGui::Button(L("Original 16:9"), ImVec2(bw, 44 * s))) pick = ASPECT_ORIGINAL;
+        if (ImGui::Button(L("Original 16:9"), ImVec2(bw, 44 * s)) || nav_activate_hidden()) pick = ASPECT_ORIGINAL;
         ImGui::SameLine(0, gap);
-        if (ImGui::Button(L("Unlocked, fill the screen"), ImVec2(bw, 44 * s))) pick = ASPECT_UNLOCKED;
+        if (ImGui::Button(L("Unlocked, fill the screen"), ImVec2(bw, 44 * s)) || nav_activate_hidden())
+            pick = ASPECT_UNLOCKED;
         if (pick >= 0) {
             g_settings.aspect = pick;
             g_settings.aspect_asked = true;
@@ -1028,6 +1042,7 @@ static bool menu_item(const char *label, bool enabled, bool *hovered = NULL, con
     // (EnableNav: otherwise an InvisibleButton can't be reached with the d-pad / arrow keys - ImGui 1.91)
     ImGui::PushStyleColor(ImGuiCol_NavCursor, ImVec4(0, 0, 0, 0));  // (the hover band shows the selection, no box)
     bool clicked = ImGui::InvisibleButton("##b", ImVec2(sz.x + 40, sz.y + 6), ImGuiButtonFlags_EnableNav);
+    clicked |= enabled && nav_activate_hidden();
     ImGui::PopStyleColor();
     bool hot = ImGui::IsItemFocused() || ImGui::IsItemHovered();
     ImGui::PopID();
@@ -1336,10 +1351,11 @@ static void data_folder_popup(float s) {
             }
             ImGui::EndDisabled();
             ImGui::SameLine();
-            if (ImGui::Button(L("Start fresh"), bw) || g_df_auto_fresh) g_df_auto_fresh = false, use_it();
+            if (ImGui::Button(L("Start fresh"), bw) || nav_activate_hidden() || g_df_auto_fresh)
+                g_df_auto_fresh = false, use_it();
             ImGui::SameLine();
             ImGui::SetItemDefaultFocus();
-            close = ImGui::Button(L("Cancel"), bw) || esc;
+            close = ImGui::Button(L("Cancel"), bw) || nav_activate_hidden() || esc;
         }
     } else if (g_df == DF_MOVING) {
         static const char *const steps[] = {LN("Copying..."), LN("Checking the copy..."), LN("Removing the old copy...")};
@@ -1414,7 +1430,8 @@ static void prelaunch_tab(float sc) {
         }
         ImGui::SameLine();
         ImGui::SetItemDefaultFocus();
-        if (ImGui::Button(L("Cancel"), ImVec2(220 * sc, 0)) || ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false) ||
+        if (ImGui::Button(L("Cancel"), ImVec2(220 * sc, 0)) || nav_activate_hidden() ||
+            ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false) ||
             ImGui::IsKeyPressed(ImGuiKey_Escape, false))
             ImGui::CloseCurrentPopup();
         ImGui::EndPopup();
@@ -1646,6 +1663,16 @@ extern "C" void launcher_run(const char *root) {
         }
         last_frame = now;
         if (play_at_env && status.empty() && now - loop_t0 >= (uint64_t)(atof(play_at_env) * 1000)) play = true, play_at_env = NULL;
+        {  // (test) LARECOMP_LAUNCHER_PRESS=<s>: the controller's A pressed that many seconds in, held 0.1 s
+            static const char *press_env = getenv("LARECOMP_LAUNCHER_PRESS");
+            static int pressed = 0;
+            ImGuiContext &g = *GImGui;
+            uint64_t at = press_env ? (uint64_t)(atof(press_env) * 1000) : 0;
+            if (press_env && pressed == 0 && now - loop_t0 >= at)
+                ImGui::GetIO().AddKeyEvent(ImGuiKey_NavGamepadActivate, true), pressed = 1;
+            if (press_env && pressed == 1 && now - loop_t0 >= at + 100)
+                ImGui::GetIO().AddKeyEvent(ImGuiKey_NavGamepadActivate, false), pressed = 2;
+        }
         if (skip_at_env && g_prep_wait && now - loop_t0 >= (uint64_t)(atof(skip_at_env) * 1000)) g_prep_skip = 1, skip_at_env = NULL;
         // PLAY while that still runs: its bar (with Skip) until it's done
         if (play && g_bg_prep) {
@@ -1743,7 +1770,8 @@ extern "C" void launcher_run(const char *root) {
             // the backend (manual mode, no gamepads of its own) clears HasGamepad every frame, and ImGui then drops the
             // controller presses launcher_pad_event fed in and turns gamepad navigation off: set it again while a
             // controller is connected
-            if (SDL_HasGamepad()) io.BackendFlags |= ImGuiBackendFlags_HasGamepad;
+            static const bool test_pad = getenv("LARECOMP_LAUNCHER_PRESS");  // (test: its press is a controller's)
+            if (SDL_HasGamepad() || test_pad) io.BackendFlags |= ImGuiBackendFlags_HasGamepad;
             ImGui::NewFrame();
             const Page frame_page = page;  // (menu_sfx_frame: B on the main page does nothing)
 
