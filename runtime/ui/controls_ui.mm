@@ -18,6 +18,7 @@ extern "C" {
 #include "../settings.h"
 
 extern "C" int coop_players_setting(void);  // (runtime/hle/coop.c: 1 once the game is a version without co-op)
+extern "C" int coop_colours_state(void);    // (runtime/hle/coop.c: 0 the tunic colours are in, 1 after a restart, 2 no file)
 int input_pad_family(void);              // runtime/hle/input.c
 SDL_JoystickID input_active_pad(void);   // runtime/hle/input.c: the controller the game reads (0: none yet)
 void input_apply_background(void);
@@ -331,6 +332,15 @@ extern "C" void controls_tab_draw(float scale) {
     }
     if (g_settings.coop_players > 1 && coop_version) {
         opt_indent(1);
+        if (int cs = coop_colours_state()) {
+            opt_warn_next();
+            opt_action("Tunic colours", cs == 1 ? "Restart LAS Recomp" : "Not installed",
+                       cs == 1 ? "The players' tunic colours load as LAS Recomp starts with co-op on. Close it and start "
+                                 "it again: until then every Link wears Player 1's tunic."
+                               : "The players' tunic colours need the co-op mod's Playerlink.bfres in "
+                                 "coop/romfs/region_common/actor/ next to LAS Recomp. Without it every Link wears "
+                                 "Player 1's tunic.", false, false);
+        }
         opt_toggle("Player collision", &g_settings.coop_collision, false,
                    "The Links block each other. Off: they walk through each other. Every player still arrives on "
                    "Player 1 when entering an area.");
@@ -338,6 +348,11 @@ extern "C" void controls_tab_draw(float scale) {
                    "Each enemy goes after the nearest player who is up. Once it's fighting him it stays on him until "
                    "he's knocked out, and it only changes to a clearly nearer player after a few seconds. Off: they "
                    "all go after Player 1.");
+        static const char *const cams[] = {"Normal", "Zoomed out", "Further out", "Furthest out", "Fit everyone"};
+        opt_choice("Camera", &g_settings.coop_camera, cams, 5, COOP_CAM_NORMAL,
+                   "Shows more around Player 1: zoomed out by 10%, 25% or 50%. Fit everyone: zooms out just enough to "
+                   "keep every player in view (up to 50%) and back in as you regroup. Far out, the next screen's "
+                   "enemies may wait until you walk in.", false);
         opt_toggle("Only Player 1 uses exits", &g_settings.coop_host_exits, true,
                    "Doors, stairs and other exits only lead everyone out when Player 1 walks into them; the other "
                    "players can stand in them. Off: any player's step takes everyone along.");

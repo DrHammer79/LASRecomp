@@ -23,6 +23,7 @@ enum { CHAOS_LETTERS_OFF = 0, CHAOS_LETTERS_EXPLORED = 1, CHAOS_LETTERS_MAP = 2 
 enum { COOP_HEALTH_SHARED = 0, COOP_HEALTH_OWN = 1 };
 enum { COOP_KO_REVIVE = 0, COOP_KO_GAME_OVER = 1 };
 enum { COOP_HUD_BOTTOM_LEFT = 0, COOP_HUD_BOTTOM_RIGHT = 1, COOP_HUD_TOP_RIGHT = 2 };
+enum { COOP_CAM_NORMAL = 0, COOP_CAM_110 = 1, COOP_CAM_125 = 2, COOP_CAM_150 = 3, COOP_CAM_AUTO = 4 };
 enum { COOP_COLOURS = 8 };  // the co-op Playerlink.bfres colour sets: green, red, blue, yellow, purple, pink, black, white
 // System language served to the game (runtime/services/am.c GetDesiredLanguage, services/hid_set.c GetLanguageCode):
 // the game picks its text language from it, as it would from the Switch's own system setting, and the menus follow it
@@ -88,6 +89,7 @@ typedef struct {
     int coop_revive_s;   // co-op: seconds of holding A beside a knocked-out player to revive him
     bool coop_heart_colours;  // co-op: hearts in each player's colour (Player 1's own hearts too: runtime/nvn/texpatch.c)
     int coop_hud;        // co-op: where the other players' hearts show (COOP_HUD_*: runtime/ui/coop_hud.mm)
+    int coop_camera;     // co-op: the camera zoomed out (COOP_CAM_*: a set amount, or enough to show every player)
     int coop_colour[8];  // co-op: each player's colour (0..COOP_COLOURS-1: the co-op Playerlink.bfres colour sets)
     bool diff_ohko;      // any hit kills
     bool diff_hero;      // Hero Mode flag forced on in the loaded save (2x damage, no recovery hearts)

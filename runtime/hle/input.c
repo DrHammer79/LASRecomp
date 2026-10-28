@@ -868,13 +868,14 @@ static int32_t clamp_axis(int32_t v) { return v > 32767 ? 32767 : v < -32767 ? -
 // Local co-op: player i+2's npad state (his controller through the bindings, a test script: LARECOMP_INPUT_P<n>).
 // Mirror mode and d-pad walking as for Player 1; the overlay menu takes every controller while it is open.
 static void coop_fill(uint8_t *s, int i) {
-    extern int coop_player_down(int player);  // (knocked out: no input until revived - runtime/hle/coop.c)
-    bool menu = menu_input_captured() || coop_player_down(i + 1);
-    uint64_t b = (menu ? 0 : coop_btn[i]) | coop_script_btn[i];
-    int32_t lx = clamp_axis((menu ? 0 : coop_axis[i][0]) + coop_script_axis[i][0]);
-    int32_t ly = clamp_axis((menu ? 0 : coop_axis[i][1]) + coop_script_axis[i][1]);
-    int32_t rx = clamp_axis((menu ? 0 : coop_axis[i][2]) + coop_script_axis[i][2]);
-    int32_t ry = clamp_axis((menu ? 0 : coop_axis[i][3]) + coop_script_axis[i][3]);
+    // (knocked out, or Player 1 in a cutscene: no input, scripted too - runtime/hle/coop.c)
+    extern int coop_input_blocked(int player);
+    bool off = coop_input_blocked(i + 1), menu = menu_input_captured() || off;
+    uint64_t b = (menu ? 0 : coop_btn[i]) | (off ? 0 : coop_script_btn[i]);
+    int32_t lx = clamp_axis((menu ? 0 : coop_axis[i][0]) + (off ? 0 : coop_script_axis[i][0]));
+    int32_t ly = clamp_axis((menu ? 0 : coop_axis[i][1]) + (off ? 0 : coop_script_axis[i][1]));
+    int32_t rx = clamp_axis((menu ? 0 : coop_axis[i][2]) + (off ? 0 : coop_script_axis[i][2]));
+    int32_t ry = clamp_axis((menu ? 0 : coop_axis[i][3]) + (off ? 0 : coop_script_axis[i][3]));
     extern bool mirror_input(void);
     bool mirrored = !menu && mirror_input();
     if (mirrored) {
@@ -1050,13 +1051,25 @@ HLE_FUNC("_ZN2nn3hid15GetNpadStyleSetERKj", hid_style_set) {
 }
 
 // BindNpadStyleSetUpdateEvent(id, SystemEventType*, clear mode): signaled once so the game sees a
-// controller connected.
+// controller connected. Kept: when local co-op's player count changes (runtime/hle/coop.c), they are signaled again,
+// so the game reads the style sets again and sees players 2.. connected (or gone).
 #include "../kernel.h"
+static KEvent *g_style_ev[16];
+static int g_style_n;
+RT_ON_RESET(input_style_reset) { g_style_n = 0; }
+
+void input_style_changed(void) {
+    pthread_mutex_lock(&g_klock);
+    for (int i = 0; i < g_style_n; i++) kernel_signal(g_style_ev[i]);
+    pthread_mutex_unlock(&g_klock);
+}
+
 HLE_FUNC("_ZN2nn3hid27BindNpadStyleSetUpdateEventERKjPNS_2os15SystemEventTypeENS3_14EventClearModeE", hid_bind_style_event) {
     uint32_t w, r;
     KEvent *ev = kernel_create_event_pair(&w, &r);
     pthread_mutex_lock(&g_klock);
     kernel_signal(ev);
+    if (g_style_n < (int)(sizeof g_style_ev / sizeof *g_style_ev)) g_style_ev[g_style_n++] = ev;
     pthread_mutex_unlock(&g_klock);
     uint64_t clear_mode = c->x[2];
     c->x[0] = c->x[1];
