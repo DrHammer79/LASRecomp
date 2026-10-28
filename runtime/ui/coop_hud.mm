@@ -83,6 +83,22 @@ static ImU32 rgb_col(uint32_t rgb, float k, int a) {
     return IM_COL32(r, g, b, a);
 }
 
+// A player's tag ("P2") at p: in his colour, lifted to at least a bright shade (a dark red or black one would sink
+// into the ground behind it), outlined in black all round so it reads on grass, sand and dark floors alike.
+static void tag_text(ImDrawList *dl, ImFont *font, float size, float scale, ImVec2 p, uint32_t rgb, bool down,
+                     const char *t) {
+    float o = 1.6f * scale;
+    for (int k = 0; k < 8; k++) {
+        static const float d[8][2] = {{-1, -1}, {0, -1}, {1, -1}, {-1, 0}, {1, 0}, {-1, 1}, {0, 1}, {1, 1}};
+        dl->AddText(font, size, ImVec2(p.x + d[k][0] * o, p.y + d[k][1] * o), IM_COL32(0, 0, 0, 230), t);
+    }
+    int c[3] = {(int)(rgb >> 16 & 255), (int)(rgb >> 8 & 255), (int)(rgb & 255)};
+    int top = c[0] > c[1] ? (c[0] > c[2] ? c[0] : c[2]) : (c[1] > c[2] ? c[1] : c[2]);
+    for (int k = 0; k < 3; k++)  // (the brightest channel at 230 at least; a grey's all of them)
+        c[k] = top < 230 ? (top < 8 ? 230 : c[k] * 230 / top) : c[k];
+    dl->AddText(font, size, p, down ? IM_COL32(150, 150, 150, 255) : IM_COL32(c[0], c[1], c[2], 255), t);
+}
+
 // One heart (s wide) at p: two lobes and a point; `fill` (0..1, quarters) of it from the left in `full`.
 static void heart(ImDrawList *dl, ImVec2 p, float s, float fill, ImU32 full, ImU32 empty, ImU32 edge) {
     float r = s * 0.27f;
@@ -134,13 +150,12 @@ static void rows_panel(ImDrawList *dl, ImFont *font, float scale, ImVec2 display
         if (x0 + pw > sx0 && y0 + ph > sy0) y0 = sy0 - 10 * scale - ph;
     }
     float y = y0 + pad;
-    for (int i = a; i < b; i++) {  // (no panel behind them: as the game's own hearts; shadowed tags, outlined hearts)
+    for (int i = a; i < b; i++) {  // (no panel behind them: as the game's own hearts; outlined tags and hearts)
         const CoopHudRow &r = g_rows[i];
         float hx = x0 + pad + lw + 10 * scale;
         char t[4];
         snprintf(t, sizeof t, "P%d", i + 1);
-        dl->AddText(font, tag, ImVec2(x0 + pad + 2 * scale, y + 2 * scale), IM_COL32(0, 0, 0, 170), t);
-        dl->AddText(font, tag, ImVec2(x0 + pad, y), r.down ? IM_COL32(150, 150, 150, 255) : rgb_col(r.rgb, 1.15f, 255), t);
+        tag_text(dl, font, tag, scale, ImVec2(x0 + pad, y), r.rgb, r.down, t);
         bool colour = g_settings.coop_heart_colours;
         ImU32 full = r.down ? IM_COL32(110, 110, 110, 255) : colour ? rgb_col(r.rgb, 1, 255) : IM_COL32(235, 40, 40, 255);
         ImU32 empty = r.down ? IM_COL32(55, 55, 55, 220) : colour ? rgb_col(r.rgb, 0.3f, 230) : IM_COL32(80, 14, 14, 230);
@@ -163,8 +178,7 @@ extern "C" void coop_hud_draw(ImVec2 display, ImFont *font, float scale) {
         ImVec2 sz = font->CalcTextSizeA(tag, FLT_MAX, 0, t);
         ImVec2 at(bx + 0.022f * bw - sz.x - 6 * scale, by + 0.026f * bh);
         if (at.x < 4 * scale) at.x = 4 * scale;
-        dl->AddText(font, tag, ImVec2(at.x + 2 * scale, at.y + 2 * scale), IM_COL32(0, 0, 0, 170), t);
-        dl->AddText(font, tag, at, rgb_col(g_rows[0].rgb, 1.15f, 255), t);
+        tag_text(dl, font, tag, scale, at, g_rows[0].rgb, false, t);
     }
     for (int i = 1; i < g_nrows; i++) {  // the knocked-out players' bubbles, over their heads (or at the edge)
         float hx, hy;
@@ -172,9 +186,15 @@ extern "C" void coop_hud_draw(ImVec2 display, ImFont *font, float scale) {
         if (g_rows[i].down && coop_player_screen(i, display.x, display.y, &hx, &hy, &edge))
             zzz_bubble(dl, font, scale, hx, hy, edge, g_rows[i]);
     }
-    for (int i = 0; i < g_nrows; i++) {  // "(A) Revive" under each player who can revive one
-        float px, py;
-        if (coop_revive_prompt(i, display.x, display.y, &px, &py)) revive_prompt(dl, font, scale, px, py);
+    float placed[8][2];  // "(A) Revive" under each player who can revive one (two players on one spot: one under the other)
+    int np = 0;
+    for (int i = 0; i < g_nrows; i++) {
+        float px, py, w = 130 * scale, h = 38 * scale;
+        if (!coop_revive_prompt(i, display.x, display.y, &px, &py)) continue;
+        for (int k = 0; k < np; k++)
+            if (fabsf(px - placed[k][0]) < w && fabsf(py - placed[k][1]) < h) py = placed[k][1] + h, k = -1;
+        revive_prompt(dl, font, scale, px, py);
+        if (np < 8) placed[np][0] = px, placed[np][1] = py, np++;
     }
     // the other players' rows: in the chosen corner, up to 3 in a bottom one - the rest in the other bottom corner
     int n = g_nrows - 1, corner = g_settings.coop_hud;
