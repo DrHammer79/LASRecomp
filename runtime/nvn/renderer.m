@@ -4669,12 +4669,13 @@ static void draw_one(CmdRec *r, bool indexed) {
         }
     }
     {   // camera-attached effects sized for 16:9 are widened with the view (runtime/hle/widescreen.c)
-        extern float widescreen_effect_stretch(uint64_t fs_hash);
-        float k = hud_u ? hud_k : widescreen_effect_stretch(g_cur_fs_hash);
+        extern float widescreen_effect_stretch(uint64_t fs_hash, float *ky);
+        float ky = 1.0f, k = hud_u ? hud_k : widescreen_effect_stretch(g_cur_fs_hash, &ky);
+        if (hud_u) ky = hud_ky;
         double vx = vp[0] * vp_sx + vp_ox, vw = vp[2] * vp_sx;
         if (k > 1.0f) { vx -= vw * (k - 1) / 2; vw *= k; }
         double vy = vp[1] * vp_sy + vp_oy, vh = vp[3] * vp_sy;
-        if (hud_u && hud_ky > 1) { vy -= vh * (hud_ky - 1) / 2; vh *= hud_ky; }
+        if (ky > 1.0f) { vy -= vh * (ky - 1) / 2; vh *= ky; }  // (the HUD's corners; the co-op zoom: both ways)
         E_viewport((MTLViewport){vx, vy, vw, vh, zn, zf});
     }
     int32_t hud_sc[4];
