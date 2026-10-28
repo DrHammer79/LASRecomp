@@ -1,7 +1,8 @@
 // Local co-op HUD (runtime/hle/coop.c, own hearts): rows of hearts for the other players - "P2", "P3"... in their
 // colours, in the bottom corners or the top right (setting coop_hud) - and a "P1" tag beside the game's own hearts. A
-// knocked-out player's hearts are grey and a breathing "Zzz" bubble is over him, where a bar fills while another
-// player revives him. Drawn over the game (not on the pause menu's pages): the game's own HUD is untouched.
+// knocked-out player's hearts are grey and a breathing "Zzz" bubble is over him (at the window's edge when he is off
+// screen), where a bar fills while another player revives him - "(A) Revive" shows under a player close enough. Drawn
+// over the game (not on the pause menu's pages): the game's own HUD is untouched.
 #include <float.h>
 #include <math.h>
 #include <stdint.h>
@@ -13,25 +14,32 @@
 extern "C" {
 typedef struct { int hp, max, down; float revive; uint32_t rgb; } CoopHudRow;
 int coop_hud_rows(CoopHudRow *rows, int cap);
-bool coop_player_screen(int player, float w, float h, float *sx, float *sy);  // (his head on screen)
+bool coop_player_screen(int player, float w, float h, float *sx, float *sy, bool *edge);  // (his head; off screen: the edge)
+bool coop_revive_prompt(int player, float w, float h, float *sx, float *sy);  // (below him, beside a knocked-out one)
 bool inventory_items_page_shown(void);  // inventory_overlay.mm
 bool tracker_map_page_shown(void);      // tracker_overlay.mm
 }
 
 // A knocked-out player's "Zzz" in a speech bubble over his head, breathing (a slow swell, the letters rising one after
-// another), the revive filling along its bottom.
-static void zzz_bubble(ImDrawList *dl, ImFont *font, float scale, float hx, float hy, const CoopHudRow &r) {
+// another), the revive filling along its bottom. Off screen (edge) it waits at the window's edge in his direction,
+// without its tail, in a rim of his colour: where he was left.
+static void zzz_bubble(ImDrawList *dl, ImFont *font, float scale, float hx, float hy, bool edge, const CoopHudRow &r) {
     float t = (float)ImGui::GetTime(), breath = 0.5f + 0.5f * sinf(t * 6.2832f / 2.6f);  // (one breath: 2.6 s)
     float k = 0.94f + 0.1f * breath, ts = 30 * scale * k;
     ImVec2 tz = font->CalcTextSizeA(ts, FLT_MAX, 0, "Zzz");
-    float bw = tz.x + 22 * scale * k, bh = ts * 0.95f + 10 * scale * k, tail = 12 * scale;
+    float bw = tz.x + 22 * scale * k, bh = ts * 0.95f + 10 * scale * k, tail = edge ? 0 : 12 * scale;
+    if (edge) hy += bh * 0.5f;  // (centred on the edge point)
     ImVec2 a(hx - bw * 0.5f, hy - tail - bh), z(hx + bw * 0.5f, hy - tail);
     ImU32 ink = IM_COL32(40, 30, 20, 255), paper = IM_COL32(250, 248, 240, (int)(215 + 30 * breath));
-    dl->AddTriangleFilled(ImVec2(hx - tail * 0.7f, z.y - 1), ImVec2(hx + tail * 0.7f, z.y - 1), ImVec2(hx, hy), ink);
-    dl->AddRectFilled(ImVec2(a.x - 2 * scale, a.y - 2 * scale), ImVec2(z.x + 2 * scale, z.y + 2 * scale), ink, 12 * scale);
+    ImU32 rim = edge ? IM_COL32((r.rgb >> 16) & 255, (r.rgb >> 8) & 255, r.rgb & 255, 255) : ink;
+    if (!edge)
+        dl->AddTriangleFilled(ImVec2(hx - tail * 0.7f, z.y - 1), ImVec2(hx + tail * 0.7f, z.y - 1), ImVec2(hx, hy), ink);
+    dl->AddRectFilled(ImVec2(a.x - 3 * scale, a.y - 3 * scale), ImVec2(z.x + 3 * scale, z.y + 3 * scale), ink, 13 * scale);
+    dl->AddRectFilled(ImVec2(a.x - 2 * scale, a.y - 2 * scale), ImVec2(z.x + 2 * scale, z.y + 2 * scale), rim, 12 * scale);
     dl->AddRectFilled(a, z, paper, 10 * scale);
-    dl->AddTriangleFilled(ImVec2(hx - tail * 0.5f, z.y - 1), ImVec2(hx + tail * 0.5f, z.y - 1),
-                          ImVec2(hx, hy - 3 * scale), paper);
+    if (!edge)
+        dl->AddTriangleFilled(ImVec2(hx - tail * 0.5f, z.y - 1), ImVec2(hx + tail * 0.5f, z.y - 1),
+                              ImVec2(hx, hy - 3 * scale), paper);
     float x = hx - tz.x * 0.5f, y = a.y + (bh - tz.y) * 0.5f + ts * 0.08f;
     static const char *const zs[3] = {"Z", "z", "z"};
     for (int i = 0; i < 3; i++) {  // (each letter bobs up in turn)
@@ -39,12 +47,26 @@ static void zzz_bubble(ImDrawList *dl, ImFont *font, float scale, float hx, floa
         dl->AddText(font, ts, ImVec2(x, y - bob), ink, zs[i]);
         x += font->CalcTextSizeA(ts, FLT_MAX, 0, zs[i]).x;
     }
-    if (r.revive > 0) {
-        float y = z.y - 6 * scale, x0 = a.x + 8 * scale, x1 = z.x - 8 * scale;
-        dl->AddRectFilled(ImVec2(x0, y), ImVec2(x1, y + 4 * scale), IM_COL32(0, 0, 0, 60), 2 * scale);
-        dl->AddRectFilled(ImVec2(x0, y), ImVec2(x0 + (x1 - x0) * fminf(r.revive, 1), y + 4 * scale),
-                          IM_COL32((r.rgb >> 16) & 255, (r.rgb >> 8) & 255, r.rgb & 255, 255), 2 * scale);
+    if (r.revive > 0) {  // (the game's green on a dark track, whatever his colour: a white player's reads too)
+        float y = z.y - 7 * scale, x0 = a.x + 8 * scale, x1 = z.x - 8 * scale, bh2 = 5 * scale;
+        dl->AddRectFilled(ImVec2(x0 - scale, y - scale), ImVec2(x1 + scale, y + bh2 + scale), ink, 3 * scale);
+        dl->AddRectFilled(ImVec2(x0, y), ImVec2(x1, y + bh2), IM_COL32(90, 80, 70, 255), 2 * scale);
+        dl->AddRectFilled(ImVec2(x0, y), ImVec2(x0 + (x1 - x0) * fminf(r.revive, 1), y + bh2), IM_COL32(60, 200, 70, 255),
+                          2 * scale);
     }
+}
+
+// "(A) Revive" under a player who is up beside a knocked-out one, as the game's own "(A) Lift" by a rock: the button
+// in a light disc and the word, in a dark rounded box.
+static void revive_prompt(ImDrawList *dl, ImFont *font, float scale, float x, float y) {
+    float ts = 26 * scale, r = ts * 0.5f, pad = 7 * scale;
+    ImVec2 wz = font->CalcTextSizeA(ts, FLT_MAX, 0, "Revive"), az = font->CalcTextSizeA(ts * 0.85f, FLT_MAX, 0, "A");
+    float w = pad + 2 * r + 6 * scale + wz.x + pad, h = 2 * r + 1.2f * pad;
+    ImVec2 a(x - w * 0.5f, y), z(x + w * 0.5f, y + h), c(x - w * 0.5f + pad + r, y + h * 0.5f);
+    dl->AddRectFilled(a, z, IM_COL32(20, 20, 20, 190), h * 0.5f);
+    dl->AddCircleFilled(c, r, IM_COL32(245, 240, 225, 255), 20);
+    dl->AddText(font, ts * 0.85f, ImVec2(c.x - az.x * 0.5f, c.y - az.y * 0.5f), IM_COL32(40, 30, 20, 255), "A");
+    dl->AddText(font, ts, ImVec2(c.x + r + 6 * scale, c.y - wz.y * 0.5f), IM_COL32(250, 250, 250, 255), "Revive");
 }
 
 static CoopHudRow g_rows[8];
@@ -144,10 +166,15 @@ extern "C" void coop_hud_draw(ImVec2 display, ImFont *font, float scale) {
         dl->AddText(font, tag, ImVec2(at.x + 2 * scale, at.y + 2 * scale), IM_COL32(0, 0, 0, 170), t);
         dl->AddText(font, tag, at, rgb_col(g_rows[0].rgb, 1.15f, 255), t);
     }
-    for (int i = 1; i < g_nrows; i++) {  // the knocked-out players' bubbles, over their heads
+    for (int i = 1; i < g_nrows; i++) {  // the knocked-out players' bubbles, over their heads (or at the edge)
         float hx, hy;
-        if (g_rows[i].down && coop_player_screen(i, display.x, display.y, &hx, &hy))
-            zzz_bubble(dl, font, scale, hx, hy, g_rows[i]);
+        bool edge;
+        if (g_rows[i].down && coop_player_screen(i, display.x, display.y, &hx, &hy, &edge))
+            zzz_bubble(dl, font, scale, hx, hy, edge, g_rows[i]);
+    }
+    for (int i = 0; i < g_nrows; i++) {  // "(A) Revive" under each player who can revive one
+        float px, py;
+        if (coop_revive_prompt(i, display.x, display.y, &px, &py)) revive_prompt(dl, font, scale, px, py);
     }
     // the other players' rows: in the chosen corner, up to 3 in a bottom one - the rest in the other bottom corner
     int n = g_nrows - 1, corner = g_settings.coop_hud;

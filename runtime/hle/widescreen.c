@@ -99,20 +99,24 @@ float rt_cull_aspect(float orig) {
 
 // Sky and sea pieces past the north edge (tools/patches.py SKYSEA_BOX_SITES): a piece shows while Link is within
 // its reach plus half a 16:9 view (7.5). A wider view reaches further: half its extra width, doubled for the far
-// (top) edge of the perspective view, where the sky is.
+// (top) edge of the perspective view, where the sky is. Local co-op's zoomed-out camera reaches further the same way.
+extern float coop_camera_zoom(void);  // runtime/hle/coop.c (1: the game's own view)
 float rt_skysea_margin(void) {
-    return g_wide > 1.0f ? 15.0f * (g_wide - 1.0f) : 0.0f;
+    float w = (g_wide > 1.0f ? g_wide : 1.0f) * coop_camera_zoom();
+    return w > 1.0f ? 15.0f * (w - 1.0f) : 0.0f;
 }
 
 // Vertical field of view: unchanged for wide outputs; for tall ones (factor < 1) widened so the
-// horizontal view stays what the game shows at 16:9.
+// horizontal view stays what the game shows at 16:9. Local co-op's zoomed-out camera widens it again, by its zoom
+// (the camera and the culling pass both load it here, so what comes into view is drawn).
 float rt_fovy(float orig) {
     static float last = -1;
     if (orig != last && ENV("LARECOMP_LOG_CULL")) { LOG("[widescreen] fovy field %f\n", orig); last = orig; }
-    if (g_wide >= 1.0f || !(orig > 0)) return orig;
+    float zoom = coop_camera_zoom();
+    if ((g_wide >= 1.0f && zoom == 1.0f) || !(orig > 0)) return orig;
     bool degrees = orig > 3.2f;  // radians otherwise
     float half = (degrees ? orig * (float)M_PI / 180.0f : orig) * 0.5f;
-    float wide = 2.0f * atanf(tanf(half) / g_wide);
+    float wide = 2.0f * atanf(tanf(half) / (g_wide < 1.0f ? g_wide : 1.0f) * zoom);
     return degrees ? wide * 180.0f / (float)M_PI : wide;
 }
 
