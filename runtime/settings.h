@@ -92,6 +92,7 @@ typedef struct {
     int coop_zoom;       // co-op: the camera zoomed out by this many 10% steps (0..COOP_ZOOM_MAX), the least it shows
     bool coop_camera_fit;  // co-op: ... and further out, as far as it takes to show every player
     int coop_zoom_fit;   // co-op: ... up to this many 10% steps out (1..COOP_ZOOM_FIT_MAX)
+    int coop_zoom_indoor;  // co-op: indoors (houses, caves, dungeons) the camera zoomed out this many steps, no fit
     bool coop_leash;     // co-op: a player out of the camera's view for 3 s is put back on Player 1
     int coop_colour[8];  // co-op: each player's colour (0..COOP_COLOURS-1: the co-op Playerlink.bfres colour sets)
     bool diff_ohko;      // any hit kills

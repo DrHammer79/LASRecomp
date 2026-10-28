@@ -319,8 +319,8 @@ static void coop_options(void) {
     static const char *const outs[] = {"Normal", "Out 10%", "Out 20%", "Out 30%", "Out 40%", "Out 50%", "Out 60%",
                                        "Out 70%", "Out 80%", "Out 90%", "Out 100%"};
     opt_choice("Camera zoom", &g_settings.coop_zoom, outs, COOP_ZOOM_MAX + 1, 5,
-               "How far out the camera always is. Far out, the next screen's enemies may wait until you walk in.",
-               false);
+               "How far out the camera always is outdoors. Far out, the next screen's enemies may wait until you walk "
+               "in.", false);
     opt_indent(1);
     opt_toggle("Zoom out to fit everyone", &g_settings.coop_camera_fit, true,
                "Zooms out further as players spread out, and back in as you regroup - never closer than Camera zoom.");
@@ -334,6 +334,9 @@ static void coop_options(void) {
         opt_indent(-1);
     }
     opt_indent(-1);
+    opt_choice("Indoor zoom", &g_settings.coop_zoom_indoor, outs, COOP_ZOOM_MAX + 1, 0,
+               "Houses, caves and dungeons: the game frames each room to fit the screen, so zoomed out it sits small "
+               "in black. Normal keeps the game's own view.", false);
 
     opt_section("Co-op rules");
     opt_toggle("Bring lost players back", &g_settings.coop_leash, true,
