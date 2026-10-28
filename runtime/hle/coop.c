@@ -172,11 +172,19 @@ static int link_state_kind(uint64_t link) {  // (-1: not a Link)
     return heap_ptr(st) ? LD8(st + 0x28) : -1;
 }
 
+// The walk-in (kind 16: through a door, and at a dungeon's room change - the "ZeldaScroll") is one too, though the
+// game's check lets it go: the others were put on Player 1 at its start only (coop_enter) and then walked on with
+// their own controllers, ahead of him into the next room while he was still in the doorway. For the whole walk-in
+// they stay on him, held (coop_tick).
+#define LINK_KIND_WALK_IN 16
+static bool g_p1_walk_in;
+
 static void p1_event_tick(void) {
     int kind = link_state_kind(host_player());
-    bool ev = kind >= 0 && kind <= 26 && ((1u << kind) & 0x4ec0000u);
+    bool ev = kind >= 0 && kind <= 26 && ((1u << kind) & 0x4ec0000u || kind == LINK_KIND_WALK_IN);
     if (ev != g_p1_event) CLOG("[coop] Player 1 %s an event (state kind %d)\n", ev ? "in" : "out of", kind);
     g_p1_event = ev;
+    g_p1_walk_in = kind == LINK_KIND_WALK_IN;
 }
 
 int coop_input_blocked(int i) { return coop_player_down(i) || (rt_coop_on() && i > 0 && g_p1_event); }
@@ -1089,6 +1097,59 @@ static int doaction_get(Cpu *c) {
     return 2;  // (to its ret)
 }
 
+// ---- Event boxes. An AreaEventBox (a fight room's lock, a boss's or mini-boss's start, a cutscene's trigger) is a bare
+// collision shape (main+0x68110) whose contact signal calls the box's fire (main+0x67210, through a small functor: x0
+// the box, x1 the contact; its "Link entered" signal, its switch set, the box gone if it plays once) with no check of
+// who touched it: any Link walking in set it off. Each other player walking into Lanmola's sand pit played his start
+// again. In a fight room another player a step ahead of Player 1 set the room's switch while Player 1 was still in the
+// doorway, in his walk-in: the shutter closing on him put him back on the doorway's far side, in the room before, and
+// the camera and everyone followed (Angler's Tunnel, 08E up into 07E, every time). Only Player 1's contact fires a box
+// (the contact as at the doors' end of contact: contact_link).
+static int event_box(Cpu *c) {
+    int i = contact_link(c->x[1]);
+    if (i <= 0) return 0;
+    static uint64_t logged_frame;
+    uint64_t frame = renderer_present_count();
+    if (frame > logged_frame + 30)
+        CLOG("[coop] player %d in an event box (%.48s): only Player 1 sets it off\n", i + 1,
+             (const char *)(uintptr_t)(c->x[0] + 0x18));
+    logged_frame = frame;
+    return 2;  // (to its ret)
+}
+
+// ---- Warp holes (AreaWarpHoleEventBox: main+0x8c560 stepped in - Player 1 jumps in, the "Where to?" menu -,
+// main+0x8c3d0 stepped out) keep a player actor whose +0x43 bit 6 is clear, then play the jump for the game manager's
+// player: another player stepping in sent Player 1 in. At those checks (x8 the player actor and the load's target)
+// another player's Link reads as one with the bit set: he sets nothing off, and his stepping out doesn't drop Player
+// 1. (A dungeon's warp hole back to its entrance is an exit, COOP_EXIT_TOUCH_SITE: Player 1 already leads it.)
+static int warp_hole(Cpu *c, bool touch) {
+    int i = coop_index(c->x[8]);
+    if (!i) return 0;
+    static uint64_t logged_frame;
+    uint64_t frame = renderer_present_count();
+    if (touch && frame > logged_frame + 30) CLOG("[coop] player %d at a warp hole: only Player 1 jumps in\n", i + 1);
+    if (touch) logged_frame = frame;
+    c->x[8] = LD8(c->x[8] + 0x43) | 0x40;
+    return 1;
+}
+
+// ---- Deaths. A Link's death is his state machine (+0x4e0) changing to the dead state (0x12; 0x13 is checked with
+// it), whose start (main+0xdaaf00) plays the game over (Common.bfevfl "GameOver"). A hit on another player comes off
+// his own hearts (rt_coop_damage), and so do a fall into a pit or deep water (DAMAGE_FIXED_SITE: back at the room's
+// entry). A death that isn't his hearts running out - an instant kill - would still be the game over for everyone:
+// with each player's own hearts, another player sent to the dead state is knocked out instead and his state stays.
+// (With "game over for everyone" his last hit is let through; with shared hearts a death is the game's own.)
+#define PLAYER_STATE_DEAD 0x12
+
+static int dead_state(Cpu *c) {
+    unsigned s = (unsigned)(c->x[1] & 0xff);
+    int i = s == PLAYER_STATE_DEAD || s == PLAYER_STATE_DEAD + 1 ? coop_index(c->x[0] - 0x4e0) : 0;
+    if (!i || !own_hearts() || (g_settings.coop_knockout == COOP_KO_GAME_OVER && g_hp[i] == 0)) return 0;
+    LOG("[coop] player %d sent to the dead state (%#x): knocked out instead of a game over\n", i + 1, s);
+    if (!g_down[i]) knock_out(i);
+    return 2;  // (to the change's ret: the state stays)
+}
+
 int rt_coop_hook(Cpu *c, int which) {
     if (!rt_coop_on()) return 0;
     switch (which) {
@@ -1210,6 +1271,14 @@ int rt_coop_hook(Cpu *c, int which) {
         return 0;
     case 28:  // COOP_DOACTION_GET_SITE - Link asks for his current DoAction (x0: where it returns it)
         return doaction_get(c);
+    case 29:  // COOP_EVENT_BOX_SITE - str x19, [sp, #-0x20]!: an event box (x0) fires for a contact (x1)
+        return event_box(c);
+    case 30:  // COOP_WARP_HOLE_TOUCH_SITE - ldrb w8, [x8, #0x43]: a player actor (x8) stepped into a warp hole
+        return warp_hole(c, true);
+    case 31:  // COOP_WARP_HOLE_LEAVE_SITE - ldrb w8, [x8, #0x43]: ... stepped out of it
+        return warp_hole(c, false);
+    case 32:  // COOP_DEAD_STATE_SITE - sub sp, sp, #0x30: a state machine (x0) changes to state w1
+        return dead_state(c);
     }
     return 0;
 }
@@ -1344,11 +1413,29 @@ void coop_tick(Cpu *c) {
     }
     if (!rt_coop_on()) return;
     p1_event_tick();
+    if (g_p1_walk_in)
+        for (int i = 1; i < g_n; i++)
+            if (collision_of(g_extra[i])) ride_on_host(i);
     hearts_tick(c);
     sleep_tick(c);
     if (play) leash_tick(), room_follow_tick();
     extern uint64_t input_coop_buttons(int player);
     uint64_t frame = renderer_present_count();
+    static int test_die;  // LARECOMP_COOP_DIE=<player>,... (test): those players sent to the dead state 3 s after they
+                          // are placed, as an instant kill does
+    if (!test_die && g_placed_frame && frame > g_placed_frame + 180 && ENV("LARECOMP_COOP_DIE"))
+        for (const char *p = ENV("LARECOMP_COOP_DIE"); (test_die = 1) && *p; p += *p == ',') {
+            uint64_t link = coop_player((int)strtol(p, (char **)&p, 10) - 1);
+            if (collision_of(link)) {
+                LOG("[coop] test: Link %#llx (player %d) sent to the dead state\n", (unsigned long long)link,
+                    coop_index(link) + 1);
+                Cpu saved = *c;
+                c->x[0] = link + 0x4e0, c->x[1] = PLAYER_STATE_DEAD;
+                guest_call(c, GA(COOP_DEAD_STATE_SITE));
+                *c = saved;
+            }
+            if (!*p) break;
+        }
     for (int i = 1; i < g_n; i++) {
         if (!collision_of(g_extra[i])) continue;
         // both sticks pressed in: back to Player 1 (the mod's CheckAndTeleport)
