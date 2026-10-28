@@ -22,7 +22,9 @@ hearts and colours, and the game still sees one "Link" everywhere else.
 runs once for each extra player, then for Player 1, so `+0x4b8` ends up holding
 Player 1's Link, as without co-op. The creator's zone set-up runs for Player 1
 only (`COOP_ZONE_SITE`), and its "a Link exists already" check is let through
-while the extras are made (`COOP_DUP_SITE`).
+while the extras are made (`COOP_DUP_SITE`). Player 1 has to be last: the
+scene's camera is the last Link made's. Made first, he got the save right (see
+"The pause menu" below) but the camera showed the ground somewhere else.
 
 The creator can run again for one area: a dungeon loaded fresh, a door's
 failed entry. The extras it made the first time were still alive, so every run
@@ -236,19 +238,74 @@ after. The rules:
   track, so it shows on the white player's bubble.
 - **Hidden** on the pause menu's Items and Map pages.
 
-**Camera zoom** (`coop_camera`, `coop_camera_fit`, `zoom_tick`). `rt_fovy`
-(`runtime/hle/widescreen.c`) multiplies the field of view's tangent by
-`coop_camera_zoom()`. The base is 1, 1.05, 1.1, 1.25 or 1.5 (`ZOOM_MAX`).
-With "fit everyone" on, the camera zooms out further until every player who is
-up is inside 70% of the view (at most 1.5), eased in and out, and never closer
-than the base. The sky and sea margin (`rt_skysea_margin`) grows with it. Out
-of play, and with co-op off, it is 1.
+**Camera zoom** (`coop_zoom`, `coop_camera_fit`, `coop_zoom_fit`, `zoom_tick`).
+`rt_fovy` (`runtime/hle/widescreen.c`) multiplies the field of view's tangent
+by `coop_camera_zoom()`; the culling pass loads its field of view there too, so
+what comes into view is drawn. The base is 1.0 to 1.6 in 0.1 steps (Camera
+zoom, Normal to Out 60%; default Out 50%). With "fit everyone" on, the camera
+zooms out further until every player who is up is inside 70% of the view, up
+to "Fit up to" (Out 10% to Out 100%: 1.1 to 2.0; default 2.0), eased in and
+out, and never closer than the base. The sky and sea margin
+(`rt_skysea_margin`) grows with it. Out of play, and with co-op off, it is 1.
+At 2.0 the game held 60 fps in the tests.
+
+Effects drawn as a mesh around the camera, sized for the game's own view, showed
+their edge once the view was wider: the Mysterious Woods fog as a hard-edged
+oval. `widescreen_effect_stretch` already widened their viewport for wide
+windows; it now also stretches it by the zoom, both ways (`exec.c`,
+`renderer.m`): the fog ring, haze layer and light shafts of the woods, and the
+dungeon darkness. Checked at Out 60% and 2.0, 16:9, 21:9 and 32:9: no edge
+(`LARECOMP_NO_ZOOM_STRETCH=1` shows the oval it was).
+
+**Indoors** (any level but the Field: houses, caves, dungeons) the zoom is
+"Indoor zoom" (`coop_zoom_indoor`, Normal by default), without fit. The game
+draws only the room its camera frames, one screen: zoomed out, every dungeon
+room and house sat small in black, most houses with their backdrop's glow a hard
+circle (`build/zoom_audit.sh`, 2.0 at 40 places). The interior backdrop
+(`BACKDROP_HASHES`) is stretched by the zoom both ways, so a raised Indoor zoom
+shows the game's own soft glow out to the edges. Options weighed for indoors:
+- **A, the game's view (the default):** rooms are framed to fit the screen.
+- **B, zoom capped to the room:** the same as A; every room is one screen.
+- **C, the outdoor zoom everywhere:** small rooms in black.
+- **D, a setting of its own:** "Indoor zoom", Normal to Out 60%.
+
+What the audit saw outdoors at 2.0: no effect with an edge; at the island's
+east coast (Tal Tal's east, Yarna) the sea ends in the far corner from about
+1.7 (where the world ends).
 
 **Bring back players off screen** (`coop_leash`, `leash_tick`). A player out of
 Player 1's view for 3 s (`LEASH_FRAMES`) while standing (kind 0), or for 10 s
 whatever he is doing (`LEASH_ANYWAY`), is put on Player 1. A knocked-out one
 waits 30 s (`LEASH_DOWN`), then is revived and put on him. Nothing happens
-while Player 1 is in an event.
+while Player 1 is in an event. A player more than 30 units away who isn't
+brought back is logged every 10 s with the reason.
+
+**Players lost below the world** (`lost_tick`). On the Field only the area
+Player 1 is in has its ground loaded. Another player in the next area (one
+screen on, or left behind) falls through it, and the game puts him back on the
+spot he fell from, where he falls again, for good. At Out 50% he is still in
+view, so bring-back never takes him, and a teleport doesn't stick while he
+falls (the game sets his position). A player whose height drops 8 below where
+he last stood (a ledge is a few units) is lost, and is put on Player 1 the
+moment he stands again, with bring-back on or off. Teleports (`ride_on_host`)
+also set the Link's safe spot (`Link+0x1b40`, where the game puts him back after
+a fall), so his next landing is on Player 1. In the tests, idle players left at
+a spawn fell through as Player 1 walked off, and were back on him each time.
+
+**The pause menu** (`hold_on_p1`). The pause menu takes "the player's" spot as
+it opens, for its map and for a save's restart point (file `0x559c`), from the
+first Link made: another player's. Not through the actors' name map (its
+"Player" entry repointed at Player 1 didn't change the file), nor from a pointer
+kept anywhere scanned, nor at save time (every copy of his position on Player
+1's while paused didn't change it either). A file saved with him far away,
+fallen through the ground, loaded with Link falling forever at the map's origin
+(the user's two files, 2026-10-28: restart point y −7). So when Player 1
+presses + or −, every copy of the other Links' positions that their components
+keep (`k_pos_copies`, found by value) is set to Player 1's for the pause, their
+updates skipped meanwhile, and put back once Player 1's update runs again after
+the pause (or 8 frames on, if no menu came). Checked with `build/savetest.sh`:
+saved with Player 2 9 units away, the file holds Player 1's spot, and after the
+menu closes Player 2 is back on his own spot, walking.
 
 **The game's countdown** (Dampé's timed chamber challenges, `Dg_TimeCount`)
 sits in the bottom left, where the hearts go. With co-op on, its pane
@@ -309,8 +366,10 @@ off, one row. On, four headings:
 | | Revive time | coop_revive_s | 4 | seconds of holding A to revive (knocked out) |
 | | Other players' hearts | coop_hud | 0 | 0 bottom left, 1 bottom right, 2 top right (own hearts) |
 | | Hearts in player colors | coop_heart_colours | 1 | hearts in each player's colour, Player 1's too (own hearts) |
-| Co-op camera | Camera zoom | coop_camera | 0 | the least zoom: 0 normal, 1 out 5%, 2 out 10%, 3 out 25%, 4 out 50% |
-| | Zoom out to fit everyone | coop_camera_fit | 1 | further out to keep every player in view (up to 50%); greyed out at 50% |
+| Co-op camera | Camera zoom | coop_zoom | 5 | the least zoom, 10% steps out: 0 normal .. 6 out 60% |
+| | Zoom out to fit everyone | coop_camera_fit | 1 | further out to keep every player in view |
+| | Fit up to | coop_zoom_fit | 10 | the furthest fit goes, 10% steps: 1 out 10% .. 10 out 100% (twice the view) |
+| | Indoor zoom | coop_zoom_indoor | 0 | houses, caves, dungeons: 0 normal .. 6 out 60%, no fit |
 | Co-op rules | Bring lost players back | coop_leash | 1 | players off screen are brought back to Player 1 |
 | | Only Player 1 triggers exits | coop_host_exits | 1 | only Player 1 leads everyone out |
 | | Enemies target the nearest player | coop_targets | 1 | enemies go after the nearest player |
@@ -336,6 +395,10 @@ Test switches (environment):
 | `LARECOMP_COOP_HP=<p>:<q>` | player p's hearts set to q quarters 2 s after he is placed |
 | `LARECOMP_COOP_AT=<frame>:<n>` | the player count changed to n at that frame, as from the menu (late controllers) |
 | `LARECOMP_INPUT_P2..P8=<frame>:<button>:<frames>,...` | scripted input for players 2..8, as `LARECOMP_INPUT` |
+| `LARECOMP_COOP_MOVE=<frame>:<p>:<x>:<y>:<z>[:hold]` | player p put there at that frame (left far away); `:hold` keeps him there |
+| `LARECOMP_COOP_ZOOM=<factor>` | the camera zoom forced (`build/zoom_audit.sh`) |
+| `LARECOMP_NO_ZOOM_STRETCH=1` | camera-attached effects not stretched by the zoom (to see what it fixes) |
+| `LARECOMP_TRACK_RESPAWN=1` | `[respawn]` lines: a rock or grass actor made again under its name (came back) |
 
 What was checked on 1.0.1, mostly with the test inputs above and
 `LARECOMP_WARP_AT`:
@@ -365,6 +428,20 @@ What was checked on 1.0.1, mostly with the test inputs above and
     revived and back after 30 s.
   - Stairs into a side-view room: the others arrive on Player 1, on the floor.
   - Each zoom setting, and the bubble pinned to the screen's edge.
+- **Saves and lost players** (2026-10-28):
+  - `build/savetest.sh` saves through the pause menu in a scratch save folder
+    (`LARECOMP_SAVE_DIR`): with Player 2 away, the file holds Player 1's spot,
+    and it loads with Link standing there.
+  - A player in an area that isn't loaded falls and is put back on Player 1
+    (one screen away, Field 12D from 11D; idle players left at a spawn).
+  - Bring-back stopping in play: a falling player at Out 50% was "in view" for
+    it; `lost_tick` takes him now.
+  - Grass and rocks coming back beside Player 1 in play: not reproduced in
+    scripts (with players near, far, falling, or teleported onto Player 1; the
+    old creation order and the new). Both things that went wrong around it in
+    the user's session (another player stuck falling far away, taken as "the
+    player" by the pause menu) are fixed. `LARECOMP_TRACK_RESPAWN=1` logs any
+    rock or grass that comes back.
 
 **ImGui checks.** `IM_ASSERT` (`third_party/imgui/imconfig.h`) calls
 `imgui_check_failed` (`runtime/ui/menu.mm`), which logs the failed check and a
@@ -381,6 +458,11 @@ seen in play with co-op on and its cause isn't known yet: the log line names it.
 - **Co-op off:** unchanged.
 
 ## Not done or not checked
+
+- **Only Player 1's area is loaded** on the Field. Another player who walks into
+  the next area falls through it and is put back on Player 1 (`lost_tick`).
+  Loading areas around every player isn't possible from here: the game's
+  streaming follows its one player.
 
 - **Tunic colours** need the mod's `Playerlink.bfres`. Recolouring the tunic
   at run time (as the cosmetics do) would remove the file and the restart.
