@@ -506,9 +506,15 @@ static bool player_screen(int i, float lift, float w, float h, float *sx, float 
 static float g_zoom = 1.0f;
 float coop_camera_zoom(void) { return g_zoom; }
 
+// Indoors - any level but the Field: houses, caves, dungeons - only the room the camera frames is drawn, one screen:
+// zoomed out it sat small in black (at 2x, every dungeon and house in build/zoom_audit.sh), most houses with their
+// lighting's glow a hard circle. There the zoom is coop_zoom_indoor (Normal by default), without fit.
 static void zoom_tick(bool play) {
-    float base = 1.0f + 0.1f * g_settings.coop_zoom, top = fmaxf(base, 1.0f + 0.1f * g_settings.coop_zoom_fit);
-    float want = base;
+    extern const char *chaos_current_level(void);  // runtime/ui/chaos_overlay.mm
+    const char *lv = chaos_current_level();
+    bool indoor = lv && *lv && strcmp(lv, "Field");
+    float base = 1.0f + 0.1f * (indoor ? g_settings.coop_zoom_indoor : g_settings.coop_zoom);
+    float top = indoor ? base : fmaxf(base, 1.0f + 0.1f * g_settings.coop_zoom_fit), want = base;
     bool fit = g_settings.coop_camera_fit && top > base;
     if (!play || !rt_coop_on()) want = 1.0f;
     else if (fit) {  // (how far out each player is at the game's own view: x, y beyond 0.7 zoom out; never in of base)
@@ -523,6 +529,7 @@ static void zoom_tick(bool play) {
     if (!fit || !play) g_zoom = want;
     else g_zoom += (want - g_zoom) * (want > g_zoom ? 0.06f : 0.02f);  // (out quicker than back in)
     if (fabsf(g_zoom - want) < 0.002f) g_zoom = want;
+    if (play && rt_coop_on() && ENV("LARECOMP_COOP_ZOOM")) g_zoom = (float)atof(ENV("LARECOMP_COOP_ZOOM"));  // (test)
 }
 
 // A player out of the camera's view (zoomed out as far as it goes) for LEASH_FRAMES is put back on Player 1 (setting
