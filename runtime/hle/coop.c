@@ -165,14 +165,15 @@ int coop_player_down(int i) { return own_hearts() && i > 0 && i < COOP_MAX && g_
 // kind) is one the game's own "can he go" check (main+0xd58d70) holds apart: kinds 18, 19, 22, 23, 24, 26.
 static bool g_p1_event;
 static bool heap_ptr(uint64_t p);
+static int link_state_kind(uint64_t link) {  // (-1: not a Link)
+    if (!link || LD64(link) != GA(PLAYER_VTABLE)) return -1;
+    unsigned slot = LD8(link + 0x4ed);
+    uint64_t st = slot < 0x40 ? LD64(link + 0x1340 + 8ull * slot) : 0;
+    return heap_ptr(st) ? LD8(st + 0x28) : -1;
+}
+
 static void p1_event_tick(void) {
-    uint64_t me = host_player();
-    int kind = -1;
-    if (me && LD64(me) == GA(PLAYER_VTABLE)) {
-        unsigned slot = LD8(me + 0x4ed);
-        uint64_t st = slot < 0x40 ? LD64(me + 0x1340 + 8ull * slot) : 0;
-        kind = heap_ptr(st) ? LD8(st + 0x28) : -1;
-    }
+    int kind = link_state_kind(host_player());
     bool ev = kind >= 0 && kind <= 26 && ((1u << kind) & 0x4ec0000u);
     if (ev != g_p1_event) CLOG("[coop] Player 1 %s an event (state kind %d)\n", ev ? "in" : "out of", kind);
     g_p1_event = ev;
@@ -297,18 +298,29 @@ static void sleep_tick(Cpu *c) {
     for (int i = 1; i < g_n; i++) {
         bool want = g_down[i] && collision_of(g_extra[i]);
         if (want == g_asleep[i]) continue;
+        // (the hit that knocked him out plays out first: its state - kind 11, knocked back - ends with its own
+        // animation, so it would never end under the sleep pose, and he'd be stuck in it after a revive)
+        if (want && link_state_kind(g_extra[i]) != 0) continue;
         play_anim(c, g_extra[i], want ? SLEEP_ANIM : "wait", want ? 0.2f : 0.3f);
         g_asleep[i] = want;
         g_sleep_anim[i] = want ? anim_playing(g_extra[i]) : 0;
-        CLOG("[coop] player %d %s (animation %#llx)\n", i + 1, want ? "falls asleep" : "wakes up",
-             (unsigned long long)g_sleep_anim[i]);
+        CLOG("[coop] player %d %s (animation %#llx, state kind %d)\n", i + 1, want ? "falls asleep" : "wakes up",
+             (unsigned long long)g_sleep_anim[i], link_state_kind(g_extra[i]));
     }
+    if (ENV("LARECOMP_COOP_LOG"))  // (his state for a while after: does he get going again)
+        for (int i = 1; i < g_n; i++) {
+            static int last[COOP_MAX];
+            int k = link_state_kind(g_extra[i]);
+            if (k != last[i]) CLOG("[coop] player %d state kind %d\n", i + 1, k);
+            last[i] = k;
+        }
 }
 
 // After an actor's update (COOP_ACTOR_EXEC_DONE): a sleeping player whose own code changed his animation sleeps on.
 static void coop_actor_updated(Cpu *c, uint64_t actor) {
     int i = coop_index(actor);
     if (!i || !g_asleep[i] || !g_sleep_anim[i] || anim_playing(actor) == g_sleep_anim[i]) return;
+    if (link_state_kind(actor) != 0) return;  // (hit again while down: that knockback plays out, then he lies again)
     play_anim(c, actor, SLEEP_ANIM, 0);
     static int logged;
     if (logged++ < 3) CLOG("[coop] player %d: animation changed while asleep - " SLEEP_ANIM " again\n", i + 1);
@@ -345,6 +357,12 @@ static void hearts_tick(Cpu *c) {
             if (i > 0 && i < g_n) knock_out(i);
             if (!*p) break;
         }
+    static int test_hp;  // LARECOMP_COOP_HP=<player>:<quarter hearts> (test): his hearts then, 2 s after he's placed
+    if (!test_hp && g_placed_frame && renderer_present_count() > g_placed_frame + 120 && ENV("LARECOMP_COOP_HP")) {
+        int i, q;
+        test_hp = 1;
+        if (sscanf(ENV("LARECOMP_COOP_HP"), "%d:%d", &i, &q) == 2 && i > 1 && i <= g_n) g_hp[i - 1] = q;
+    }
     // what the game's hearts gained - or, from a heart / healing amount, all of it, even what Player 1 had no room for
     int gained = g_game_hp >= 0 && h > g_game_hp ? h - g_game_hp : 0;
     if (g_heal_pending > gained) gained = g_heal_pending;
@@ -481,6 +499,40 @@ static void zoom_tick(bool play) {
     if (mode != COOP_CAM_AUTO || !play) g_zoom = want;
     else g_zoom += (want - g_zoom) * (want > g_zoom ? 0.06f : 0.02f);  // (out quicker than back in)
     if (fabsf(g_zoom - want) < 0.002f) g_zoom = want;
+}
+
+// A player out of the camera's view (zoomed out as far as it goes) for LEASH_FRAMES is put back on Player 1 (setting
+// coop_leash): left behind in another room, run off the screen - once he is on his feet (his state kind 0: not mid-
+// fall, knocked back..., whose own ending would put him back where it began), or after LEASH_ANYWAY whatever he does.
+// A knocked-out one waits LEASH_DOWN - his bubble marks where he is, for a revive - then is revived and put back.
+// Not while Player 1 is in an event.
+#define LEASH_FRAMES 180   // (3 s)
+#define LEASH_ANYWAY 600   // (10 s)
+#define LEASH_DOWN 1800    // (30 s)
+static void leash_tick(void) {
+    static uint64_t away[COOP_MAX];
+    extern float widescreen_factor(void);
+    uint64_t now = renderer_present_count();
+    float aspect = 16.0f / 9.0f * widescreen_factor();
+    for (int i = 1; i < g_n; i++) {
+        float p[3], nx, ny;
+        bool front;
+        if (!g_settings.coop_leash || g_p1_event || !player_pos(g_extra[i], p) ||
+            !view_point(p, aspect, &nx, &ny, &front) || (front && fabsf(nx) < 1.05f && fabsf(ny) < 1.05f)) {
+            away[i] = 0;
+            continue;
+        }
+        if (!away[i]) away[i] = now;
+        uint64_t gone = now - away[i];
+        if (g_down[i] ? gone > LEASH_DOWN
+                      : gone > LEASH_ANYWAY || (gone > LEASH_FRAMES && link_state_kind(g_extra[i]) == 0)) {
+            CLOG("[coop] player %d out of view %llu s%s: back on Player 1\n", i + 1, (unsigned long long)(gone / 60),
+                 g_down[i] ? ", knocked out" : "");
+            if (g_down[i]) revive(i, "left behind");
+            ride_on_host(i);
+            away[i] = 0;
+        }
+    }
 }
 
 bool coop_player_screen(int i, float w, float h, float *sx, float *sy, bool *edge) {
@@ -1065,6 +1117,7 @@ void coop_tick(Cpu *c) {
     p1_event_tick();
     hearts_tick(c);
     sleep_tick(c);
+    if (play) leash_tick();
     extern uint64_t input_coop_buttons(int player);
     uint64_t frame = renderer_present_count();
     for (int i = 1; i < g_n; i++) {
