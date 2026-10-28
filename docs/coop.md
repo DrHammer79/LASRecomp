@@ -103,6 +103,34 @@ alone.
   scene, whoever opened the chest.
 - `+0x4b8` is only moved for the components' checks. The camera, the HUD,
   events, saving and the camera areas still follow Player 1.
+**Walk-ins.** Through a door and at a dungeon's room change Player 1 is walked
+in (Link state kind 16). The game's "can he go" check lets that kind go, so the
+others were put on him at its start only and then walked on ahead of him into
+the next room. For the whole walk-in they stay on him and get no input, as in
+the other events.
+
+**Event boxes.** An `AreaEventBox` (a fight room's lock, a boss's or mini-boss's
+start, a cutscene's trigger) is a bare collision shape whose contact calls the
+box's fire (`main+0x67210`) for any Link that walks in. Each other player walking
+into Lanmola's pit played his start again. In a fight room, another player a step
+ahead of Player 1 shut the doors while Player 1 was still in the doorway. The
+closing shutter put Player 1 back on the doorway's far side, and the camera and
+everyone followed him into the room before, every time (Angler's Tunnel, 08E up
+into 07E). Only Player 1's contact fires a box (`COOP_EVENT_BOX_SITE`).
+
+**Warp holes.** An `AreaWarpHoleEventBox` keeps a player actor whose `+0x43`
+bit 6 is clear, then plays the jump and the "Where to?" menu for Player 1,
+whoever stepped in. Another player's Link reads as one with the bit set
+(`COOP_WARP_HOLE_TOUCH/LEAVE_SITE`). A dungeon's warp hole back to its entrance
+is an exit, which Player 1 already leads (`COOP_EXIT_TOUCH_SITE`).
+
+**Deaths.** A Link dies by his state machine (`+0x4e0`) changing to the dead
+state (0x12; 0x13 is checked with it), whose start plays the game over. Hits on
+the other players, and their falls into pits or deep water (`DAMAGE_FIXED_SITE`),
+come off their own hearts. With each player's own hearts, another player sent to
+the dead state any other way, such as an instant kill, is knocked out instead
+(`COOP_DEAD_STATE_SITE`). With "game over for everyone" his last hit is let
+through, and with shared hearts a death is the game's own.
 
 **Enemies** (`coop_targets`). While an enemy's update runs
 (`COOP_ACTOR_EXEC_SITE` / `_DONE`, enemies told apart by their level name
@@ -180,6 +208,9 @@ the game's reads of it by the RomFS index's patch list.
 | COOP_DOACTION_SITE | 0x70000ea240 | sub sp, sp, #0x60 | a DoAction component checked for each player (26) |
 | COOP_DOACTION_FRAME_SITE | 0x70000e8be0 | stp x20, x19, [sp, #-0x20]! | each player's current DoAction (27) |
 | COOP_DOACTION_GET_SITE | 0x70000e8d90 | stp x20, x19, [sp, #-0x20]! | one taker per object (28) |
+| COOP_EVENT_BOX_SITE | 0x7000067210 | str x19, [sp, #-0x20]! | an event box fires for Player 1 only (29) |
+| COOP_WARP_HOLE_TOUCH / LEAVE_SITE | 0x700008c5ac / c410 | ldrb w8, [x8, #0x43] | warp holes (30, 31) |
+| COOP_DEAD_STATE_SITE | 0x7000d34660 | sub sp, sp, #0x30 | another player's death is a knock-out (32) |
 
 Runtime constants: `PLAYER_VTABLE`, `PLAYER_MAX_HEALTH`, `PLAY_ANIMATION`,
 `DOACTION_CURRENT` / `_PENDING` / `_COOLDOWN` (the slots), `DOACTION_TAKE_RET` /
@@ -218,6 +249,7 @@ Test switches (environment):
 | `LARECOMP_COOP=<n>` | the player count, without touching the settings |
 | `LARECOMP_COOP_LOG=1` | `[coop]` lines: Links made and placed, hits, knock-outs, exits, target changes, positions every 30 frames |
 | `LARECOMP_COOP_DOWN=<p>,...` | those players knocked out 2 s after they are placed |
+| `LARECOMP_COOP_DIE=<p>,...` | those players sent to the dead state 3 s after they are placed |
 | `LARECOMP_INPUT_P2..P8=<frame>:<button>:<frames>,...` | scripted input for players 2..8, as `LARECOMP_INPUT` |
 
 What was checked on 1.0.1, mostly with the test inputs above and
@@ -233,6 +265,10 @@ What was checked on 1.0.1, mostly with the test inputs above and
   - Player 2 held at a door, at a loading zone and at stairs.
 - **Dungeons and 2D:** Tail Cave's rooms, a side-view room, a fall into a pit
   (the player comes back at the room's entry, Player 1 stays).
+- **Triggers:** Angler's Tunnel 08E up into the fight room 07E with 3 players,
+  all at once and one at a time; Lanmola's pit with the others walking in
+  first; a field warp hole and a dungeon warp hole with Player 2 on it, then
+  Player 1.
 - **Enemies:** spear Moblins changing targets only after their lock.
 - **A-button actions** (`build/interact_check.sh`): Player 2 lifting and
   throwing a rock and a pot, opening a chest (the seashell at Field 07M),
@@ -245,8 +281,12 @@ What was checked on 1.0.1, mostly with the test inputs above and
 
 - **Tunic colours** need the mod's `Playerlink.bfres`. Recolouring the tunic
   at run time (as the cosmetics do) would remove the file and the restart.
-- **Warp holes, Manbo's warps, falls to a lower floor, event boxes** weren't
-  examined. Another player may still trigger them for everyone.
+- **Manbo's warps and falls to a lower floor** weren't examined. Manbo's warp
+  points are the song's arrivals, with no touch of their own: another player
+  playing the song with his ocarina may still warp everyone.
+- **Instant kills:** none was found to try. The dead-state change was checked
+  with `LARECOMP_COOP_DIE` for Player 2 (knocked out); sent that way Player 1
+  doesn't die, so the game over itself wasn't seen.
 - **Player 1 in another room:** the others stay where they are, off the
   camera's view, until they walk over or press L3+R3.
 - **A-button actions** not tried with the other players: talking to people,
