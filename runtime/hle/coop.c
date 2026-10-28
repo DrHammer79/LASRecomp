@@ -869,6 +869,193 @@ static int camera_scroll(Cpu *c) {
     return 1;
 }
 
+// ---- A-button actions: lifting, throwing, talking, reading, opening a chest... An object that can be acted on has a
+// DoAction component. Its update (COOP_DOACTION_SITE, main+0xea240) checks itself against "Link" (+0x4b8): in reach,
+// in front of him, able to act (its +0x88). The best of the frame goes into one slot (DOACTION_PENDING, a weak_ptr),
+// which the frame's end (COOP_DOACTION_FRAME_SITE, main+0xe8be0) makes the current one (DOACTION_CURRENT): what Link's
+// state code acts on when A is pressed (COOP_DOACTION_GET_SITE, main+0xe8d90) and the HUD's A label shows. One slot,
+// one Link: every other player's A acted on what Player 1 could act on, wherever that player stood - in front of
+// something else he got nothing, and pressing A just as Player 1 did put him into the same lift as Player 1, on Player
+// 1's rock. With co-op every player has his own slots (players 2..: here, swapped into the game's while the game works
+// on his): each component is checked for every player, the frame's end runs for each, and another player's own update
+// (COOP_ACTOR_EXEC_*) acts on his. The countdown after an action (DOACTION_COOLDOWN) stays shared.
+// A component also keeps what its last check found (+0x1b4..+0x1c4: angle, distance, height, score, "can act"). The
+// next component's check compares its score with the pending one's, and the action reads "can act" again
+// (main+0xeae90): Player 1's findings, his check being the last. Each other player's findings for his best component
+// are kept with his slots and are in it while the game works on his.
+#define ACT_RES_AT 0x1b4
+#define ACT_RES 0x11
+static uint8_t g_act[COOP_MAX][32];              // players 2..: their pending (+0) and current (+16) slots
+static uint8_t g_act_res[COOP_MAX][2][ACT_RES];  // ... their components' findings (pending, current)
+static int g_act_calls;                          // inside our own calls of the game's DoAction functions
+static int g_act_swapped;                        // the player whose current slot is in the game's (his update), 0: none
+static uint64_t g_act_comp;                      // meanwhile: his current component, holding his findings
+static uint8_t g_act_own[ACT_RES];               // ... whose own findings (Player 1's) go back after
+RT_ON_RESET(coop_act_reset) {
+    memset(g_act, 0, sizeof g_act);
+    g_act_calls = g_act_swapped = 0;
+    g_act_comp = 0;
+}
+
+static void slot_swap(uint64_t slot, uint8_t *mine) {
+    uint8_t t[16];
+    memcpy(t, (const void *)(uintptr_t)slot, 16);
+    memcpy((void *)(uintptr_t)slot, mine, 16);
+    memcpy(mine, t, 16);
+}
+
+// The component a slot (weak_ptr {ptr, control}) holds while it lives (the control block's use count, +8, is -1 once
+// it is gone), else 0.
+static uint64_t slot_live(uint64_t slot) {
+    uint64_t p = LD64(slot), ctrl = LD64(slot + 8);
+    return heap_ptr(p) && heap_ptr(ctrl) && LD64(ctrl + 8) != ~0ull ? p : 0;
+}
+
+// Player i's findings into component p (what it held before into `keep`), or back.
+static void res_put(uint64_t p, const uint8_t *res, uint8_t *keep) {
+    if (keep) memcpy(keep, (const void *)(uintptr_t)(p + ACT_RES_AT), ACT_RES);
+    memcpy((void *)(uintptr_t)(p + ACT_RES_AT), res, ACT_RES);
+}
+
+// A DoAction component's update (x0 the component): once for each other player who can act, "Link" being him, then for
+// Player 1 into the game's own slot. (In an enemy's update the player slot holds the Link it targets: put back after.)
+static int doaction_each(Cpu *c) {
+    uint64_t gm = LD64(GA(GAME_MGR));
+    if (g_act_calls || !gm || !GA(DOACTION_PENDING)) return 0;
+    if (!on_game_thread()) {  // (the player slot is the game thread's: Player 1 only there)
+        static int said;
+        if (!said++) LOG("[coop] a DoAction component checked off the game thread: Player 1 only\n");
+        return 0;
+    }
+    uint64_t own = LD64(gm + 0x4b8), p1 = host_player(), comp = c->x[0], args[8];
+    memcpy(args, c->x, sizeof args);
+    g_act_calls = 1;
+    for (int i = 1; i < g_n; i++) {
+        if (!collision_of(g_extra[i]) || coop_player_down(i)) continue;
+        ST64(gm + 0x4b8, g_extra[i]);
+        slot_swap(GA(DOACTION_PENDING), g_act[i]);
+        uint64_t pend = slot_live(GA(DOACTION_PENDING));  // (his best so far: his findings in it for the comparison)
+        uint8_t keep[ACT_RES];
+        if (pend && pend != comp) res_put(pend, g_act_res[i][0], keep);
+        memcpy(c->x, args, sizeof args);
+        guest_call(c, GA(COOP_DOACTION_SITE));
+        if (pend && pend != comp) res_put(pend, keep, NULL);
+        if (LD64(GA(DOACTION_PENDING)) == comp)  // (his best now)
+            memcpy(g_act_res[i][0], (const void *)(uintptr_t)(comp + ACT_RES_AT), ACT_RES);
+        slot_swap(GA(DOACTION_PENDING), g_act[i]);
+    }
+    ST64(gm + 0x4b8, p1);
+    memcpy(c->x, args, sizeof args);
+    guest_call(c, GA(COOP_DOACTION_SITE));
+    ST64(gm + 0x4b8, own);
+    g_act_calls = 0;
+    return 2;  // (to its ret)
+}
+
+// The frame's end for the DoAction slots (x8: where it returns its result): for each other player on his (the
+// countdown it lowers only once), then as it is for Player 1.
+static void doaction_frame(Cpu *c) {
+    if (g_act_calls || !GA(DOACTION_CURRENT) || !on_game_thread()) return;
+    uint64_t args[9];
+    memcpy(args, c->x, sizeof args);
+    uint32_t cool = LD32(GA(DOACTION_COOLDOWN));
+    g_act_calls = 1;
+    for (int i = 1; i < g_n; i++) {
+        uint64_t before, now;
+        memcpy(&before, g_act[i] + 16, 8);
+        slot_swap(GA(DOACTION_PENDING), g_act[i]);
+        slot_swap(GA(DOACTION_CURRENT), g_act[i] + 16);
+        memcpy(c->x, args, sizeof args);
+        guest_call(c, GA(COOP_DOACTION_FRAME_SITE));
+        slot_swap(GA(DOACTION_PENDING), g_act[i]);
+        slot_swap(GA(DOACTION_CURRENT), g_act[i] + 16);
+        ST32(GA(DOACTION_COOLDOWN), cool);
+        memcpy(g_act_res[i][1], g_act_res[i][0], ACT_RES);
+        memcpy(&now, g_act[i] + 16, 8);
+        if (now != before) {
+            uint64_t owner = heap_ptr(now) ? LD64(now + 0x48) : 0;
+            CLOG("[coop] player %d can act on %.48s (type %u)\n", i + 1,
+                 heap_ptr(owner) ? (const char *)(uintptr_t)(owner + 0x18) : now ? "?" : "nothing",
+                 heap_ptr(now) ? LD8(now + 0x1a0) : 0);
+        }
+    }
+    g_act_calls = 0;
+    memcpy(c->x, args, sizeof args);
+}
+
+// Another player's update: his current slot in the game's while it runs, his findings in its component.
+static void act_update_begin(uint64_t actor) {
+    int i = coop_index(actor);
+    if (!i || g_act_swapped || !GA(DOACTION_CURRENT)) return;
+    slot_swap(GA(DOACTION_CURRENT), g_act[i] + 16);
+    g_act_swapped = i;
+    g_act_comp = slot_live(GA(DOACTION_CURRENT));
+    if (g_act_comp) res_put(g_act_comp, g_act_res[i][1], g_act_own);
+}
+
+static void act_update_end(void) {
+    if (!g_act_swapped) return;
+    if (g_act_comp && slot_live(GA(DOACTION_CURRENT)) == g_act_comp) res_put(g_act_comp, g_act_own, NULL);
+    slot_swap(GA(DOACTION_CURRENT), g_act[g_act_swapped] + 16);
+    g_act_swapped = 0;
+    g_act_comp = 0;
+}
+
+// One taker per object. In his update Link checks whether he can act (main+0xd92480: the getter's call returns to
+// DOACTION_CHECK_RET; nothing there: no A action), and when A is pressed his A handler asks for the action's kind
+// (returning to DOACTION_TAKE_RET; it reads the component unchecked) and starts the lift / the opening / the talk.
+// Two players who can act on the same rock (side by side, or one on the other) and press A in the same frame would
+// both start lifting it, as any player pressing A with Player 1 did before. So a component a player's A handler
+// took is nothing to the others' checks for a moment (CLAIM_FRAMES).
+// Actions that play an event (a chest's opening and its item, a sign's text...: component type +0x1a0 other than
+// ACT_LIFT) play it on "Link", Player 1, and the Link whose A started it waits in his "open" state (main+0xdd8060) for
+// the event to move him on - for another player, never. So another player's A on one starts the component's action
+// itself (DOACTION_TRIGGER, as the "open" state does), and his own Link takes no part: the scene is Player 1's.
+#define CLAIM_FRAMES 30
+#define ACT_LIFT 4  // (rocks, pots, bushes, bombs...: the lift, his own state)
+static struct { uint64_t comp, until; } g_claim[COOP_MAX];  // (per player)
+extern uint64_t input_coop_buttons(int player);
+RT_ON_RESET(coop_claim_reset) { memset(g_claim, 0, sizeof g_claim); }
+
+static int doaction_get(Cpu *c) {
+    if (!GA(DOACTION_TAKE_RET) || !on_game_thread() || !g_updating) return 0;
+    bool take = c->x[30] == GA(DOACTION_TAKE_RET), check = c->x[30] == GA(DOACTION_CHECK_RET);
+    int who = g_act_swapped ? g_act_swapped : g_updating == host_player() ? 0 : -1;
+    uint64_t comp = slot_live(GA(DOACTION_CURRENT)), f = renderer_present_count();
+    if ((!take && !check) || who < 0 || !comp) return 0;
+    if (take) {
+        g_claim[who].comp = comp, g_claim[who].until = f + CLAIM_FRAMES;
+        return 0;
+    }
+    bool nothing = false;
+    for (int k = 0; k < COOP_MAX && !nothing; k++)
+        if (k != who && g_claim[k].comp == comp && f < g_claim[k].until) {
+            static uint64_t said;
+            if (f > said + 30) CLOG("[coop] player %d can't act: player %d took that a moment ago\n", who + 1, k + 1);
+            said = f;
+            nothing = true;
+        }
+    if (!nothing && who > 0 && LD8(comp + 0x1a0) != ACT_LIFT && GA(DOACTION_TRIGGER)) {
+        if ((input_coop_buttons(who) & 1) && !(g_claim[who].comp == comp && f < g_claim[who].until)) {
+            uint64_t owner = LD64(comp + 0x48);
+            Cpu saved = *c;
+            c->x[0] = comp;
+            guest_call(c, GA(DOACTION_TRIGGER));
+            bool ok = c->x[0] & 1;
+            *c = saved;
+            CLOG("[coop] player %d acts on %.48s (type %u)%s\n", who + 1,
+                 heap_ptr(owner) ? (const char *)(uintptr_t)(owner + 0x18) : "?", LD8(comp + 0x1a0),
+                 ok ? ": its event plays on Player 1" : ": not now");
+            g_claim[who].comp = comp, g_claim[who].until = f + CLAIM_FRAMES;  // (and not again at once)
+        }
+        nothing = true;
+    }
+    if (!nothing) return 0;
+    ST64(c->x[0], 0);  // (the empty pointer it returns for nothing, x0 its result)
+    ST64(c->x[0] + 8, 0);
+    return 2;  // (to its ret)
+}
+
 int rt_coop_hook(Cpu *c, int which) {
     if (!rt_coop_on()) return 0;
     switch (which) {
@@ -950,10 +1137,12 @@ int rt_coop_hook(Cpu *c, int which) {
             }
         }
         actor_exec_begin(c);
+        act_update_begin(g_updating);
         return 0;
     }
     case 16:  // COOP_ACTOR_EXEC_DONE - after it
         if (!on_game_thread()) return 0;
+        act_update_end();
         actor_exec_end();
         if (g_updating) coop_actor_updated(c, g_updating);
         g_updating = 0;
@@ -981,6 +1170,13 @@ int rt_coop_hook(Cpu *c, int which) {
         return g_leaving > 0;
     case 25:  // COOP_CAMERA_SCROLL_SITE - ldrb w8, [x19, #0x515]: camera x19 would scroll to a new camera area
         return camera_scroll(c);
+    case 26:  // COOP_DOACTION_SITE - a DoAction component's update (x0)
+        return doaction_each(c);
+    case 27:  // COOP_DOACTION_FRAME_SITE - the frame's end for the DoAction slots
+        doaction_frame(c);
+        return 0;
+    case 28:  // COOP_DOACTION_GET_SITE - Link asks for his current DoAction (x0: where it returns it)
+        return doaction_get(c);
     }
     return 0;
 }
