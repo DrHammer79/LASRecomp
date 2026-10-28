@@ -23,6 +23,11 @@ enum { MENU_CONFIRM_GAME = 0, MENU_CONFIRM_CONTROLLER = 1 };
 enum { DPAD_NOTHING = 0, DPAD_ITEMS = 1, DPAD_MOVE = 2 };
 enum { TIMER_POS_LEFT = 0, TIMER_POS_RIGHT = 1 };  // the run timer's corner (bottom left / right)
 enum { CHAOS_LETTERS_OFF = 0, CHAOS_LETTERS_EXPLORED = 1, CHAOS_LETTERS_MAP = 2 /* explored, all with the Map */ };
+// Local co-op (runtime/hle/coop.c)
+enum { COOP_HEALTH_SHARED = 0, COOP_HEALTH_OWN = 1 };
+enum { COOP_KO_REVIVE = 0, COOP_KO_GAME_OVER = 1 };
+enum { COOP_HUD_BOTTOM_LEFT = 0, COOP_HUD_BOTTOM_RIGHT = 1, COOP_HUD_TOP_RIGHT = 2 };
+enum { COOP_COLOURS = 8 };  // the co-op Playerlink.bfres colour sets: green, red, blue, yellow, purple, pink, black, white
 // System language served to the game (runtime/services/am.c GetDesiredLanguage, services/hid_set.c GetLanguageCode):
 // the game picks its text language from it, as it would from the Switch's own system setting, and the menus follow it
 // too (runtime/ui/i18n.mm). LANG_AUTO follows the host's language (macOS / Windows: the user's preferred languages;
@@ -96,6 +101,16 @@ typedef struct {
     float walk_speed;    // Link's walking speed multiplier (1 = normal; Gameplay tab, runtime/hle/qol.c)
     bool walk_speed_dungeons;  // walk speed also indoors: houses, caves, dungeons (Gameplay tab, under Walk speed)
     int text_speed;      // TEXT_SPEED_*: how fast message text appears (General tab; runtime/hle/text_speed.c)
+    bool coop_collision; // co-op: the Links block each other (off: they walk through each other; spawns stack them anyway)
+    int coop_players;    // local co-op: 1 = off, 2..8 Links, one per controller (Controls tab; runtime/hle/coop.c, read at boot)
+    bool coop_targets;   // co-op: enemies go after the nearest player (held while fighting him); off: Player 1 only
+    bool coop_host_exits;  // co-op: only Player 1 leads everyone through doors, loading zones, stairs (off: anyone)
+    int coop_health;     // co-op: COOP_HEALTH_SHARED (the game's one set of hearts) or COOP_HEALTH_OWN (each player his own)
+    int coop_knockout;   // co-op, own hearts: COOP_KO_REVIVE (knocked out until revived) or COOP_KO_GAME_OVER (everyone's over)
+    int coop_revive_s;   // co-op: seconds of holding A beside a knocked-out player to revive him
+    bool coop_heart_colours;  // co-op: hearts in each player's colour (Player 1's own hearts too: runtime/nvn/texpatch.c)
+    int coop_hud;        // co-op: where the other players' hearts show (COOP_HUD_*: runtime/ui/coop_hud.mm)
+    int coop_colour[8];  // co-op: each player's colour (0..COOP_COLOURS-1: the co-op Playerlink.bfres colour sets)
     bool diff_ohko;      // any hit kills
     bool diff_hero;      // Hero Mode flag forced on in the loaded save (2x damage, no recovery hearts)
     // cosmetics (Cosmetics tab, runtime/ui/menu.mm), live, never part of a seed: colour rows of the shared palette

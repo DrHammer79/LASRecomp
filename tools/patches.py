@@ -189,7 +189,8 @@ PATCHES[ADV_EXIT_DIALOG_SITE] = _adv_exit_dialog
 
 # Difficulty (runtime/ui/difficulty.mm): Link's damage is computed as `damage << hero` (Hero Mode doubles it;
 # hero = PlayerStatus+0x120 == 1) at these `lsl Wd, Wn, Wm` sites, then subtracted from health (+0x84).
-# Each is redirected to rt_damage(damage, shift) so the difficulty multiplier / one-hit KO applies.
+# Each is redirected to rt_damage(damage, shift) so the difficulty multiplier / one-hit KO applies, then to
+# rt_coop_damage (runtime/hle/coop.c): with local co-op's separate hearts a hit on players 2..8 comes off their own.
 DAMAGE_LSL_SITES = (A.DAMAGE_LSL_SITES_0, A.DAMAGE_LSL_SITES_1, A.DAMAGE_LSL_SITES_2)
 # Fixed damage (-2 quarter hearts, -4 in Hero Mode: `csel w20, w10, w9, eq` with w10=-4, w9=-2).
 DAMAGE_FIXED_SITE = A.DAMAGE_FIXED_SITE
@@ -199,15 +200,17 @@ def _damage_lsl(gen, a):
     w = struct.unpack_from('<I', gen.nso.image, a - gen.base)[0]
     assert (w & 0xffe0fc00) == 0x1ac02000, hex(w)  # lslv (32-bit)
     rd, rn, rm = w & 31, (w >> 5) & 31, (w >> 16) & 31
-    return (f'{{ extern int32_t rt_damage(int32_t, int32_t); c->x[{rd}] = (uint32_t)rt_damage((int32_t)c->x[{rn}], '
-            f'(int32_t)(c->x[{rm}] & 31)); }}  /* {a:#x}: lsl w{rd}, w{rn}, w{rm} (damage) */')
+    return (f'{{ extern int32_t rt_damage(int32_t, int32_t); extern int32_t rt_coop_damage(Cpu *, int32_t); '
+            f'c->x[{rd}] = (uint32_t)rt_coop_damage(c, rt_damage((int32_t)c->x[{rn}], (int32_t)(c->x[{rm}] & 31))); }}'
+            f'  /* {a:#x}: lsl w{rd}, w{rn}, w{rm} (damage) */')
 
 
 def _damage_fixed(gen, a):
     w = struct.unpack_from('<I', gen.nso.image, a - gen.base)[0]
     assert (w & 0xffe00c00) == 0x1a800000 and (w & 31) == 20, hex(w)  # csel w20, ...
     return ('{ extern int32_t rt_damage(int32_t, int32_t); extern int rt_hero_mode(void); '
-            'c->x[20] = (uint32_t)(-rt_damage(2, rt_hero_mode())); }'
+            'extern int32_t rt_coop_damage(Cpu *, int32_t); '
+            'c->x[20] = (uint32_t)(-rt_coop_damage(c, rt_damage(2, rt_hero_mode()))); }'
             f'  /* {a:#x}: csel w20, -4, -2 (fixed damage) */')
 
 
@@ -1109,3 +1112,59 @@ HOOKS = {
     TEXT_RATE_SITE: (0xb9028408, (), 'str w8, [x0, #0x284]: a message pane\'s text step, set as a window opens (#681)'),
     TEXT_SNAP_SITE: (0x540002cb, (), 'b.lt: message text short of the page\'s end, Instant shows it all (#681)'),
 }
+
+# ---- local co-op (runtime/hle/coop.c, setting coop_players): 2-8 Links on one screen, each on a controller of its
+# own. The hook points of the community Link's Awakening co-op mod (an exlaunch "pxtch" module for 1.0.1: subsdk9 with
+# its patch table, read 2026-10-27), ported; each asks the runtime, which with co-op off runs the instruction as it is.
+# The creator / placement / door-entry hooks sit on their function's first instruction: with co-op on the runtime
+# calls the function once per player itself (rt_coop_create...) and the hook then jumps to its `ret`. The other
+# 1.0.0-and-other-versions tables have 0 there: no co-op in those versions.
+_COOP_HOOKS = {
+    A.COOP_CREATE_SITE: (0xf81c0ffc, (A.COOP_CREATE_RET,),
+                         'str x28, [sp, #-0x40]!: the player creator (an event action) - once per player'),
+    A.COOP_ZONE_SITE: (0x9400024a, (), 'bl main+0x83afa0: the creator\'s zone set-up - Player 1 only'),
+    A.COOP_DUP_SITE: (0xb5001840, (), 'cbnz x0: an actor of that name exists already - a second Link is let through'),
+    A.COOP_PLACE_SITE: (0xa9bd57f6, (A.COOP_PLACE_RET,),
+                        'stp x22, x21, [sp, #-0x30]!: Link placed at a spawn point - every player on it'),
+    A.COOP_PLACE_PLAYER_SITE: (0xf9425e74, (), 'ldr x20, [x19, #0x4b8]: the Link the placement moves'),
+    A.COOP_SPAWN_CHECK_SITE: (0xf94106c0, (A.COOP_SPAWN_CHECK_SKIP,),
+                              'ldr x0, [x22, #0x208]: a spawn check whose object is gone with more Links (null)'),
+    A.COOP_CTRL_SITE: (0xa9406916, (), 'ldp x22, x26, [x8]: Link\'s controller - each player his own'),
+    A.COOP_COLOR_SITE: (0xd63f0100, (), 'blr x8: Link\'s tunic colour frame - one set per player'),
+    A.COOP_ENTER_SITE: (0xd10283ff, (A.COOP_ENTER_RET,), 'sub sp, sp, #0xa0: Link walking in through a door'),
+    A.COOP_SCROLL_SITE: (0xf90003e8, (), 'str x8, [sp]: event entry "ZeldaScroll" (the mod renamed it; left as it is)'),
+    A.COOP_PAD_STATE_SITE: (0x54003181, (), 'b.ne: controller manager busy (applet) - controllers polled anyway'),
+    A.COOP_APPLET_SITE: (0x390047f4, (), 'strb w20, [sp, #0x11]: controller applet player count'),
+    A.COOP_APPLET_SINGLE_SITE: (0x390057e8, (), 'strb w8, [sp, #0x15]: controller applet single-player mode'),
+    # PhysX character controllers (CCT SweepTest's geometry sweep loop, both variants): x28 a touched geometry, x8 its
+    # sweep function - none skips it. Another Link's capsule is skipped for a Link: players walk through each other.
+    A.COOP_CCT_SWEEP_SITE_0: (0xb4000728, (A.COOP_CCT_SWEEP_SKIP_0,), 'cbz x8: a touched geometry without a sweep function'),
+    A.COOP_CCT_SWEEP_SITE_1: (0xb4000508, (A.COOP_CCT_SWEEP_SKIP_1,), 'cbz x8: a touched geometry without a sweep function'),
+    # The actors' per-frame update (main+0xfacb..: x0 an actor's update callback, [x0+8] the actor): while an enemy's
+    # runs, the game manager's player (+0x4b8: "Link" to everything) is the Link it targets; Player 1's again after.
+    A.COOP_ACTOR_EXEC_SITE: (0xd63f0120, (), 'blr x9: an actor\'s update'),
+    A.COOP_ACTOR_EXEC_DONE: (0xf94007e8, (), 'ldr x8, [sp, #8]: after an actor\'s update'),
+    # A camera's per-frame update (x23 the camera): its view matrix is set (+0x580..+0x5bf). The runtime keeps the
+    # camera to put the knocked-out players' "Zzz" bubbles over them (runtime/ui/coop_hud.mm).
+    A.COOP_CAMERA_SITE: (0xf94156e8, (), 'ldr x8, [x23, #0x2a8]: a camera\'s view matrix is set'),
+    # Hearts gained (a heart, a healing amount): w23 the new total before the maximum caps it - the other players get
+    # all of it, even what Player 1 had no room for.
+    A.COOP_HEAL_SITE_0: (0x79010928, (), 'strh w8, [x9, #0x84]: Link\'s hearts after a heart'),
+    A.COOP_HEAL_SITE_1: (0x79010928, (), 'strh w8, [x9, #0x84]: Link\'s hearts after a healing amount'),
+    # Exits (setting coop_host_exits): an AreaLevelOpen (doors, loading zones) keeps a touching player actor (x23,
+    # main+0x76e90) whose +0x43 bit 6 is clear as its pending exit, which its update (main+0x75320) plays out for the
+    # game manager's player; AreaUpstairs / AreaDownstairs keep the player on them (x8, main+0x617a0) and forget him
+    # when a player leaves (main+0x61600). Another player's Link reads as one with the bit set: he takes no one along.
+    A.COOP_EXIT_TOUCH_SITE: (0x39410ee9, (), 'ldrb w9, [x23, #0x43]: a Link touching a door / loading zone'),
+    A.COOP_STAIRS_TOUCH_SITE: (0x39410d08, (), 'ldrb w8, [x8, #0x43]: a Link stepping on stairs'),
+    A.COOP_STAIRS_LEAVE_SITE: (0x39410d08, (), 'ldrb w8, [x8, #0x43]: a Link stepping off stairs'),
+    # A contact with an AreaLevelOpen ending (its end functor, main+0x76aa0: x1 the contact) drops its pending exit
+    # (main+0x76b20) whoever left: another player's Link leaving - as when he is put on Player 1 walking in - doesn't.
+    A.COOP_EXIT_LEAVE_SITE: (0xa9be4ff4, (), 'stp x20, x19, [sp, #-0x20]!: a contact with a door / loading zone ends'),
+    A.COOP_EXIT_LEAVE_CLEAR: (0x94000015, (), 'bl main+0x76b20: its pending exit dropped'),
+    # Camera areas: every Link has a camera (+0x318), each listening to the camera-area manager (main+0x836270,
+    # signal +0x750: x1 the area Player 1 now stands in). A camera whose +0x515 is set answers a new scroll area with
+    # the "ZeldaScroll" event (main+0xbc540): Player 1 walks on into it. Only Player 1's camera's answer counts.
+    A.COOP_CAMERA_SCROLL_SITE: (0x39545668, (), 'ldrb w8, [x19, #0x515]: a camera\'s scroll on a new camera area'),
+}
+HOOKS.update({a: h for a, h in _COOP_HOOKS.items() if a})

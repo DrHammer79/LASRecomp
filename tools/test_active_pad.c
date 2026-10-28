@@ -32,6 +32,10 @@ int cheats_link_health(int *max) { abort(); }
 int bind_label_family(void) { abort(); }
 int16_t g_bind_pad[BIND_PAD_COUNT], g_bind_key[BIND_KEY_COUNT];  // (A on the bottom button, as by default)
 int bind_pad_host(int slot) { return g_bind_pad[slot]; }  // (by position: "Buttons match labels" off)
+pthread_mutex_t g_klock = PTHREAD_MUTEX_INITIALIZER;
+static int players = 1;  // (local co-op's player count: runtime/hle/coop.c)
+int coop_players_setting(void) { return players; }
+int rt_coop_players(void) { return players; }
 
 static SDL_JoystickID attach(const char *name) {
     SDL_VirtualJoystickDesc d;
@@ -112,7 +116,42 @@ int main(void) {
     assert(SDL_DetachVirtualJoystick(p1));
     pump();
     assert(input_active_pad() == 0 && !pad_buttons);
+
+    // local co-op, two players and three pads: the second is Player 2's and never the game's (Player 1's) pad
+    players = 2;
+    input_handle_event(&none);
+    SDL_JoystickID c1 = attach("co-op 1 (virtual)"), c2 = attach("co-op 2 (virtual)"), c3 = attach("spare (virtual)");
+    pump();
+    assert(input_active_pad() == c1 && coop_slot_of(c2) == 0 && coop_slot_of(c3) < 0);
+    button(c2, SDL_GAMEPAD_BUTTON_SOUTH, true);
+    assert(input_active_pad() == c1 && !(pad_buttons & south()) && (coop_btn[0] & 1ull << BIND_A));
+    button(c2, SDL_GAMEPAD_BUTTON_SOUTH, false);
+    axis(c2, SDL_GAMEPAD_AXIS_LEFTX, 32767);
+    assert(input_active_pad() == c1 && pad_lx == 0 && coop_axis[0][0] == 32767);
+    axis(c2, SDL_GAMEPAD_AXIS_LEFTX, 0);
+    // the spare one still takes Player 1's pad; unplugged, Player 1 goes back to his first, not Player 2's
+    button(c3, SDL_GAMEPAD_BUTTON_SOUTH, true);
+    assert(input_active_pad() == c3 && (pad_buttons & south()));
+    button(c3, SDL_GAMEPAD_BUTTON_SOUTH, false);
+    assert(SDL_DetachVirtualJoystick(c3));
+    pump();
+    assert(input_active_pad() == c1 && coop_slot_of(c2) == 0);
+    assert(SDL_DetachVirtualJoystick(c1));
+    pump();
+    assert(input_active_pad() == 0 && coop_slot_of(c2) == 0);
+    // back to one player: Player 2's pad is let go but stays open, and a press makes it the game's
+    players = 1;
+    pump();
+    input_handle_event(&none);
+    assert(coop_slot_of(c2) < 0);
+    button(c2, SDL_GAMEPAD_BUTTON_SOUTH, true);
+    assert(input_active_pad() == c2 && (pad_buttons & south()));
+    button(c2, SDL_GAMEPAD_BUTTON_SOUTH, false);
+    assert(SDL_DetachVirtualJoystick(c2));
+    pump();
+    assert(input_active_pad() == 0);
     SDL_Quit();
-    puts("PASS: press / stick on port 2 takes the game's pad and holds stay held; drift and in-use guard; unplug fallback");
+    puts("PASS: press / stick on port 2 takes the game's pad and holds stay held; drift and in-use guard; unplug fallback;"
+         " co-op: another player's pad never the game's");
     return 0;
 }
