@@ -420,11 +420,15 @@ extern "C" void controls_tab_draw(float scale) {
                    "Each enemy goes after the nearest player who is up. Once it's fighting him it stays on him until "
                    "he's knocked out, and it only changes to a clearly nearer player after a few seconds. Off: they "
                    "all go after Player 1.");
-        static const char *const cams[] = {"Normal", "Out 10%", "Out 25%", "Out 50%", "Fit everyone (max 50%)"};
+        static const char *const cams[] = {"Normal", "Out 5%", "Out 10%", "Out 25%", "Out 50%"};
         opt_choice("Camera", &g_settings.coop_camera, cams, 5, COOP_CAM_NORMAL,
-                   "Shows more around Player 1: zoomed out by 10%, 25% or 50%. Fit everyone: zooms out just enough to "
-                   "keep every player in view, never more than 50%, and back in as you regroup. Far out, the next "
+                   "Shows more around Player 1: the camera zoomed out by this much, always. Far out, the next "
                    "screen's enemies may wait until you walk in.", false);
+        opt_indent(1);
+        opt_toggle("Zoom out to fit everyone", &g_settings.coop_camera_fit, true,
+                   "When players spread out, the camera zooms out further to keep everyone in view (at most 50%), "
+                   "and back in to the Camera setting above as you regroup.");
+        opt_indent(-1);
         opt_toggle("Bring back players off screen", &g_settings.coop_leash, true,
                    "A player out of the camera's view for 3 seconds is put back on Player 1. A knocked-out one "
                    "waits 30 seconds (his \"Zzz\" shows where he is, to revive him), then is revived and brought "
@@ -441,7 +445,8 @@ extern "C" void controls_tab_draw(float scale) {
             static const char *const ko[] = {"Knocked out", "Game over"};
             opt_choice("Out of hearts", &g_settings.coop_knockout, ko, 2, COOP_KO_REVIVE,
                        "Knocked out: the player can't act (Zzz) until another player holds A beside him, or everyone "
-                       "reaches another area; he is back with 30% of his hearts and can't be hurt for 2 seconds. "
+                       "reaches another area or dungeon room; he is back with 30% of his hearts and can't be hurt for "
+                       "2 seconds. "
                        "Game over: for everyone, as when Player 1 runs out.", false);
             if (g_settings.coop_knockout == COOP_KO_REVIVE)
                 opt_int("Revive time", &g_settings.coop_revive_s, 1, 10, 1, 4, "%d s",
