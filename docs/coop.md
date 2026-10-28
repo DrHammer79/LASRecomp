@@ -286,11 +286,22 @@ screen on, or left behind) falls through it, and the game puts him back on the
 spot he fell from, where he falls again, for good. At Out 50% he is still in
 view, so bring-back never takes him, and a teleport doesn't stick while he
 falls (the game sets his position). A player whose height drops 8 below where
-he last stood (a ledge is a few units) is lost, and is put on Player 1 the
-moment he stands again, with bring-back on or off. Teleports (`ride_on_host`)
-also set the Link's safe spot (`Link+0x1b40`, where the game puts him back after
-a fall), so his next landing is on Player 1. In the tests, idle players left at
-a spawn fell through as Player 1 walked off, and were back on him each time.
+he last stood (a ledge is a few units) is lost and taken off the map, and 2.5 s
+on (`LOST_AWAY`) put on Player 1, with bring-back on or off (the user's call:
+gone for a moment, then back with Player 1, rather than seen falling and
+popping up). While he falls he's below the ground; as the game stands him up
+where he fell from, he's parked out of sight (y −1000, his update not running)
+until it's time, then put on Player 1 standing, which a teleport needs.
+Teleports (`ride_on_host`) also set the Link's safe spot (`Link+0x1b40`, where
+the game puts him back after a fall).
+
+What decides where the ground is loaded wasn't found (2026-10-28): the game
+runs the objects of a 7×7 block of screens around Player 1, but the ground
+reaches less far, unevenly: on Ukuku Prairie another player stood 30 units east
+and 20 west of Player 1, while at Tal Tal Heights idle players fell a few steps
+from him as he crossed into the next screen. Neither the screens' `area`
+entries nor the music and camera zones of `Field.lvb` match it; it's in the
+game's world streaming code.
 
 **The pause menu** (`hold_on_p1`). The pause menu takes "the player's" spot as
 it opens, for its map and for a save's restart point (file `0x559c`), from the
