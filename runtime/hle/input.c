@@ -1080,6 +1080,16 @@ static void fill_state(Cpu *c) {
         extern uint64_t dpad_items_input(uint64_t b);  // the d-pad as held)
         b = dpad_items_input(b);
     }
+    {   // local co-op: another player's talk plays on Player 1, and his A, B and directions move its text on too
+        extern int coop_talker(void);
+        int t = coop_talker();
+        if (t >= 1 && t <= COOP_PADS) {
+            uint64_t tb = (menu ? 0 : coop_btn[t - 1]) | coop_script_btn[t - 1];
+            b |= tb & ((1ull << BTN_A) | (1ull << BTN_B) | (0xfull << 12));
+            lx = clamp_axis(lx + (menu ? 0 : coop_axis[t - 1][0]) + coop_script_axis[t - 1][0]);
+            ly = clamp_axis(ly + (menu ? 0 : coop_axis[t - 1][1]) + coop_script_axis[t - 1][1]);
+        }
+    }
     extern bool mirror_input(void);  // mirror mode, the world on screen (runtime/hle/mirror.c): left and right swap
     bool mirrored = !menu && mirror_input();
     if (mirrored) {
