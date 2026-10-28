@@ -28,9 +28,16 @@ float widescreen_effect_stretch(uint64_t fs_hash, float *ky) {
         0x1372d4fe34dd4bb4ull,  // Mysterious Woods light-shaft boxes (their sides: vertical streaks at the far left)
     };
     extern float coop_camera_zoom(void);  // runtime/hle/coop.c (1: the game's own view)
-    float zoom = coop_camera_zoom(), wide = g_wide > 1.0f ? g_wide : 1.0f;
+    float zoom = ENV("LARECOMP_NO_ZOOM_STRETCH") ? 1.0f : coop_camera_zoom(), wide = g_wide > 1.0f ? g_wide : 1.0f;
     *ky = 1.0f;
     if (wide <= 1.0f && zoom <= 1.0f) return 1.0f;
+    // the interior backdrop (behind houses' rooms: its glow showed as a hard circle zoomed out, "Indoor zoom"; interiors
+    // stay 16:9 in a wide window, so only the zoom)
+    if (fs_hash == BACKDROP_HASHES) {
+        if (zoom <= 1.0f) return 1.0f;
+        *ky = zoom;
+        return zoom;
+    }
     bool known = false;
     for (size_t i = 0; i < sizeof k / sizeof k[0]; i++) known |= k[i] == fs_hash;
     // dungeon darkness around the camera: a hard-edged dark oval once a room shows wider than 16:9 (boxed rooms
