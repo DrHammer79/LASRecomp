@@ -286,6 +286,13 @@ static void coop_pad_close(SDL_JoystickID id) {
     LOG("[input] co-op player %d: controller disconnected\n", i + 2);
 }
 
+// The controller player `player` (0 = Player 1) has, by name, or NULL (the co-op rows: runtime/ui/controls_ui.mm, UI
+// thread).
+const char *input_player_pad_name(int player) {
+    SDL_Gamepad *g = player == 0 ? pad : player >= 1 && player <= COOP_PADS ? coop_pad[player - 1] : NULL;
+    return g ? SDL_GetGamepadName(g) : NULL;
+}
+
 // The buttons player `player` (1 = player 2) was last given (runtime/hle/coop.c).
 uint64_t input_coop_buttons(int player) {
     return player >= 1 && player <= COOP_PADS ? coop_seen[player - 1] : 0;

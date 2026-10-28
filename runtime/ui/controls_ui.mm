@@ -19,6 +19,9 @@ extern "C" {
 
 extern "C" int coop_players_setting(void);  // (runtime/hle/coop.c: 1 once the game is a version without co-op)
 extern "C" int coop_colours_state(void);    // (runtime/hle/coop.c: 0 the tunic colours are in, 1 after a restart, 2 no file)
+extern "C" const char *coop_colours_path(void);  // (... where that file goes)
+extern "C" bool coop_supported(void);       // (... false once the game is a version without co-op)
+extern "C" const char *input_player_pad_name(int player);  // (runtime/hle/input.c: a player's controller, or NULL)
 int input_pad_family(void);              // runtime/hle/input.c
 SDL_JoystickID input_active_pad(void);   // runtime/hle/input.c: the controller the game reads (0: none yet)
 void input_apply_background(void);
@@ -230,6 +233,114 @@ static void configure_inputs(float scale) {
     opt_split_end();
 }
 
+// ------------------------------------------------------------------ local co-op (runtime/hle/coop.c)
+// Right under Inputs: the player count and who has which controller and color first, then hearts, the camera and
+// the rules, each under its own heading. The player count applies from the next file loaded (the extra Links are made
+// with Link's own as a save loads); the tunic colors' file is part of the game's data from when it starts.
+static void coop_options(void) {
+    opt_section("Co-op");
+    bool supported = coop_supported();
+    {
+        static const char *const players[] = {"Off", "2 players", "3 players", "4 players", "5 players", "6 players",
+                                              "7 players", "8 players"};
+        int i = supported ? g_settings.coop_players - 1 : 0;
+        if (i < 0 || i > 7) i = 0;
+        if (!supported) opt_disable_next();
+        if (opt_choice("Players", &i, players, 8, 0,
+                       supported ? "Local co-op: one Link per controller; Player 1 also has the keyboard. Starts when "
+                                   "you next load a file. Lost? Press both sticks in (L3 + R3) to jump back to Player 1."
+                                 : "Local co-op needs the game files of version 1.0.1 or 1.1.0.",
+                       false))
+            g_settings.coop_players = i + 1;
+    }
+    if (g_settings.coop_players <= 1 || !supported) return;
+    opt_indent(1);
+    if (int cs = coop_colours_state()) {
+        static char where[1400];
+        snprintf(where, sizeof where,
+                 "The tunic colors need the co-op mod's Playerlink.bfres at %s. Without it every Link wears Player 1's "
+                 "tunic.", coop_colours_path());
+        opt_warn_next();
+        opt_action("Tunic colors", cs == 1 ? "Quit to Start Screen" : "Not installed",
+                   cs == 1 ? "The players' tunic colors load as the game starts. Quit to the Start Screen and play "
+                             "again: until then every Link wears Player 1's tunic."
+                           : where, false, false);
+    }
+    static const char *const colours[COOP_COLOURS] = {"Green", "Red", "Blue", "Yellow", "Purple", "Pink", "Black",
+                                                      "White"};
+    static char descs[8][200];
+    for (int i = 0; i < g_settings.coop_players && i < 8; i++) {
+        // (whose controller is whose: a Link that doesn't move is the likeliest first problem; a color two players
+        // share, or no controller, shows in red)
+        const char *pad = input_player_pad_name(i);
+        bool same = false;
+        for (int j = 0; j < g_settings.coop_players && j < 8; j++)
+            same |= j != i && g_settings.coop_colour[j] == g_settings.coop_colour[i];
+        char label[32];
+        snprintf(label, sizeof label, "Player %d color", i + 1);
+        if (i == 0)
+            snprintf(descs[i], sizeof descs[i], "Player 1's tunic and hearts. Controller: keyboard%s%s.",
+                     pad ? " and " : "", pad ? pad : "");
+        else
+            snprintf(descs[i], sizeof descs[i], "Player %d's tunic and hearts. Controller: %s.%s", i + 1,
+                     pad ? pad : "none connected", same ? " Another player has this color too." : "");
+        if ((i > 0 && !pad) || same) opt_warn_next();
+        opt_choice(label, &g_settings.coop_colour[i], colours, COOP_COLOURS, i, descs[i], true);
+    }
+    opt_indent(-1);
+
+    opt_section("Co-op hearts");
+    static const char *const health[] = {"Shared", "Each player's own"};
+    opt_choice("Hearts", &g_settings.coop_health, health, 2, COOP_HEALTH_OWN,
+               "Shared: the game's one set. Own: a hit costs only that player's hearts; hearts picked up go to every "
+               "player who is up.", false);
+    if (g_settings.coop_health == COOP_HEALTH_OWN) {
+        opt_indent(1);
+        static const char *const ko[] = {"Knocked out", "Game over for all"};
+        opt_choice("Out of hearts", &g_settings.coop_knockout, ko, 2, COOP_KO_REVIVE,
+                   "Knocked out: lie down until a teammate holds A beside you, or Player 1 reaches a new area or "
+                   "room. You come back with 30% of full hearts. Game over for all: as when Player 1 runs out.", false);
+        if (g_settings.coop_knockout == COOP_KO_REVIVE) {
+            opt_indent(1);
+            opt_int("Revive time", &g_settings.coop_revive_s, 1, 10, 1, 4, "%d s",
+                    "How long a teammate holds A beside a knocked-out player to revive them.");
+            opt_indent(-1);
+        }
+        static const char *const hud[] = {"Bottom left", "Bottom right", "Top right"};
+        opt_choice("Other players' hearts", &g_settings.coop_hud, hud, 3, COOP_HUD_BOTTOM_LEFT,
+                   "Where players 2 and up show their hearts. In a bottom corner, past 3 players the rest go in the "
+                   "other one.", false);
+        opt_toggle("Hearts in player colors", &g_settings.coop_heart_colours, true,
+                   "Each player's hearts in their color, Player 1's too (instead of the Cosmetics tab's Heart color).");
+        opt_indent(-1);
+    }
+
+    opt_section("Co-op camera");
+    static const char *const cams[] = {"Normal", "Out 5%", "Out 10%", "Out 25%", "Out 50%"};
+    opt_choice("Camera zoom", &g_settings.coop_camera, cams, 5, COOP_CAM_NORMAL,
+               "How far out the camera always is. Far out, the next screen's enemies may wait until you walk in.",
+               false);
+    opt_indent(1);
+    if (g_settings.coop_camera == COOP_CAM_150) opt_disable_next();  // (already as far out as it goes)
+    opt_toggle("Zoom out to fit everyone", &g_settings.coop_camera_fit, true,
+               "Zooms out further as players spread out (up to 50%), and back in as you regroup.");
+    opt_indent(-1);
+
+    opt_section("Co-op rules");
+    opt_toggle("Bring lost players back", &g_settings.coop_leash, true,
+               "A player off screen for 3 seconds is brought back to Player 1 (knocked out: after 30 seconds, "
+               "revived). Off: players can wander; L3 + R3 still brings one back.");
+    opt_toggle("Only Player 1 triggers exits", &g_settings.coop_host_exits, true,
+               "Doors, stairs and loading zones take everyone along only when Player 1 walks in. Off: anyone's "
+               "step does.");
+    opt_toggle("Enemies target the nearest player", &g_settings.coop_targets, true,
+               "Each enemy chases the nearest player who is up and sticks with them while fighting. Off: they all "
+               "chase Player 1.");
+    opt_toggle("Players block each other", &g_settings.coop_collision, false,
+               "On: the Links bump into each other; a player arriving on Player 1 passes through until they walk "
+               "off the spot. Off: they walk through each other.");
+}
+
 // ------------------------------------------------------------------ the tab
 extern "C" void controls_tab_draw(float scale) {
     int frame = ImGui::GetFrameCount();
@@ -273,6 +384,8 @@ extern "C" void controls_tab_draw(float scale) {
                    "permission."))
         input_apply_background();
 
+    coop_options();
+
     opt_section("Movement");
     {
         static const char *const modes[] = {LN("Nothing"), LN("Items"), LN("Movement")};
@@ -310,92 +423,6 @@ extern "C" void controls_tab_draw(float scale) {
     opt_toggle("Buttons match labels", &g_settings.face_by_label, false,
                "On Xbox and PlayStation controllers, A, B, X and Y work as printed on the controller, so the bottom "
                "button is A. Off keeps the Switch layout. Nintendo controllers aren't affected.");
-
-    // Local co-op (runtime/hle/coop.c). The player count applies from the next file loaded (the extra Links are made
-    // with Link's own as a save loads); the tunic colours' file is part of the game's data from when it starts.
-    opt_section("Co-op");
-    bool coop_version = g_settings.coop_players <= 1 || coop_players_setting() > 1;
-    {
-        static const char *const players[] = {"Off", "2 players", "3 players", "4 players", "5 players", "6 players",
-                                              "7 players", "8 players"};
-        int i = g_settings.coop_players - 1;
-        if (i < 0 || i > 7) i = 0;
-        if (!coop_version) opt_disable_next();
-        if (opt_choice("Players", &i, players, 8, 0,
-                       coop_version
-                           ? "Local co-op: one Link per player. Player 1 uses the keyboard and the first controller, "
-                             "each other player the next controller connected. Applies from the next file you load; "
-                             "if co-op was off when LAS Recomp started, restart it for the players' tunic colours."
-                           : "Local co-op needs the game files of version 1.0.1 or 1.1.0.",
-                       false))
-            g_settings.coop_players = i + 1;
-    }
-    if (g_settings.coop_players > 1 && coop_version) {
-        opt_indent(1);
-        if (int cs = coop_colours_state()) {
-            opt_warn_next();
-            opt_action("Tunic colours", cs == 1 ? "Restart LAS Recomp" : "Not installed",
-                       cs == 1 ? "The players' tunic colours load as LAS Recomp starts with co-op on. Close it and start "
-                                 "it again: until then every Link wears Player 1's tunic."
-                               : "The players' tunic colours need the co-op mod's Playerlink.bfres in "
-                                 "coop/romfs/region_common/actor/ next to LAS Recomp. Without it every Link wears "
-                                 "Player 1's tunic.", false, false);
-        }
-        opt_toggle("Player collision", &g_settings.coop_collision, false,
-                   "The Links block each other. A player arriving on Player 1 (a door, a new area, being brought "
-                   "back) passes through the others until he walks off the spot. Off: they walk through each other.");
-        opt_toggle("Enemies target the nearest player", &g_settings.coop_targets, true,
-                   "Each enemy goes after the nearest player who is up. Once it's fighting him it stays on him until "
-                   "he's knocked out, and it only changes to a clearly nearer player after a few seconds. Off: they "
-                   "all go after Player 1.");
-        static const char *const cams[] = {"Normal", "Out 5%", "Out 10%", "Out 25%", "Out 50%"};
-        opt_choice("Camera", &g_settings.coop_camera, cams, 5, COOP_CAM_NORMAL,
-                   "Shows more around Player 1: the camera zoomed out by this much, always. Far out, the next "
-                   "screen's enemies may wait until you walk in.", false);
-        opt_indent(1);
-        opt_toggle("Zoom out to fit everyone", &g_settings.coop_camera_fit, true,
-                   "When players spread out, the camera zooms out further to keep everyone in view (at most 50%), "
-                   "and back in to the Camera setting above as you regroup.");
-        opt_indent(-1);
-        opt_toggle("Bring back players off screen", &g_settings.coop_leash, true,
-                   "A player out of the camera's view for 3 seconds is put back on Player 1. A knocked-out one "
-                   "waits 30 seconds (his \"Zzz\" shows where he is, to revive him), then is revived and brought "
-                   "back. Off: they can wander anywhere (L3 + R3 still brings one back).");
-        opt_toggle("Only Player 1 uses exits", &g_settings.coop_host_exits, true,
-                   "Doors, stairs and other exits only lead everyone out when Player 1 walks into them; the other "
-                   "players can stand in them. Off: any player's step takes everyone along.");
-        static const char *const health[] = {"Shared", "Each player's own"};
-        opt_choice("Hearts", &g_settings.coop_health, health, 2, COOP_HEALTH_OWN,
-                   "Shared: one set of hearts for everyone, as the game's. Each player's own: a hit only costs that "
-                   "player's hearts, and any hearts picked up go to everyone.", false);
-        if (g_settings.coop_health == COOP_HEALTH_OWN) {
-            opt_indent(1);
-            static const char *const ko[] = {"Knocked out", "Game over"};
-            opt_choice("Out of hearts", &g_settings.coop_knockout, ko, 2, COOP_KO_REVIVE,
-                       "Knocked out: the player can't act (Zzz) until another player holds A beside him, or everyone "
-                       "reaches another area or dungeon room; he is back with 30% of his hearts and can't be hurt for "
-                       "2 seconds. "
-                       "Game over: for everyone, as when Player 1 runs out.", false);
-            if (g_settings.coop_knockout == COOP_KO_REVIVE)
-                opt_int("Revive time", &g_settings.coop_revive_s, 1, 10, 1, 4, "%d s",
-                        "How long another player holds A beside a knocked-out player to revive him.");
-            static const char *const hud[] = {"Bottom left", "Bottom right", "Top right"};
-            opt_choice("Hearts shown", &g_settings.coop_hud, hud, 3, COOP_HUD_BOTTOM_LEFT,
-                       "Where the other players' hearts are shown (Player 1's are the game's own).", false);
-            opt_toggle("Hearts in player colours", &g_settings.coop_heart_colours, true,
-                       "Each player's hearts in his colour, Player 1's own hearts too.");
-            opt_indent(-1);
-        }
-        static const char *const colours[COOP_COLOURS] = {"Green", "Red", "Blue", "Yellow", "Purple", "Pink", "Black",
-                                                          "White"};
-        for (int i = 0; i < g_settings.coop_players && i < 8; i++) {
-            char label[32];
-            snprintf(label, sizeof label, "Player %d colour", i + 1);
-            opt_choice(label, &g_settings.coop_colour[i], colours, COOP_COLOURS, i,
-                       "The colour of this player's tunic (and hearts).", true);
-        }
-        opt_indent(-1);
-    }
 
     opt_end();
 }
