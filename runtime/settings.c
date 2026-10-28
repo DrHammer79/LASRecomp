@@ -58,6 +58,7 @@ Settings g_settings = {
     .coop_heart_colours = true,
     .coop_hud = COOP_HUD_BOTTOM_LEFT,
     .coop_camera = COOP_CAM_NORMAL,
+    .coop_camera_fit = true,
     .coop_leash = true,
     .coop_colour = {0, 1, 2, 3, 4, 5, 6, 7},
     .upscaler = UPSCALE_SHARP,  // (MetalFX on macOS, AMD FSR 1 on Windows)
@@ -282,6 +283,7 @@ void settings_load(void) {
         else if (!strcmp(key, "coop_heart_colours")) g_settings.coop_heart_colours = atoi(val) != 0;
         else if (!strcmp(key, "coop_hud")) g_settings.coop_hud = atoi(val) < 0 || atoi(val) > 2 ? 0 : atoi(val);
         else if (!strcmp(key, "coop_camera")) g_settings.coop_camera = atoi(val) < 0 || atoi(val) > 4 ? 0 : atoi(val);
+        else if (!strcmp(key, "coop_camera_fit")) g_settings.coop_camera_fit = atoi(val) != 0;
         else if (!strcmp(key, "coop_leash")) g_settings.coop_leash = atoi(val) != 0;
         else if (!strcmp(key, "coop_colours")) {  // (one colour set per player, comma-separated)
             const char *p = val;
@@ -382,9 +384,10 @@ void settings_save(void) {
     fprintf(f, "walk_speed_dungeons = %d\n", g_settings.walk_speed_dungeons);
     fprintf(f, "coop_players = %d\ncoop_collision = %d\n", g_settings.coop_players, g_settings.coop_collision);
     fprintf(f, "coop_targets = %d\ncoop_host_exits = %d\ncoop_health = %d\ncoop_knockout = %d\ncoop_revive_s = %d\n"
-            "coop_heart_colours = %d\ncoop_hud = %d\ncoop_camera = %d\ncoop_leash = %d\n", g_settings.coop_targets,
-            g_settings.coop_host_exits, g_settings.coop_health, g_settings.coop_knockout, g_settings.coop_revive_s,
-            g_settings.coop_heart_colours, g_settings.coop_hud, g_settings.coop_camera, g_settings.coop_leash);
+            "coop_heart_colours = %d\ncoop_hud = %d\ncoop_camera = %d\ncoop_camera_fit = %d\ncoop_leash = %d\n",
+            g_settings.coop_targets, g_settings.coop_host_exits, g_settings.coop_health, g_settings.coop_knockout,
+            g_settings.coop_revive_s, g_settings.coop_heart_colours, g_settings.coop_hud, g_settings.coop_camera,
+            g_settings.coop_camera_fit, g_settings.coop_leash);
     fprintf(f, "coop_colours = %d,%d,%d,%d,%d,%d,%d,%d\n", g_settings.coop_colour[0], g_settings.coop_colour[1],
             g_settings.coop_colour[2], g_settings.coop_colour[3], g_settings.coop_colour[4], g_settings.coop_colour[5],
             g_settings.coop_colour[6], g_settings.coop_colour[7]);
