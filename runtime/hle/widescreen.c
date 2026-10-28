@@ -19,21 +19,30 @@ float widescreen_factor(void) { return g_wide; }
 // Effects drawn as a mesh around the camera, sized to cover a 16:9 view: with the widened camera their outer edge
 // shows (Mysterious Woods fog ring: a hard-edged oval at 32:9, a stray cloud piece at the far left). Their draws
 // get a viewport widened by the widescreen factor (centred), so they cover the window as they cover 16:9.
-// Identified by fragment shader hash (both backends hash the shader code the same way).
-float widescreen_effect_stretch(uint64_t fs_hash) {
+// Identified by fragment shader hash (both backends hash the shader code the same way). The co-op camera zoom widens
+// the view both ways (rt_fovy): such an effect is then stretched by it both ways too (*ky the vertical stretch).
+float widescreen_effect_stretch(uint64_t fs_hash, float *ky) {
     static const uint64_t k[] = {
         0xffad3b2d795231a7ull,  // Mysterious Woods fog ring (Field 06C...; found 2026-10-09 by skipping shaders)
         0xd66b33b13b2eac29ull,  // Mysterious Woods haze layer
         0x1372d4fe34dd4bb4ull,  // Mysterious Woods light-shaft boxes (their sides: vertical streaks at the far left)
     };
-    if (g_wide <= 1.0f) return 1.0f;
-    for (size_t i = 0; i < sizeof k / sizeof k[0]; i++)
-        if (k[i] == fs_hash) return g_wide;
+    extern float coop_camera_zoom(void);  // runtime/hle/coop.c (1: the game's own view)
+    float zoom = coop_camera_zoom(), wide = g_wide > 1.0f ? g_wide : 1.0f;
+    *ky = 1.0f;
+    if (wide <= 1.0f && zoom <= 1.0f) return 1.0f;
+    bool known = false;
+    for (size_t i = 0; i < sizeof k / sizeof k[0]; i++) known |= k[i] == fs_hash;
     // dungeon darkness around the camera: a hard-edged dark oval once a room shows wider than 16:9 (boxed rooms
-    // keep the original vignette)
+    // keep the original vignette), or zoomed out
     extern bool g_room_wide;
-    if (fs_hash == 0xc42e882c08c5e5ebull && g_room_wide) return g_wide;
-    return 1.0f;
+    if (fs_hash == 0xc42e882c08c5e5ebull) {
+        if (zoom > 1.0f) known = true;
+        else if (g_room_wide) return wide;
+    }
+    if (!known) return 1.0f;
+    *ky = zoom;
+    return wide * zoom;
 }
 
 // Untextured quads drawn with a full-screen viewport are taken for fades and flashes and fill the window

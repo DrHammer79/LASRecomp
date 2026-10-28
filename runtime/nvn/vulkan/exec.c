@@ -6738,15 +6738,16 @@ static void draw_(CmdRec *r, bool indexed) {
         }
     }
     {   // camera-attached effects sized for 16:9 are widened with the view (runtime/hle/widescreen.c)
-        extern float widescreen_effect_stretch(uint64_t fs_hash);
-        float k = widescreen_effect_stretch(g_cur_fs_hash);
-        float vx = vp[0] * vp_sx + vp_ox, vw = vp[2] * vp_sx;
+        extern float widescreen_effect_stretch(uint64_t fs_hash, float *ky);
+        float ky, k = widescreen_effect_stretch(g_cur_fs_hash, &ky);
+        float vx = vp[0] * vp_sx + vp_ox, vw = vp[2] * vp_sx, vy = vp[1] * vp_sy + vp_oy, vh = vp[3] * vp_sy;
         if (k > 1.0f) { vx -= vw * (k - 1) / 2; vw *= k; }
-        set_viewport(vx, vp[1] * vp_sy + vp_oy, vw, vp[3] * vp_sy, zn, zf);
+        if (ky > 1.0f) { vy -= vh * (ky - 1) / 2; vh *= ky; }  // (the co-op zoom: both ways)
+        set_viewport(vx, vy, vw, vh, zn, zf);
         if (g_debug_frame) {
             VkRect2D sr = scissor_rect();
             LOG("[draw]   vp %.2f %.2f %.2f %.2f (stretch %.3f, fs hash %016llx) scissor %d %d %u %u | guest sc %d %d %d %d | pass %ux%u s %.4f %.4f\n",
-                vx, vp[1] * vp_sy + vp_oy, vw, vp[3] * vp_sy, k, (unsigned long long)g_cur_fs_hash, sr.offset.x, sr.offset.y,
+                vx, vy, vw, vh, k, (unsigned long long)g_cur_fs_hash, sr.offset.x, sr.offset.y,
                 sr.extent.width, sr.extent.height, st.scissor[0][0], st.scissor[0][1], st.scissor[0][2], st.scissor[0][3], pass_w, pass_h,
                 vp_sx, vp_sy);
         }

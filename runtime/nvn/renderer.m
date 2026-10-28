@@ -4176,11 +4176,12 @@ static void draw_one(CmdRec *r, bool indexed) {
         }
     }
     {   // camera-attached effects sized for 16:9 are widened with the view (runtime/hle/widescreen.c)
-        extern float widescreen_effect_stretch(uint64_t fs_hash);
-        float k = widescreen_effect_stretch(g_cur_fs_hash);
-        double vx = vp[0] * vp_sx + vp_ox, vw = vp[2] * vp_sx;
+        extern float widescreen_effect_stretch(uint64_t fs_hash, float *ky);
+        float ky, k = widescreen_effect_stretch(g_cur_fs_hash, &ky);
+        double vx = vp[0] * vp_sx + vp_ox, vw = vp[2] * vp_sx, vy = vp[1] * vp_sy + vp_oy, vh = vp[3] * vp_sy;
         if (k > 1.0f) { vx -= vw * (k - 1) / 2; vw *= k; }
-        [enc setViewport:(MTLViewport){vx, vp[1] * vp_sy + vp_oy, vw, vp[3] * vp_sy, zn, zf}];
+        if (ky > 1.0f) { vy -= vh * (ky - 1) / 2; vh *= ky; }  // (the co-op zoom: both ways)
+        [enc setViewport:(MTLViewport){vx, vy, vw, vh, zn, zf}];
     }
     apply_scissor();
     if (pr->fi->uses_rscale) {  // [0] = render target scale, [1 + i] = scale of texture i
