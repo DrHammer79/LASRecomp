@@ -587,30 +587,49 @@ static void leash_tick(void) {
 // next one falls through it, and the game puts him back on the spot he fell from, where he falls again - for good
 // (one screen away; at Out 50% still in view, so bring_back never took him). His position then is the game's to set:
 // put on Player 1 while he falls, he's back on that spot a frame later. A player whose height drops LOST_DROP below
-// where he last stood (state kind 0; a ledge is a few units) is lost, and is put on Player 1 the moment he stands
-// again - whether or not the camera sees him, and with "bring back" off too.
+// where he last stood (state kind 0; a ledge is a few units) is lost and taken off the map, LOST_AWAY from then put
+// on Player 1, his safe spot with him (user 2026-10-28: gone for a moment, then back with Player 1, rather than seen
+// falling and popping up). While he falls he's below the ground; as the game stands him up again where he fell from,
+// he's parked there out of sight (y -1000, his update not running: standing, as a teleport needs), until it's time.
+// Whether or not the camera saw him, and with "bring back" off too.
 #define LOST_DROP 8.0f
+#define LOST_AWAY 150  // (2.5 s)
+static uint64_t g_lost_until[COOP_MAX];  // (lost: put on Player 1 at this frame; 0: he isn't)
+static bool g_lost_parked[COOP_MAX];     // (... standing again, parked out of sight until then)
 static void lost_tick(void) {
     static float stood[COOP_MAX];
-    static bool lost[COOP_MAX], known[COOP_MAX];
+    static bool known[COOP_MAX];
+    uint64_t now = renderer_present_count();
     for (int i = 1; i < g_n; i++) {
         float p[3];
+        uint64_t q = collision_of(g_extra[i]);
         int kind = link_state_kind(g_extra[i]);
-        if (!player_pos(g_extra[i], p) || kind < 0) { known[i] = lost[i] = false; continue; }
+        if (g_lost_until[i]) {
+            if (!g_lost_parked[i] && kind == 0) g_lost_parked[i] = true;  // (stood up where he fell from)
+            if (g_lost_parked[i] && now < g_lost_until[i]) {
+                if (q) ST32(q + 0x84, 0xc47a0000u);  // (y -1000: out of sight)
+                continue;
+            }
+            if (!g_lost_parked[i] && now < g_lost_until[i] + 600) continue;  // (still falling: 10 s at most)
+            g_lost_until[i] = 0, g_lost_parked[i] = false;
+            ride_on_host(i);
+            LOG("[coop] player %d back on Player 1 (fell through the world)\n", i + 1);
+            if (player_pos(g_extra[i], p)) stood[i] = p[1];
+            continue;
+        }
+        if (!q || !player_pos(g_extra[i], p) || kind < 0) { known[i] = false; continue; }
         if (kind == 0) {
-            if (lost[i]) {
-                LOG("[coop] player %d fell through the world again: put on Player 1\n", i + 1);
-                ride_on_host(i);
-                lost[i] = false;
-                if (player_pos(g_extra[i], p)) stood[i] = p[1];
-            } else stood[i] = p[1];
+            stood[i] = p[1];
             known[i] = true;
-        } else if (known[i] && !lost[i] && p[1] < stood[i] - LOST_DROP) {
-            lost[i] = true;
-            CLOG("[coop] player %d falling from %.1f to %.1f: lost\n", i + 1, stood[i], p[1]);
+        } else if (known[i] && p[1] < stood[i] - LOST_DROP) {
+            g_lost_until[i] = now + LOST_AWAY, g_lost_parked[i] = false;
+            LOG("[coop] player %d fell through the world (from %.1f to %.1f): off the map for %.1f s\n", i + 1,
+                stood[i], p[1], LOST_AWAY / 60.0f);
         }
     }
 }
+static bool lost_away(uint64_t actor) { int i = coop_index(actor); return i && g_lost_until[i] && g_lost_parked[i]; }
+RT_ON_RESET(coop_lost_reset) { memset(g_lost_until, 0, sizeof g_lost_until), memset(g_lost_parked, 0, sizeof g_lost_parked); }
 
 // The pause menu takes "the player's" spot as it opens - for its map, and for a save's restart point - from the first
 // Link made: another player's (Player 1's is made last: the scene's camera is the last Link's; made first, the camera
@@ -1394,7 +1413,8 @@ int rt_coop_hook(Cpu *c, int which) {
         if (!on_game_thread()) return 0;
         uint64_t a = heap_ptr(c->x[0]) ? LD64(c->x[0] + 8) : 0;
         g_updating = heap_ptr(a) ? a : 0;
-        if (pause_updated(g_updating)) {  // (held on Player 1's spot for the pause menu: see hold_on_p1)
+        // (held on Player 1's spot for the pause menu: hold_on_p1; off the map after falling through it: lost_tick)
+        if (pause_updated(g_updating) || lost_away(g_updating)) {
             g_updating = 0;
             return 1;
         }
