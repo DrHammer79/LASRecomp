@@ -561,9 +561,10 @@ int coop_hud_rows(CoopHudRow *rows, int cap) {
     return n;
 }
 
-// The player who owns a colour set and its colour as drawn (hearts, the HUD): the co-op Playerlink.bfres's sets.
+// The player who owns a colour set and its colour as drawn (hearts, the HUD): the co-op Playerlink.bfres's sets. Red
+// is a deeper crimson than the game's own heart red, so a red player's hearts don't read as "the" hearts.
 uint32_t coop_colour_rgb(int player) {
-    static const uint32_t k[COOP_COLOURS] = {0x2fa043, 0xd8262a, 0x2c49d6, 0xe8c11c, 0x5b2fbe, 0xd02fc4, 0x3a3a3a,
+    static const uint32_t k[COOP_COLOURS] = {0x2fa043, 0xb41d2c, 0x2c49d6, 0xe8c11c, 0x5b2fbe, 0xd02fc4, 0x3a3a3a,
                                              0xdcdcdc};
     int s = player >= 0 && player < COOP_MAX ? g_settings.coop_colour[player] : 0;
     return k[s >= 0 && s < COOP_COLOURS ? s : 0];
@@ -848,15 +849,47 @@ static int contact_link(uint64_t contact) {
 // camera answers.
 // Player 1 into another room (his own camera's answer: a new camera area): indoors - dungeons, houses, caves, not
 // the overworld's screens - knocked-out players are back, on him, as in a new area (coop_place).
+// The others follow him a moment later (ROOM_FOLLOW frames, once he is in the new room - stairs down into a side-view
+// room move him there over a few frames): each one who is up and away from him (ROOM_NEAR) is put on him, as at a door
+// - left in the room before, the ones in a side-view room's plane fell forever.
+#define ROOM_FOLLOW 30
+#define ROOM_NEAR 4.0f
+static uint64_t g_room_frame;
 static void room_changed(void) {
     extern const char *chaos_current_level(void);  // runtime/ui/chaos_overlay.mm
     const char *lv = chaos_current_level();
     if (!lv || !*lv || !strcmp(lv, "Field")) return;
     for (int i = 1; i < g_n; i++)
-        if (g_down[i]) {
-            revive(i, "new room");
-            ride_on_host(i);
+        if (g_down[i]) revive(i, "new room");
+    g_room_frame = renderer_present_count();
+}
+
+static void room_follow_tick(void) {
+    static float last[3];
+    static bool have;
+    float h[3], p[3];
+    if (!player_pos(host_player(), h)) return;
+    // (Player 1 moved far in one frame - stairs into a side-view room, a room swapped in place - is a new room too)
+    float dx = h[0] - last[0], dy = h[1] - last[1], dz = h[2] - last[2];
+    if (have && dx * dx + dy * dy + dz * dz > 10.0f * 10.0f && !g_room_frame) g_room_frame = renderer_present_count();
+    memcpy(last, h, sizeof last), have = true;
+    // (and once he stands in it - put on him while stairs still carry him up, they'd be in the floor - and each one
+    // on his own feet: one falling, the game puts back where he fell from when it's done, over a move made meanwhile)
+    uint64_t now = renderer_present_count();
+    if (!g_room_frame || now < g_room_frame + ROOM_FOLLOW || g_p1_event || link_state_kind(host_player()) != 0) return;
+    bool waiting = false;
+    for (int i = 1; i < g_n; i++) {
+        if (!player_pos(g_extra[i], p) || (p[0] - h[0]) * (p[0] - h[0]) + (p[1] - h[1]) * (p[1] - h[1]) +
+                                                  (p[2] - h[2]) * (p[2] - h[2]) <= ROOM_NEAR * ROOM_NEAR)
+            continue;
+        if (link_state_kind(g_extra[i]) != 0 && now < g_room_frame + 600) {  // (10 s at most)
+            waiting = true;
+            continue;
         }
+        CLOG("[coop] player %d follows Player 1 into the room\n", i + 1);
+        ride_on_host(i);
+    }
+    if (!waiting) g_room_frame = 0;
 }
 
 static int camera_scroll(Cpu *c) {
@@ -1313,7 +1346,7 @@ void coop_tick(Cpu *c) {
     p1_event_tick();
     hearts_tick(c);
     sleep_tick(c);
-    if (play) leash_tick();
+    if (play) leash_tick(), room_follow_tick();
     extern uint64_t input_coop_buttons(int player);
     uint64_t frame = renderer_present_count();
     for (int i = 1; i < g_n; i++) {
