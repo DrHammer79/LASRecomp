@@ -111,12 +111,15 @@ static bool g_pass[COOP_MAX];
 static float g_pass_at[COOP_MAX][3];
 static void pass_from_here(int i) { g_pass[i] = player_pos(g_extra[i], g_pass_at[i]); }
 
-// Player i onto Player 1's spot (the mod's TeleportPlayerToAnother: the collision's position).
+// Player i onto Player 1's spot (the mod's TeleportPlayerToAnother: the collision's position), and his safe spot - where
+// the game puts him back after a fall (Link +0x1b40) - with it: one falling (through ground that isn't loaded, see
+// lost_tick) has his position set by the game, back on that spot a frame later; then the spot is Player 1's.
 static void ride_on_host(int i) {
     float pos[3];
     uint64_t p = collision_of(g_extra[i]);
     if (!p || !player_pos(host_player(), pos)) return;
     memcpy((void *)(uintptr_t)(p + 0x80), pos, 12);
+    memcpy((void *)(uintptr_t)(g_extra[i] + 0x1b40), pos, 12);
     memcpy(g_pass_at[i], pos, sizeof pos), g_pass[i] = true;
 }
 
@@ -535,12 +538,29 @@ static void leash_tick(void) {
     extern float widescreen_factor(void);
     uint64_t now = renderer_present_count();
     float aspect = 16.0f / 9.0f * widescreen_factor();
+    static uint64_t noted[COOP_MAX];
     for (int i = 1; i < g_n; i++) {
-        float p[3], nx, ny;
-        bool front;
-        if (!g_settings.coop_leash || g_p1_event || !player_pos(g_extra[i], p) ||
-            !view_point(p, aspect, &nx, &ny, &front) || (front && fabsf(nx) < 1.05f && fabsf(ny) < 1.05f)) {
+        float p[3], h[3], nx = 0, ny = 0;
+        bool front = false, have = player_pos(g_extra[i], p);
+        const char *held = !g_settings.coop_leash                      ? "the option is off"
+                           : g_p1_event                                ? "Player 1 is in an event"
+                           : !have                                     ? "no position"
+                           : !view_point(p, aspect, &nx, &ny, &front) ? "no camera"
+                           : front && fabsf(nx) < 1.05f && fabsf(ny) < 1.05f ? "in view"
+                                                                       : NULL;
+        if (held) {
             away[i] = 0;
+            // (far from Player 1 yet held - once in play the bring-back stopped, unexplained: the reason, every 10 s)
+            if (have && player_pos(host_player(), h) && now >= noted[i] &&
+                (p[0] - h[0]) * (p[0] - h[0]) + (p[2] - h[2]) * (p[2] - h[2]) > 30.0f * 30.0f) {
+                uint64_t me = host_player();
+                LOG("[coop] player %d is %.0f from Player 1, not brought back: %s (view %.2f %.2f%s, his state %d, "
+                    "Player 1's %d, camera %#llx%s)\n", i + 1,
+                    sqrtf((p[0] - h[0]) * (p[0] - h[0]) + (p[2] - h[2]) * (p[2] - h[2])), held, nx, ny,
+                    front ? "" : " behind", link_state_kind(g_extra[i]), link_state_kind(me),
+                    (unsigned long long)view_camera(), me && view_camera() == LD64(me + 0x318) ? ", his own" : "");
+                noted[i] = now + 600;
+            }
             continue;
         }
         if (!away[i]) away[i] = now;
@@ -552,6 +572,35 @@ static void leash_tick(void) {
             if (g_down[i]) revive(i, "left behind");
             ride_on_host(i);
             away[i] = 0;
+        }
+    }
+}
+
+// Players lost below the world. On the Field only the area Player 1 is in has its ground: another player left in the
+// next one falls through it, and the game puts him back on the spot he fell from, where he falls again - for good
+// (one screen away; at Out 50% still in view, so bring_back never took him). His position then is the game's to set:
+// put on Player 1 while he falls, he's back on that spot a frame later. A player whose height drops LOST_DROP below
+// where he last stood (state kind 0; a ledge is a few units) is lost, and is put on Player 1 the moment he stands
+// again - whether or not the camera sees him, and with "bring back" off too.
+#define LOST_DROP 8.0f
+static void lost_tick(void) {
+    static float stood[COOP_MAX];
+    static bool lost[COOP_MAX], known[COOP_MAX];
+    for (int i = 1; i < g_n; i++) {
+        float p[3];
+        int kind = link_state_kind(g_extra[i]);
+        if (!player_pos(g_extra[i], p) || kind < 0) { known[i] = lost[i] = false; continue; }
+        if (kind == 0) {
+            if (lost[i]) {
+                LOG("[coop] player %d fell through the world again: put on Player 1\n", i + 1);
+                ride_on_host(i);
+                lost[i] = false;
+                if (player_pos(g_extra[i], p)) stood[i] = p[1];
+            } else stood[i] = p[1];
+            known[i] = true;
+        } else if (known[i] && !lost[i] && p[1] < stood[i] - LOST_DROP) {
+            lost[i] = true;
+            CLOG("[coop] player %d falling from %.1f to %.1f: lost\n", i + 1, stood[i], p[1]);
         }
     }
 }
@@ -735,11 +784,18 @@ static uint64_t made_take_back(void) {  // (a live Link made earlier that no pla
     return 0;
 }
 
+// Player 1's Link is made first. The actors' name map (an unordered_map: name -> node; the creator's "exists already"
+// check, COOP_DUP_SITE, finds it) keeps one "Player" entry, the first Link made's: whatever finds "the Player" by name
+// gets him. Made after the others (as it was), that was another player's Link, and the save's restart point was his
+// spot: a file saved with him far away - in water, fallen - loaded with Link falling forever (user 2026-10-28; with 2
+// players, saved with Player 2 9 units away, the file held Player 2's spot). Repointing the entry afterwards hung the
+// next level change (each Link's teardown takes out its own entry). The creator leaves the game manager's player
+// (+0x4b8) on the last Link made: Player 1's again after the others.
 static int coop_create(Cpu *c) {
     if (g_creating >= 0) return 0;  // (our own call: the creator as it is)
-    uint64_t args[8];
+    uint64_t args[8], me = 0;
     memcpy(args, c->x, sizeof args);
-    for (int i = g_n - 1; i >= 0; i--) {
+    for (int i = 0; i < g_n; i++) {
         if (i > 0 && g_extra[i] && LD64(g_extra[i]) == GA(PLAYER_VTABLE)) continue;
         if (i > 0 && (g_extra[i] = made_take_back())) {
             LOG("[coop] player %d: Link %#llx (taken back)\n", i + 1, (unsigned long long)g_extra[i]);
@@ -748,13 +804,16 @@ static int coop_create(Cpu *c) {
         g_creating = i;
         memcpy(c->x, args, sizeof args);
         guest_call(c, GA(COOP_CREATE_SITE));
-        if (i > 0) {
+        if (i == 0) me = host_player();
+        else {
             g_extra[i] = host_player();
             made_add(g_extra[i]);
             LOG("[coop] player %d: Link %#llx\n", i + 1, (unsigned long long)g_extra[i]);
         }
     }
     g_creating = -1;
+    uint64_t gm = LD64(GA(GAME_MGR));
+    if (gm && me && LD64(gm + 0x4b8) != me) ST64(gm + 0x4b8, me);
     CLOG("[coop] creator: player 1 Link %#llx\n", (unsigned long long)host_player());
     return 2;  // (to the creator's ret)
 }
@@ -1273,6 +1332,23 @@ int rt_coop_hook(Cpu *c, int which) {
                 return 1;
             }
         }
+        // LARECOMP_TRACK_RESPAWN=1 (diagnostic): a rock or grass actor made again under the same name - one that came
+        // back - logged as "[respawn]" (cut grass and lifted rocks came back beside Player 1 in play, 2026-10-28)
+        if (ENV("LARECOMP_TRACK_RESPAWN") && heap_ptr(g_updating)) {
+            static struct { uint64_t key, actor; } seen[8192];
+            const char *nm = (const char *)(uintptr_t)(g_updating + 0x18);
+            if (!strncmp(nm, "ObjRock", 7) || !strncmp(nm, "ObjGrass", 8) || !strncmp(nm, "ObjLawn", 7)) {
+                uint64_t key = 1469598103934665603ull;
+                for (int k = 0; k < 64 && nm[k]; k++) key = (key ^ (uint8_t)nm[k]) * 1099511628211ull;
+                int k = (int)(key % 8192), probes = 0;
+                while (seen[k].key && seen[k].key != key && ++probes < 8192) k = (k + 1) % 8192;
+                if (seen[k].key && seen[k].key == key && seen[k].actor != g_updating)
+                    LOG("[respawn] %.48s again (actor %#llx, was %#llx), frame %llu\n", nm,
+                        (unsigned long long)g_updating, (unsigned long long)seen[k].actor,
+                        (unsigned long long)renderer_present_count());
+                seen[k].key = key, seen[k].actor = g_updating;
+            }
+        }
         actor_exec_begin(c);
         act_update_begin(g_updating);
         return 0;
@@ -1490,9 +1566,26 @@ void coop_tick(Cpu *c) {
         for (int i = 1; i < g_n; i++)
             if (collision_of(g_extra[i])) ride_on_host(i);
     pass_tick();
+    {   // LARECOMP_COOP_MOVE=<frame>:<player>:<x>:<y>:<z>[:hold] (test): that player put there at that frame (left far
+        // away); with :hold, kept there from then on
+        static int done;
+        unsigned long at;
+        int i;
+        float v[3];
+        char hold[8] = "";
+        uint64_t p;
+        if (ENV("LARECOMP_COOP_MOVE") &&
+            sscanf(ENV("LARECOMP_COOP_MOVE"), "%lu:%d:%f:%f:%f:%7s", &at, &i, &v[0], &v[1], &v[2], hold) >= 5 &&
+            (!done || !strcmp(hold, "hold")) && renderer_present_count() >= at && i > 1 && i <= g_n &&
+            (p = collision_of(g_extra[i - 1]))) {
+            if (!done) LOG("[coop] test: player %d put at (%.2f %.2f %.2f)%s\n", i, v[0], v[1], v[2], hold);
+            done = 1;
+            memcpy((void *)(uintptr_t)(p + 0x80), v, sizeof v);
+        }
+    }
     hearts_tick(c);
     sleep_tick(c);
-    if (play) leash_tick(), room_follow_tick();
+    if (play) lost_tick(), leash_tick(), room_follow_tick();
     extern uint64_t input_coop_buttons(int player);
     uint64_t frame = renderer_present_count();
     static int test_die;  // LARECOMP_COOP_DIE=<player>,... (test): those players sent to the dead state 3 s after they
