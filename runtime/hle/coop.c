@@ -483,28 +483,29 @@ static bool player_screen(int i, float lift, float w, float h, float *sx, float 
 }
 
 // ---- The camera zoomed out (setting coop_camera): its field of view widened by this (runtime/hle/widescreen.c
-// rt_fovy, also the culling pass's, and the sky and sea's reach) - a set amount, or (auto) enough to keep every
-// player who is up in view, eased in and out, up to ZOOM_MAX. 1 out of play and without co-op.
+// rt_fovy, also the culling pass's, and the sky and sea's reach) - a set amount, and with coop_camera_fit further out
+// as far as it takes to keep every player who is up in view, eased in and out, up to ZOOM_MAX. 1 out of play and
+// without co-op.
 #define ZOOM_MAX 1.5f
 static float g_zoom = 1.0f;
 float coop_camera_zoom(void) { return g_zoom; }
 
 static void zoom_tick(bool play) {
-    static const float set[] = {1.0f, 1.1f, 1.25f, 1.5f};
-    float want = 1.0f;
+    static const float set[] = {1.0f, 1.05f, 1.1f, 1.25f, 1.5f};
     int mode = g_settings.coop_camera;
+    float base = mode >= COOP_CAM_NORMAL && mode <= COOP_CAM_150 ? set[mode] : 1.0f, want = base;
+    bool fit = g_settings.coop_camera_fit && base < ZOOM_MAX;
     if (!play || !rt_coop_on()) want = 1.0f;
-    else if (mode >= COOP_CAM_NORMAL && mode < COOP_CAM_AUTO) want = set[mode];
-    else if (mode == COOP_CAM_AUTO) {  // (how far out each player is at the game's own view: x, y beyond 0.7 zoom out)
+    else if (fit) {  // (how far out each player is at the game's own view: x, y beyond 0.7 zoom out; never in of base)
         extern float widescreen_factor(void);  // (runtime/hle/widescreen.c: the window's aspect over 16:9)
         float far = 0, p[3], nx, ny, aspect = 16.0f / 9.0f * widescreen_factor();
         bool front;
         for (int i = 1; i < g_n; i++)
             if (!g_down[i] && player_pos(g_extra[i], p) && view_point(p, aspect, &nx, &ny, &front) && front)
                 far = fmaxf(far, fmaxf(fabsf(nx), fabsf(ny)) * g_zoom);
-        want = fminf(fmaxf(far / 0.7f, 1.0f), ZOOM_MAX);
+        want = fminf(fmaxf(far / 0.7f, base), ZOOM_MAX);
     }
-    if (mode != COOP_CAM_AUTO || !play) g_zoom = want;
+    if (!fit || !play) g_zoom = want;
     else g_zoom += (want - g_zoom) * (want > g_zoom ? 0.06f : 0.02f);  // (out quicker than back in)
     if (fabsf(g_zoom - want) < 0.002f) g_zoom = want;
 }
@@ -1459,6 +1460,7 @@ void coop_tick(Cpu *c) {
             k += snprintf(line + k, sizeof line - k, " | cam %#llx P1 view (%.2f %.2f %.2f) screen %d (%.0f %.0f) fovy %.3f",
                           (unsigned long long)g_cam[0], v[0], v[1], v[2], on, sx, sy, *(const float *)(uintptr_t)(g_cam[0] + 0x564));
         }
+        if (g_zoom != 1.0f) snprintf(line + k, sizeof line - k, " zoom %.3f", g_zoom);
         LOG("%s\n", line);
     }
 }
