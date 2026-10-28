@@ -141,6 +141,19 @@ alone.
   itself (`DOACTION_TRIGGER`) and his Link stays as he is. Items from chests go
   into the shared inventory, and Player 1 holds the item up in the item-get
   scene, whoever opened the chest.
+- **Talking.** A talk another player starts plays on Player 1 too, and only
+  Player 1's controller moved its text on. While it plays, the talker's A, B
+  and directions reach Player 1's input as well (`coop_talker`,
+  `runtime/hle/input.c`), so he reads it through and answers its questions
+  himself. A talk walks Player 1 up to the one talked to with the walk-in
+  state (kind 16), which put everyone on Player 1 as at a door. From an A
+  that starts an event (anyone's talk, chest or sign: `talk_started`) until
+  that event ends, nobody is moved (`coop_enter`, the walk-in ride in
+  `coop_tick`); doors and room changes still bring everyone along.
+- **Shops** deal with Player 1: the shopkeeper sells what "Link" carries.
+  Player 2 bringing him the bombs got his greeting and was left holding them,
+  so the goods (`ObjShopItem`) are nothing to the other players' A. Rupees are
+  shared anyway.
 - `+0x4b8` is only moved for the components' checks. The camera, the HUD,
   events, saving and the camera areas still follow Player 1.
 
@@ -185,7 +198,15 @@ through, and with shared hearts a death is the game's own.
 **Enemies** (`coop_targets`). While an enemy's update runs
 (`COOP_ACTOR_EXEC_SITE` / `_DONE`, enemies told apart by their level name
 `Enemy...-<key>`), `+0x4b8` holds the Link it targets; it is Player 1's again
-after. The rules:
+after. Its components update on their own (the owner at `+0x48`). The one it
+reacts to the player with keeps "Link" (`Zombie:ReactionComp +0x278`), and a
+zombie walked to Player 1 whoever it targeted. So the swap also covers its
+reaction component (the game's `EnemyReactionComponent`: `...ReactionComp`,
+`...ReactComp`) and its player follower (`TailorPlayerComp`), not the others
+(collision, animation): Player 1's sword hits it whoever it targets. Checked
+with the graveyard zombies by Marin and Tarin's house, and a Moblin and a red
+Zol west of it with Player 1 17 units away: each goes for the player it
+targets. The rules:
 - An enemy targets the nearest player who is up.
 - Within `TARGET_ENGAGE` (6 units, about 4 tiles) it keeps him until he is
   knocked out, so an attack, a wind-up or a boss pattern plays out on one
@@ -193,6 +214,34 @@ after. The rules:
 - Otherwise it keeps him `TARGET_LOCK` (6 s), plus `TARGET_GRACE` (2 s) after
   a fight. After that it changes only to a clearly nearer player (1.5x).
 - Enemies more than 30 units from everyone are left alone.
+
+**Cut grass and thrown rocks** (`gone_check`, `gone_note`). On the Field the
+game makes a level object again (grass, a rock) when Player 1 steps into its
+screen and its actor is gone: the screens come back fresh, as on the Game Boy.
+Alone, what Link cut or threw is in the screen he just left, out of view. With
+co-op the others cut and throw in screens Player 1 isn't in, and the view
+shows the screens around. Grass and rocks came back beside the players, and a
+thrown rock came back on the stairs in Player 1's way (the user's log: the
+stairs' rock, `ObjRock-4800A5005B88BEDC`, back as he stepped onto them).
+- Each one destroyed (actor `+0x40` bit 30 set by its own update: cut, or
+  thrown and broken) is remembered by its actor's name, the level object's id:
+  `ObjRock`, `ObjGrass`, `ObjGrass2x2`, `ObjLawn`, `ObjSkullStone`. The screens
+  the game unloads as Player 1 moves on kill theirs between updates (dead as
+  the next update begins): those come back whole. Counted as destroyed, the
+  tall grass around was kept gone at the zoom's wide views, bare earth in its
+  place.
+- One made again while a player is within `GONE_NEAR` (10 units) of it or
+  it's in view is killed before its first update (`ACTOR_KILL`, as its own
+  break does): it isn't drawn and stays gone.
+- One made again away from everyone is left: it grew back unseen, as alone.
+- A level change forgets them all (through a door, everything is back, as
+  alone). Not indoors: a room comes back whole as Player 1 walks in, with
+  everyone.
+- There is no "destroyed" record in the game to change: the thrown rock's
+  actor stays as a dead stub, its level entry never changes, and the spawner
+  makes a new actor for an entry with none. Found by watching the rock's id
+  in memory, the calls on its actor through its break, and the backtrace of
+  its new actor's set-up (`main+0xc44a00`).
 
 **Hearts** (`coop_health`).
 - **Shared:** the game's one set, as without co-op.
@@ -248,6 +297,22 @@ to "Fit up to" (Out 10% to Out 100%: 1.1 to 2.0; default 2.0), eased in and
 out, and never closer than the base. The sky and sea margin
 (`rt_skysea_margin`) grows with it. Out of play, and with co-op off, it is 1.
 At 2.0 the game held 60 fps in the tests.
+
+**The loaded screens** (`zoom_room`). On the Field the game makes the level
+objects (tall grass, grass, rocks, trees) of the 7 x 7 screens around Player
+1's, a screen 15 x 12 units (measured: the objects alive at Field_09E span
+3 screens each way, and the next column is made as he steps into the next
+screen; the same at 1x and 3x, so it doesn't follow the view). Past them the
+ground shows bare earth where tall grass goes, dark ovals (the user's "weird
+shadows" zoomed far out), the rest is missing, and further out is the sky's
+black. So outdoors the zoom stays inside `ROOM_X` x `ROOM_Z` (42 x 33) of
+Player 1: points along that rectangle's edge, on the ground at his height,
+are put through the view, and the zoom is held below the one at which the
+first comes into view, at once, not eased. On open ground that's about 1.9.
+Zooming further needs more screens made (the loader's radius isn't found
+yet), or a zoom that moves the camera back instead of widening the view: the
+widened view's top edge runs toward the horizon, where the loaded screens end
+first.
 
 Effects drawn as a mesh around the camera, sized for the game's own view, showed
 their edge once the view was wider: the Mysterious Woods fog as a hard-edged
@@ -466,6 +531,27 @@ seen in play with co-op on and its cause isn't known yet: the log line names it.
 - **Pushing a block:** Player 2 pushes Tail Cave 05C's block a tile, in the
   game's push state (kind 6), as Player 1 does: walking into a block is each
   Link's own state code, nothing of "Link" (`+0x4b8`).
+- **Talking and shops** (Mabe's shop, `Shop:Shop_01A`): Player 1 buys the
+  bombs (lift, B at the shopkeeper, Buy: 10 rupees). Player 2's A on the
+  goods does nothing. Player 2 talks to the shopkeeper, closes the talk with
+  his own A, and stays where he stood.
+- **Cut grass and thrown rocks** (a copy of the user's save, at Marin and
+  Tarin's house): Player 2 throws the stairs' rock, Player 1 cuts the grass
+  beside the stairs, walks up into the next screen and back. Both were made
+  again twice and kept gone each time, and Player 1 walked back down the
+  stairs (before, he stood against the rock). At 3x (`LARECOMP_COOP_ZOOM=3`)
+  after a warp to Field_09E: nothing destroyed and nothing kept gone (before
+  the unload fix, 155 tall grass and rocks were, in view).
+- **Zoom held to the loaded screens:** Out 60% with fit up to Out 100%, Player
+  2 held 30 units east of Player 1 at Field_09E: the zoom stops at 1.92, no
+  bare earth in view.
+- **Enemy targets:** Player 2 six units from Player 1 among the graveyard
+  zombies. Each zombie walks to the player it targets and Player 2 is hit by
+  his. Player 2 17 units from Player 1 beside a Moblin and a red Zol: both
+  take him and he is hit.
+- **Player 1's talk:** Player 1 talks to the shopkeeper twice while Player 2
+  stands across the shop. Player 2 stays where he is, and still comes in
+  with Player 1 through the door.
 - **Co-op off:** unchanged.
 
 ## Not done or not checked
@@ -474,6 +560,9 @@ seen in play with co-op on and its cause isn't known yet: the log line names it.
   the next area falls through it and is put back on Player 1 (`lost_tick`).
   Loading areas around every player isn't possible from here: the game's
   streaming follows its one player.
+- **Zooming out past about 1.9 on the Field** (see "The loaded screens"): the
+  game makes only the 7 x 7 screens around Player 1. More would need the
+  loader's radius raised, or the zoom done by moving the camera back.
 
 - **Tunic colours** need the mod's `Playerlink.bfres`. Recolouring the tunic
   at run time (as the cosmetics do) would remove the file and the restart.
@@ -483,13 +572,16 @@ seen in play with co-op on and its cause isn't known yet: the log line names it.
 - **Instant kills:** none was found to try. The dead-state change was checked
   with `LARECOMP_COOP_DIE` for Player 2 (knocked out); sent that way Player 1
   doesn't die, so the game over itself wasn't seen.
-- **A-button actions** not tried with the other players: talking to people,
-  pulling, shop counters. Event actions other than chests
-  and signs are routed the same way (any type but the lift), unchecked.
+- **A-button actions** not tried with the other players: pulling. Event
+  actions other than chests, signs and talks are routed the same way (any type
+  but the lift), unchecked.
+- **Enemy kinds** besides zombies, Moblins and red Zols weren't checked. One
+  whose chasing is in a component not named `...React...` or `...Player...`
+  would still go to Player 1. Bosses weren't checked.
 - **Holding A to revive** also does the game's A action (beside a rock, the
   rock is lifted). The revive goes on.
 - **Shared hearts:** stacked Links hit by one attack each cost hearts.
 - **The moved countdown** was checked by its bytes, not seen in a timed
   challenge.
-- **Not played with extras:** shops, minigames (the Trendy Game's crane, the
-  Rapids Ride, fishing) and cutscenes.
+- **Not played with extras:** minigames (the Trendy Game's crane, the Rapids
+  Ride, fishing) and cutscenes.
