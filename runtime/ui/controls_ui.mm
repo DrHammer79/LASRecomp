@@ -420,11 +420,15 @@ extern "C" void controls_tab_draw(float scale) {
                    "Each enemy goes after the nearest player who is up. Once it's fighting him it stays on him until "
                    "he's knocked out, and it only changes to a clearly nearer player after a few seconds. Off: they "
                    "all go after Player 1.");
-        static const char *const cams[] = {"Normal", "Zoomed out", "Further out", "Furthest out", "Fit everyone"};
+        static const char *const cams[] = {"Normal", "Out 10%", "Out 25%", "Out 50%", "Fit everyone (max 50%)"};
         opt_choice("Camera", &g_settings.coop_camera, cams, 5, COOP_CAM_NORMAL,
                    "Shows more around Player 1: zoomed out by 10%, 25% or 50%. Fit everyone: zooms out just enough to "
-                   "keep every player in view (up to 50%) and back in as you regroup. Far out, the next screen's "
-                   "enemies may wait until you walk in.", false);
+                   "keep every player in view, never more than 50%, and back in as you regroup. Far out, the next "
+                   "screen's enemies may wait until you walk in.", false);
+        opt_toggle("Bring back players off screen", &g_settings.coop_leash, true,
+                   "A player out of the camera's view for 3 seconds is put back on Player 1. A knocked-out one "
+                   "waits 30 seconds (his \"Zzz\" shows where he is, to revive him), then is revived and brought "
+                   "back. Off: they can wander anywhere (L3 + R3 still brings one back).");
         opt_toggle("Only Player 1 uses exits", &g_settings.coop_host_exits, true,
                    "Doors, stairs and other exits only lead everyone out when Player 1 walks into them; the other "
                    "players can stand in them. Off: any player's step takes everyone along.");
