@@ -56,8 +56,11 @@ whenever the player count changes out of play.
 exists (`coop_romfs_override`, `runtime/services/fs.c`). The repository can't
 ship it: it is the mod's edit of a game file. Without it the game still plays,
 and every Link wears Player 1's tunic. The file is picked up when the RomFS is
-indexed, at boot; the Controls tab says when it is missing, or when co-op was
-turned on after boot and LAS Recomp needs a restart for it (`coop_colours_state`).
+indexed, as the game boots (again after Quit to Start Screen). The Controls tab
+says when it is missing, with the path it goes to (`coop_colours_path`), or
+when co-op was turned on after the game started and it comes with Quit to
+Start Screen (`coop_colours_state`). Before the game has started, nothing is
+shown: the colours come as it starts.
 Red is a deeper crimson (0x8b1a2b) than the game's heart red, so a red
 player's hearts don't read as the game's own.
 
@@ -291,26 +294,31 @@ Runtime constants: `PLAYER_VTABLE`, `PLAYER_MAX_HEALTH`, `PLAY_ANIMATION`,
 entries in the `HOOK_SITES` list in `runtime/hle/hooks.c`. Add new sites at its
 end and in both `patches_v1_0_*.h` tables, in the same order.
 
-## Settings (Controls tab, Co-op)
+## Settings (Controls tab)
 
-| Key | Default | |
-|---|---|---|
-| coop_players | 1 | 1 = off, 2..8 Links (from the next file loaded) |
-| coop_collision | 0 | the Links block each other |
-| coop_targets | 1 | enemies go after the nearest player |
-| coop_host_exits | 1 | only Player 1 leads everyone out |
-| coop_health | 1 | 0 shared, 1 each player's own |
-| coop_knockout | 0 | 0 knocked out until revived, 1 game over |
-| coop_revive_s | 4 | seconds of holding A to revive |
-| coop_hud | 0 | 0 bottom left, 1 bottom right, 2 top right |
-| coop_camera | 0 | the least zoom: 0 normal, 1 out 5%, 2 out 10%, 3 out 25%, 4 out 50% |
-| coop_camera_fit | 1 | zoom out further to keep every player in view (up to 50%) |
-| coop_leash | 1 | players off screen are brought back to Player 1 |
-| coop_heart_colours | 1 | hearts in each player's colour |
-| coop_colours | 0,1,2,... | each player's colour set (Green, Red, Blue, Yellow, Purple, Pink, Black, White) |
+Right under Inputs (`coop_options` in `runtime/ui/controls_ui.mm`): with co-op
+off, one row. On, four headings:
 
-The tunic colours and the countdown move are fixed at boot (the RomFS index):
-after turning co-op on or off, restart LAS Recomp.
+| Heading | Row | Key | Default | |
+|---|---|---|---|---|
+| Co-op | Players | coop_players | 1 | 1 = off, 2..8 Links (from the next file loaded); greyed out on 1.0.0 |
+| | Tunic colors | | | shown only when the file is missing or comes with Quit to Start Screen |
+| | Player N color | coop_colours | 0,1,2,... | each player's colour set (Green, Red, Blue, Yellow, Purple, Pink, Black, White); its description names his controller; red when he has none or shares the colour |
+| Co-op hearts | Hearts | coop_health | 1 | 0 shared, 1 each player's own |
+| | Out of hearts | coop_knockout | 0 | 0 knocked out until revived, 1 game over for all (own hearts) |
+| | Revive time | coop_revive_s | 4 | seconds of holding A to revive (knocked out) |
+| | Other players' hearts | coop_hud | 0 | 0 bottom left, 1 bottom right, 2 top right (own hearts) |
+| | Hearts in player colors | coop_heart_colours | 1 | hearts in each player's colour, Player 1's too (own hearts) |
+| Co-op camera | Camera zoom | coop_camera | 0 | the least zoom: 0 normal, 1 out 5%, 2 out 10%, 3 out 25%, 4 out 50% |
+| | Zoom out to fit everyone | coop_camera_fit | 1 | further out to keep every player in view (up to 50%); greyed out at 50% |
+| Co-op rules | Bring lost players back | coop_leash | 1 | players off screen are brought back to Player 1 |
+| | Only Player 1 triggers exits | coop_host_exits | 1 | only Player 1 leads everyone out |
+| | Enemies target the nearest player | coop_targets | 1 | enemies go after the nearest player |
+| | Players block each other | coop_collision | 0 | the Links block each other |
+
+The tunic colours and the countdown move are fixed when the game boots (the
+RomFS index): after turning co-op on or off, Quit to Start Screen and play
+again (checked: the colours load).
 
 ## Tests
 

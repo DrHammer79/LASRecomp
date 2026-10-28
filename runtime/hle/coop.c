@@ -40,19 +40,19 @@ extern uint64_t renderer_present_count(void);
 
 #define CLOG(...) do { if (ENV("LARECOMP_COOP_LOG")) LOG(__VA_ARGS__); } while (0)
 
+int coop_players_setting(void);
 int rt_coop_players(void) {
     if (g_n < 0) {
-        int n = g_settings.coop_players;
-        const char *e = getenv("LARECOMP_COOP");  // (tests: the player count without touching the settings)
-        if (e) n = atoi(e);
-        if (!GA(COOP_CREATE_SITE)) n = 1;  // (1.0.1 only)
-        g_n = n < 1 ? 1 : n > COOP_MAX ? COOP_MAX : n;
+        g_n = GA(COOP_CREATE_SITE) ? coop_players_setting() : 1;  // (1.0.1 only)
         if (g_n > 1) LOG("[coop] %d players\n", g_n);
     }
     return g_n;
 }
 
 int rt_coop_on(void) { return rt_coop_players() > 1; }
+
+// False once the game is known to be a version without co-op (1.0.0: its tables have no COOP_* sites).
+bool coop_supported(void) { return !g_ga || GA(COOP_CREATE_SITE); }
 
 // The player count from the setting (and LARECOMP_COOP), also before the game has booted: input.c opens the
 // controllers. 1 once the game is known to be a version without co-op (its tables have no COOP_* sites).
@@ -1330,9 +1330,11 @@ int rt_coop_hook(Cpu *c, int which) {
 // <data root>/coop/romfs while co-op is on (runtime/services/fs.c).
 static int g_coop_dir = -1;  // (<data root>/coop/romfs there: looked at once a boot, the romfs index asks per file)
 static int g_colours = -1;   // (the colour file served: fixed for the boot, as the romfs index)
-RT_ON_RESET(coop_files_reset) { g_coop_dir = g_colours = -1; }
+static bool g_indexed;       // (this boot's romfs index is made: the game has started)
+RT_ON_RESET(coop_files_reset) { g_coop_dir = g_colours = -1, g_indexed = false; }
 
 bool coop_romfs_override(const char *path, char *out, size_t cap) {
+    g_indexed = true;
     if (!rt_coop_on()) return false;
     extern const char *rt_data_root(void);
     const char *root = rt_data_root();
@@ -1355,19 +1357,26 @@ bool coop_romfs_override(const char *path, char *out, size_t cap) {
 }
 
 // The players' colours are in this boot's Playerlink.bfres only when co-op was on as the game started (the RomFS index
-// is made at boot): otherwise the game's own frames stay - every Link in Player 1's tunic - until a restart.
+// is made as it boots, again after Quit to Start Screen): otherwise the game's own frames stay - every Link in Player
+// 1's tunic - until then.
 bool coop_colours(void) { return g_colours > 0; }
 
-// For the menu: 0 the colours are in, 1 they come with a restart (co-op turned on since the start), 2 there is no
-// coop/romfs Playerlink.bfres.
+// For the menu: 0 the colours are in (or come as the game starts: not started yet), 1 they come once the game starts
+// again (co-op turned on since it started), 2 there is no coop/romfs Playerlink.bfres.
+const char *coop_colours_path(void);
 int coop_colours_state(void) {
     if (g_colours > 0) return 0;
-    extern const char *rt_data_root(void);
-    const char *root = rt_data_root();
-    char p[1200];
-    snprintf(p, sizeof p, "%s/coop/romfs/region_common/actor/Playerlink.bfres", root ? root : ".");
     struct stat sb;
-    return stat(p, &sb) == 0 ? 1 : 2;
+    return stat(coop_colours_path(), &sb) != 0 ? 2 : g_indexed ? 1 : 0;
+}
+
+// Where the colour file goes, for the menu's "Not installed" note: <data root>/coop/romfs/region_common/actor/.
+const char *coop_colours_path(void) {
+    extern const char *rt_data_root(void);
+    static char p[1200];
+    const char *root = rt_data_root();
+    snprintf(p, sizeof p, "%s/coop/romfs/region_common/actor/Playerlink.bfres", root ? root : ".");
+    return p;
 }
 
 // The game's countdown (timed challenges: Dg_TimeCount in region_common/ui/Game.arc) sits in the bottom left, where
