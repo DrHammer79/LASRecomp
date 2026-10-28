@@ -5,11 +5,13 @@
 // rt_hook returns 0: run the site's own instruction, 1: the hook did it all, 2..: jump to the site's targets
 // (HOOKS[site][1], in order).
 #include "../game_addresses.h"
+#include <stdatomic.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <string.h>
 
 #include "../cpu.h"
+#include "../hle.h"
 #include "../rt.h"
 #include "../settings.h"
 
@@ -27,6 +29,7 @@ void rt_owner_call_notify(Cpu *c, uint64_t obj);
 uint32_t rt_powerup_music_flags(Cpu *c, uint32_t flags, bool update);
 uint32_t rt_text_rate(uint32_t game_bits);  // text_speed.c
 int rt_text_snap(void);
+int rt_coop_hook(Cpu *c, int which);  // coop.c (which: the COOP_* site, below)
 
 // The hook sites (game_addresses.h): which one a site is, by the selected game version's table
 #define HOOK_SITES(X) \
@@ -61,7 +64,33 @@ int rt_text_snap(void);
     X(SHAPE_SIM_SITES_1) \
     X(EFFECT_BONE_SITE) \
     X(TEXT_RATE_SITE) \
-    X(TEXT_SNAP_SITE)
+    X(TEXT_SNAP_SITE) \
+    X(COOP_CREATE_SITE) \
+    X(COOP_ZONE_SITE) \
+    X(COOP_DUP_SITE) \
+    X(COOP_PLACE_SITE) \
+    X(COOP_PLACE_PLAYER_SITE) \
+    X(COOP_SPAWN_CHECK_SITE) \
+    X(COOP_CTRL_SITE) \
+    X(COOP_COLOR_SITE) \
+    X(COOP_ENTER_SITE) \
+    X(COOP_SCROLL_SITE) \
+    X(COOP_PAD_STATE_SITE) \
+    X(COOP_APPLET_SITE) \
+    X(COOP_APPLET_SINGLE_SITE) \
+    X(COOP_CCT_SWEEP_SITE_0) \
+    X(COOP_CCT_SWEEP_SITE_1) \
+    X(COOP_ACTOR_EXEC_SITE) \
+    X(COOP_ACTOR_EXEC_DONE) \
+    X(COOP_CAMERA_SITE) \
+    X(COOP_HEAL_SITE_0) \
+    X(COOP_HEAL_SITE_1) \
+    X(COOP_EXIT_TOUCH_SITE) \
+    X(COOP_STAIRS_TOUCH_SITE) \
+    X(COOP_STAIRS_LEAVE_SITE) \
+    X(COOP_EXIT_LEAVE_SITE) \
+    X(COOP_EXIT_LEAVE_CLEAR) \
+    X(COOP_CAMERA_SCROLL_SITE)
 enum {
 #define X(name) H_##name,
     HOOK_SITES(X)
@@ -73,14 +102,26 @@ static const size_t hook_field[] = {
 #undef X
 };
 
+// Some sites run hundreds of times a frame (an actor's update): the last lookups are kept, site << 8 | id + 1 in one
+// word (any thread).
+static _Atomic uint64_t hook_cache[64];
+RT_ON_RESET(hook_cache_reset) { for (int i = 0; i < 64; i++) hook_cache[i] = 0; }
+
 static int hook_id(uint64_t site) {
+    _Atomic uint64_t *slot = &hook_cache[(site >> 2) & 63];
+    uint64_t e = atomic_load_explicit(slot, memory_order_relaxed);
+    if (e >> 8 == site) return (int)(e & 0xff) - 1;
     for (size_t i = 0; i < sizeof hook_field / sizeof hook_field[0]; i++)
-        if (*(const uint64_t *)((const char *)g_ga + hook_field[i]) == site) return (int)i;
+        if (*(const uint64_t *)((const char *)g_ga + hook_field[i]) == site) {
+            atomic_store_explicit(slot, site << 8 | (i + 1), memory_order_relaxed);
+            return (int)i;
+        }
     return -1;
 }
 
 int rt_hook(Cpu *c, uint64_t site) {
-    switch (hook_id(site)) {
+    int id = hook_id(site);
+    switch (id) {
     case H_MB_SEEN_SITE:  // MB_SEEN_SITE - ldr x8, [x21]: an actor seen
         rt_mb_seen(c->x[21]);
         return 0;
@@ -195,6 +236,16 @@ int rt_hook(Cpu *c, uint64_t site) {
         last = c->x[22];
         return 2;
     }
+    // Local co-op (runtime/hle/coop.c): with co-op off every site runs its own instruction
+    case H_COOP_CREATE_SITE: case H_COOP_ZONE_SITE: case H_COOP_DUP_SITE: case H_COOP_PLACE_SITE:
+    case H_COOP_PLACE_PLAYER_SITE: case H_COOP_SPAWN_CHECK_SITE: case H_COOP_CTRL_SITE: case H_COOP_COLOR_SITE:
+    case H_COOP_ENTER_SITE: case H_COOP_SCROLL_SITE: case H_COOP_PAD_STATE_SITE: case H_COOP_APPLET_SITE:
+    case H_COOP_APPLET_SINGLE_SITE: case H_COOP_CCT_SWEEP_SITE_0: case H_COOP_CCT_SWEEP_SITE_1:
+    case H_COOP_ACTOR_EXEC_SITE: case H_COOP_ACTOR_EXEC_DONE: case H_COOP_CAMERA_SITE: case H_COOP_HEAL_SITE_0:
+    case H_COOP_HEAL_SITE_1: case H_COOP_EXIT_TOUCH_SITE: case H_COOP_STAIRS_TOUCH_SITE:
+    case H_COOP_STAIRS_LEAVE_SITE: case H_COOP_EXIT_LEAVE_SITE: case H_COOP_EXIT_LEAVE_CLEAR:
+    case H_COOP_CAMERA_SCROLL_SITE:
+        return rt_coop_hook(c, id - H_COOP_CREATE_SITE);
     }
     return 0;
 }

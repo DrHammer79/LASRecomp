@@ -46,7 +46,8 @@ for key in VERSIONS:
     patch_values, runtime_values = load_table(table_path(key)), load_table(table_path(key, 'runtime'))
     assert not patch_values.keys() & runtime_values.keys(), f'{key}: define each address in one header'
     values = patch_values | runtime_values
-    assert len(values) == len(set(values.values())), f'{key}: use the existing name for shared addresses'
+    present = [v for v in values.values() if v]  # (0: not in this version - e.g. co-op is 1.0.1 only)
+    assert len(present) == len(set(present)), f'{key}: use the existing name for shared addresses'
     tables[key] = (patch_values, runtime_values)
     if key != 'v1_0_0':  # same names in the same order (the C struct is laid out from v1_0_0's)
         assert list(patch_values) == list(tables['v1_0_0'][0]), f'patches_{key}.h names differ from v1_0_0'
