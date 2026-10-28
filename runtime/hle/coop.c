@@ -100,12 +100,24 @@ static bool player_pos(uint64_t actor, float out[3]) {
     return true;
 }
 
+// Arrivals with player collision on: every player arrives on Player 1's spot (a spawn, a door, being brought back,
+// L3+R3), where the Links' capsules would push each other apart - Player 1 along, maybe back into the doorway he came
+// through - and the ones left standing in a doorway would keep him from going back in. So a player put there passes
+// through the others (g_pass) until he walks off it himself: PASS_OFF from where he was put, clear of every other
+// Link (pass_tick). Until then no Link's sweep is blocked by a capsule where he is, nor his by anyone's (cct_sweep).
+#define PASS_OFF 0.8f
+#define PASS_CLEAR 0.7f  // (two capsules' width)
+static bool g_pass[COOP_MAX];
+static float g_pass_at[COOP_MAX][3];
+static void pass_from_here(int i) { g_pass[i] = player_pos(g_extra[i], g_pass_at[i]); }
+
 // Player i onto Player 1's spot (the mod's TeleportPlayerToAnother: the collision's position).
 static void ride_on_host(int i) {
     float pos[3];
     uint64_t p = collision_of(g_extra[i]);
     if (!p || !player_pos(host_player(), pos)) return;
     memcpy((void *)(uintptr_t)(p + 0x80), pos, 12);
+    memcpy(g_pass_at[i], pos, sizeof pos), g_pass[i] = true;
 }
 
 // ---- Hearts (setting coop_health). Shared: the game's one set, as without co-op. Own: Player 1 keeps the game's
@@ -573,7 +585,7 @@ int coop_hud_rows(CoopHudRow *rows, int cap) {
 // The player who owns a colour set and its colour as drawn (hearts, the HUD): the co-op Playerlink.bfres's sets. Red
 // is a deeper crimson than the game's own heart red, so a red player's hearts don't read as "the" hearts.
 uint32_t coop_colour_rgb(int player) {
-    static const uint32_t k[COOP_COLOURS] = {0x2fa043, 0xb41d2c, 0x2c49d6, 0xe8c11c, 0x5b2fbe, 0xd02fc4, 0x3a3a3a,
+    static const uint32_t k[COOP_COLOURS] = {0x2fa043, 0x8b1a2b, 0x2c49d6, 0xe8c11c, 0x5b2fbe, 0xd02fc4, 0x3a3a3a,
                                              0xdcdcdc};
     int s = player >= 0 && player < COOP_MAX ? g_settings.coop_colour[player] : 0;
     return k[s >= 0 && s < COOP_COLOURS ? s : 0];
@@ -759,6 +771,7 @@ static int coop_place(Cpu *c) {
         guest_call(c, GA(COOP_PLACE_SITE));
     }
     g_placing = -1;
+    for (int i = 1; i < g_n; i++) pass_from_here(i);
     g_placed_frame = renderer_present_count();
     CLOG("[coop] placed at spawn (frame %llu)\n", (unsigned long long)g_placed_frame);
     for (int i = 1; i < g_n; i++)  // (a new area: the knocked-out are back)
@@ -791,14 +804,41 @@ static int coop_enter(Cpu *c) {
 // The Link (player index) whose collision capsule is centred at (x, y, z) - a capsule's centre is 0.72 above his feet
 // (measured 2026-10-27) - or -1. Positions within 0.2 across: a capsule there is his (another character's centre
 // can't be that close to his without the two overlapping).
+static bool capsule_of(int i, double x, double y, double z) {
+    float p[3];
+    if (!player_pos(coop_player(i), p)) return false;
+    double dx = x - p[0], dz = z - p[2], dy = y - (p[1] + 0.72);
+    return dx * dx + dz * dz < 0.04 && dy > -0.5 && dy < 0.5;
+}
+
 static int link_at(double x, double y, double z) {
-    for (int i = 0; i < g_n; i++) {
-        float p[3];
-        if (!player_pos(coop_player(i), p)) continue;
-        double dx = x - p[0], dz = z - p[2], dy = y - (p[1] + 0.72);
-        if (dx * dx + dz * dz < 0.04 && dy > -0.5 && dy < 0.5) return i;
-    }
+    for (int i = 0; i < g_n; i++)
+        if (capsule_of(i, x, y, z)) return i;
     return -1;
+}
+
+static bool passing_at(double x, double y, double z) {  // (any Link there passing through: g_pass)
+    for (int i = 1; i < g_n; i++)
+        if (g_pass[i] && capsule_of(i, x, y, z)) return true;
+    return false;
+}
+
+// A player put on Player 1 stops passing through the others once he has walked off the spot (see g_pass).
+static void pass_tick(void) {
+    for (int i = 1; i < g_n; i++) {
+        float p[3], q[3];
+        if (!g_pass[i] || !player_pos(g_extra[i], p)) continue;
+        float dx = p[0] - g_pass_at[i][0], dy = p[1] - g_pass_at[i][1], dz = p[2] - g_pass_at[i][2];
+        if (dx * dx + dy * dy + dz * dz < PASS_OFF * PASS_OFF) continue;
+        bool clear = true;
+        for (int j = 0; j < g_n && clear; j++)
+            if (j != i && player_pos(coop_player(j), q))
+                clear = (p[0] - q[0]) * (p[0] - q[0]) + (p[2] - q[2]) * (p[2] - q[2]) >= PASS_CLEAR * PASS_CLEAR ||
+                        fabsf(p[1] - q[1]) > 1.5f;
+        if (!clear) continue;
+        g_pass[i] = false;
+        if (g_settings.coop_collision) CLOG("[coop] player %d walked off: the others block him again\n", i + 1);
+    }
 }
 
 // PhysX character-controller sweep (COOP_CCT_SWEEP_SITE_*): x28 a touched geometry, x19 the swept volume (its
@@ -806,16 +846,18 @@ static int link_at(double x, double y, double z) {
 // (TouchedGeomType eUSER_CAPSULE = 1: no owner, just the capsule - endpoints as doubles at +0x2c / +0x44, radius
 // +0x5c). With player collision off, a Link's sweep skips the capsule of another Link: they walk through each
 // other; everything else still blocks them. (Any Link's: stacked Links share one spot, so which one a capsule is
-// can't be told - and a Link's own capsule isn't among his obstacles.)
+// can't be told - and a Link's own capsule isn't among his obstacles.) With it on, it skips one where a player is
+// passing through (g_pass), and every capsule in the sweep of a player passing through.
 static bool cct_sweep(Cpu *c) {
     uint64_t g = c->x[28];
-    if (LD32(g) != 1 || g_settings.coop_collision) return false;
-    double vol[3], p0[3], p1[3];
+    if (LD32(g) != 1) return false;
+    double vol[3], p0[3], p1[3], cap[3];
     memcpy(vol, (const void *)(uintptr_t)(c->x[19] + 8), 24);
     memcpy(p0, (const void *)(uintptr_t)(g + 0x2c), 24);
     memcpy(p1, (const void *)(uintptr_t)(g + 0x44), 24);
-    if (link_at(vol[0], vol[1], vol[2]) < 0) return false;
-    return link_at((p0[0] + p1[0]) / 2, (p0[1] + p1[1]) / 2, (p0[2] + p1[2]) / 2) >= 0;
+    for (int k = 0; k < 3; k++) cap[k] = (p0[k] + p1[k]) / 2;
+    if (link_at(vol[0], vol[1], vol[2]) < 0 || link_at(cap[0], cap[1], cap[2]) < 0) return false;
+    return !g_settings.coop_collision || passing_at(vol[0], vol[1], vol[2]) || passing_at(cap[0], cap[1], cap[2]);
 }
 
 // ---- Exits (setting coop_host_exits). Doors and loading zones are AreaLevelOpen actors: the contact signal of an
@@ -1394,6 +1436,27 @@ static void play_ended(void) {
     memset(g_sleep_anim, 0, sizeof g_sleep_anim);
 }
 
+// Every level change in play (the level-jump request processor: runtime/hle/chamber.c rt_level_request) is logged
+// with where it goes and who was where, in what state: an area reloaded in play - its grass and rocks back - shows
+// what led to it.
+void coop_level_change(const char *level, const char *locator) {
+    extern int game_in_play(void);
+    extern const char *chaos_current_level(void);  // runtime/ui/chaos_overlay.mm
+    if (!rt_coop_on() || !game_in_play()) return;
+    const char *lv = chaos_current_level();
+    char line[600];
+    int k = snprintf(line, sizeof line, "[coop] level change in %s to %.32s / %.32s, frame %llu:", lv && *lv ? lv : "?",
+                     level, locator, (unsigned long long)renderer_present_count());
+    for (int i = 0; i < g_n && k < (int)sizeof line - 64; i++) {
+        float p[3];
+        if (!player_pos(coop_player(i), p)) k += snprintf(line + k, sizeof line - k, " P%d none", i + 1);
+        else
+            k += snprintf(line + k, sizeof line - k, " P%d (%.1f %.1f %.1f) kind %d%s", i + 1, p[0], p[1], p[2],
+                          link_state_kind(coop_player(i)), i && g_down[i] ? " down" : "");
+    }
+    LOG("%s\n", line);
+}
+
 // Once per frame on the game thread (runtime/hle/input.c, npad 1's poll).
 void coop_tick(Cpu *c) {
     g_game_thread = pthread_self(), g_game_thread_known = true;
@@ -1417,6 +1480,7 @@ void coop_tick(Cpu *c) {
     if (g_p1_walk_in)
         for (int i = 1; i < g_n; i++)
             if (collision_of(g_extra[i])) ride_on_host(i);
+    pass_tick();
     hearts_tick(c);
     sleep_tick(c);
     if (play) leash_tick(), room_follow_tick();

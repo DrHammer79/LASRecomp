@@ -916,11 +916,16 @@ void texpatch_heart_tint(int kind, float tint[8]) {
     cosmetics_test();
     uint32_t rgb;
     extern bool coop_heart_rgb(uint32_t *rgb);  // (local co-op: Player 1's colour - runtime/hle/coop.c)
-    if (!kind || (!coop_heart_rgb(&rgb) && !col_target(&g_settings.hearts, COL_SLOT_HEARTS, &rgb))) return;
-    for (int k = 0; k < 3; k++) tint[k] = srgb_lin((int)(rgb >> (16 - 8 * k) & 255)) / 0.319f;
+    if (!kind) return;
+    // (co-op: Player 1's hearts in his colour, with the frame's shade raised to a power - darker, nearly an outline -
+    // so a green set still stands out on grass, as the other players' outlined rows do)
+    bool coop = coop_heart_rgb(&rgb);
+    if (!coop && !col_target(&g_settings.hearts, COL_SLOT_HEARTS, &rgb)) return;
+    float power = coop ? 2.0f : 1.0f;
+    for (int k = 0; k < 3; k++) tint[k] = srgb_lin((int)(rgb >> (16 - 8 * k) & 255)) / powf(0.319f, power);
     tint[3] = 1;
     tint[4] = tint[5] = tint[6] = 0;
-    tint[7] = 1;
+    tint[7] = power;
 }
 
 static void bc1_decode(const uint8_t *b, uint8_t out[16][4]) {  // (BC1: 3-colour mode when c0 <= c1)
