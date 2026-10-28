@@ -1076,5 +1076,12 @@ _COOP_HOOKS = {
     # signal +0x750: x1 the area Player 1 now stands in). A camera whose +0x515 is set answers a new scroll area with
     # the "ZeldaScroll" event (main+0xbc540): Player 1 walks on into it. Only Player 1's camera's answer counts.
     A.COOP_CAMERA_SCROLL_SITE: (0x39545668, (), 'ldrb w8, [x19, #0x515]: a camera\'s scroll on a new camera area'),
+    # A-button actions (lift, talk, open, read...): an object's DoAction component checks itself against "Link"
+    # (main+0xea240) and the best of the frame is kept in one slot, which the frame's end (main+0xe8be0) makes the
+    # current one, what Link's state code acts on (main+0xe8d90). Each player gets his own slots.
+    A.COOP_DOACTION_SITE: (0xd10183ff, (A.COOP_DOACTION_RET,), 'sub sp, sp, #0x60: a DoAction component checked against Link - for each player'),
+    A.COOP_DOACTION_FRAME_SITE: (0xa9be4ff4, (), 'stp x20, x19, [sp, #-0x20]!: the frame\'s best DoAction becomes the current one - for each player'),
+    A.COOP_DOACTION_GET_SITE: (0xa9be4ff4, (A.COOP_DOACTION_GET_RET,),
+                               'stp x20, x19, [sp, #-0x20]!: Link asks for his current DoAction - one taker per object'),
 }
 HOOKS.update({a: h for a, h in _COOP_HOOKS.items() if a})
