@@ -58,7 +58,7 @@ ship it: it is the mod's edit of a game file. Without it the game still plays,
 and every Link wears Player 1's tunic. The file is picked up when the RomFS is
 indexed, at boot; the Controls tab says when it is missing, or when co-op was
 turned on after boot and LAS Recomp needs a restart for it (`coop_colours_state`).
-Red is a deeper crimson (0xb41d2c) than the game's heart red, so a red
+Red is a deeper crimson (0x8b1a2b) than the game's heart red, so a red
 player's hearts don't read as the game's own.
 
 **Walking through each other.** Every character controller gets the other
@@ -66,6 +66,14 @@ characters as user capsules in its PhysX sweep (TouchedGeomType 1). With
 player collision off, a Link's sweep skips any Link's capsule
 (`COOP_CCT_SWEEP_SITE_0/1`, `cct_sweep`). Stacked Links share one spot, so the
 check is "is it a Link", not "which Link".
+
+With player collision on, the Links arriving on Player 1's spot pushed each
+other apart, and the ones left standing at a door kept Player 1 from going
+back in. A player put on Player 1 (a spawn, a door, being brought back,
+L3+R3) now passes through the others (`g_pass`) until he walks off the spot
+himself: 0.8 from where he was put, clear of every other Link (`pass_tick`).
+Until then the sweep skips a capsule where a passing player is, and every Link
+capsule in a passing player's own sweep.
 
 **Doors and exits.**
 - Player 1 walks in through a door (`COOP_ENTER_SITE`) and the others ride on

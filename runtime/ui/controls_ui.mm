@@ -414,8 +414,8 @@ extern "C" void controls_tab_draw(float scale) {
                                  "Player 1's tunic.", false, false);
         }
         opt_toggle("Player collision", &g_settings.coop_collision, false,
-                   "The Links block each other. Off: they walk through each other. Every player still arrives on "
-                   "Player 1 when entering an area.");
+                   "The Links block each other. A player arriving on Player 1 (a door, a new area, being brought "
+                   "back) passes through the others until he walks off the spot. Off: they walk through each other.");
         opt_toggle("Enemies target the nearest player", &g_settings.coop_targets, true,
                    "Each enemy goes after the nearest player who is up. Once it's fighting him it stays on him until "
                    "he's knocked out, and it only changes to a clearly nearer player after a few seconds. Off: they "
