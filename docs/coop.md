@@ -375,6 +375,9 @@ seen in play with co-op on and its cause isn't known yet: the log line names it.
   reading a sign (Field 04P),
   Player 1 lifting with co-op on and off, two players pressing A together
   at one rock, and a player away from Player 1 pressing A as he lifts.
+- **Pushing a block:** Player 2 pushes Tail Cave 05C's block a tile, in the
+  game's push state (kind 6), as Player 1 does: walking into a block is each
+  Link's own state code, nothing of "Link" (`+0x4b8`).
 - **Co-op off:** unchanged.
 
 ## Not done or not checked
@@ -388,7 +391,7 @@ seen in play with co-op on and its cause isn't known yet: the log line names it.
   with `LARECOMP_COOP_DIE` for Player 2 (knocked out); sent that way Player 1
   doesn't die, so the game over itself wasn't seen.
 - **A-button actions** not tried with the other players: talking to people,
-  pushing and pulling blocks, shop counters. Event actions other than chests
+  pulling, shop counters. Event actions other than chests
   and signs are routed the same way (any type but the lift), unchecked.
 - **Holding A to revive** also does the game's A action (beside a rock, the
   rock is lifted). The revive goes on.
