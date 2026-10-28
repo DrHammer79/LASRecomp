@@ -112,6 +112,7 @@ typedef struct {
     bool coop_heart_colours;  // co-op: hearts in each player's colour (Player 1's own hearts too: runtime/nvn/texpatch.c)
     int coop_hud;        // co-op: where the other players' hearts show (COOP_HUD_*: runtime/ui/coop_hud.mm)
     int coop_camera;     // co-op: the camera zoomed out (COOP_CAM_*: a set amount, or enough to show every player)
+    bool coop_leash;     // co-op: a player out of the camera's view for 3 s is put back on Player 1
     int coop_colour[8];  // co-op: each player's colour (0..COOP_COLOURS-1: the co-op Playerlink.bfres colour sets)
     bool diff_ohko;      // any hit kills
     bool diff_hero;      // Hero Mode flag forced on in the loaded save (2x damage, no recovery hearts)
