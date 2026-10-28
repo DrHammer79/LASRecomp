@@ -82,7 +82,11 @@ int rt_coop_hook(Cpu *c, int which);  // coop.c (which: the COOP_* site, below)
     X(COOP_CAMERA_SCROLL_SITE) \
     X(COOP_DOACTION_SITE) \
     X(COOP_DOACTION_FRAME_SITE) \
-    X(COOP_DOACTION_GET_SITE)
+    X(COOP_DOACTION_GET_SITE) \
+    X(COOP_EVENT_BOX_SITE) \
+    X(COOP_WARP_HOLE_TOUCH_SITE) \
+    X(COOP_WARP_HOLE_LEAVE_SITE) \
+    X(COOP_DEAD_STATE_SITE)
 enum {
 #define X(name) H_##name,
     HOOK_SITES(X)
@@ -221,7 +225,8 @@ int rt_hook(Cpu *c, uint64_t site) {
     case H_COOP_HEAL_SITE_1: case H_COOP_EXIT_TOUCH_SITE: case H_COOP_STAIRS_TOUCH_SITE:
     case H_COOP_STAIRS_LEAVE_SITE: case H_COOP_EXIT_LEAVE_SITE: case H_COOP_EXIT_LEAVE_CLEAR:
     case H_COOP_CAMERA_SCROLL_SITE: case H_COOP_DOACTION_SITE: case H_COOP_DOACTION_FRAME_SITE:
-    case H_COOP_DOACTION_GET_SITE:
+    case H_COOP_DOACTION_GET_SITE: case H_COOP_EVENT_BOX_SITE:
+    case H_COOP_WARP_HOLE_TOUCH_SITE: case H_COOP_WARP_HOLE_LEAVE_SITE: case H_COOP_DEAD_STATE_SITE:
         return rt_coop_hook(c, id - H_COOP_CREATE_SITE);
     }
     return 0;

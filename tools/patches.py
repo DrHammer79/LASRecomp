@@ -1083,5 +1083,17 @@ _COOP_HOOKS = {
     A.COOP_DOACTION_FRAME_SITE: (0xa9be4ff4, (), 'stp x20, x19, [sp, #-0x20]!: the frame\'s best DoAction becomes the current one - for each player'),
     A.COOP_DOACTION_GET_SITE: (0xa9be4ff4, (A.COOP_DOACTION_GET_RET,),
                                'stp x20, x19, [sp, #-0x20]!: Link asks for his current DoAction - one taker per object'),
+    # Event boxes (AreaEventBox: a fight room's lock, a boss's or mini-boss's start, a cutscene's trigger) are a bare
+    # collision shape (main+0x68110) whose contact signal calls the box's fire (main+0x67210: x0 the box, x1 the
+    # contact) for any Link that walks in. Only Player 1's contact fires it; another player's goes to its ret.
+    A.COOP_EVENT_BOX_SITE: (0xf81e0ff3, (A.COOP_EVENT_BOX_RET,), 'str x19, [sp, #-0x20]!: an event box fires'),
+    # Warp holes (AreaWarpHoleEventBox: main+0x8c560 stepped in - Player 1 jumps in, the "Where to?" menu -,
+    # main+0x8c3d0 stepped out) keep a player actor whose +0x43 bit 6 is clear. Another player's Link reads as one
+    # with the bit set: he sets nothing off and his leaving doesn't drop Player 1.
+    A.COOP_WARP_HOLE_TOUCH_SITE: (0x39410d08, (), 'ldrb w8, [x8, #0x43]: a Link stepping into a warp hole'),
+    A.COOP_WARP_HOLE_LEAVE_SITE: (0x39410d08, (), 'ldrb w8, [x8, #0x43]: a Link stepping out of a warp hole'),
+    # A state machine's change of state (main+0xd34660: x0 the machine, Link's at +0x4e0; w1 the state): another
+    # player's Link sent to the dead state (0x12, 0x13), whose start plays the game over, is knocked out instead.
+    A.COOP_DEAD_STATE_SITE: (0xd100c3ff, (A.COOP_DEAD_STATE_RET,), 'sub sp, sp, #0x30: a state machine changes state'),
 }
 HOOKS.update({a: h for a, h in _COOP_HOOKS.items() if a})
