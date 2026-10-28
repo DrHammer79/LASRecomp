@@ -73,6 +73,37 @@ ZeldaScroll event for this. The recompiled code can't catch the game's
 "not found" throw that renaming causes, so `COOP_SCROLL_SITE` leaves the event
 alone.
 
+**A-button actions** (lifting, throwing, opening chests, talking, reading).
+- An object that can be acted on has a DoAction component. Its update
+  (`COOP_DOACTION_SITE`) checks it against "Link" (`+0x4b8`): in reach, in
+  front of him, able to act. The best one of the frame goes into one slot,
+  which the frame's end (`COOP_DOACTION_FRAME_SITE`) makes the current one:
+  what Link's state code acts on when A is pressed (`COOP_DOACTION_GET_SITE`)
+  and what the HUD's A label shows.
+- With one slot, every player's A acted on what Player 1 could act on, from
+  wherever that player stood. In front of something else he got nothing, and
+  pressing A in the same moment as Player 1 put him into Player 1's lift, on
+  Player 1's rock.
+- Now each player has his own slots. The other players' slots are kept in
+  coop.c and swapped into the game's while it works on theirs: every
+  component is checked once per player, with `+0x4b8` pointing at him for the
+  check; the frame's end runs once per player; and another player's own update
+  (`COOP_ACTOR_EXEC_*`) acts on his own slot. A component also keeps what its
+  last check found (score, "can act"), so each player's findings are put back
+  into it while the game works on his.
+- One taker per object: when a player's A takes something, it is nothing to
+  the others for half a second (`CLAIM_FRAMES`). Two players beside the same
+  rock pressing A together don't both lift it.
+- Actions that play an event (a chest, a sign, talking: any type but the
+  lift, 4) play it on "Link", Player 1. The Link whose A starts one waits in
+  his "open" state for the event to move him on, which for another player
+  never came. So another player's A on one starts the component's action
+  itself (`DOACTION_TRIGGER`) and his Link stays as he is. Items from chests go
+  into the shared inventory, and Player 1 holds the item up in the item-get
+  scene, whoever opened the chest.
+- `+0x4b8` is only moved for the components' checks. The camera, the HUD,
+  events, saving and the camera areas still follow Player 1.
+
 **Enemies** (`coop_targets`). While an enemy's update runs
 (`COOP_ACTOR_EXEC_SITE` / `_DONE`, enemies told apart by their level name
 `Enemy...-<key>`), `+0x4b8` holds the Link it targets; it is Player 1's again
@@ -146,8 +177,13 @@ the game's reads of it by the RomFS index's patch list.
 | COOP_STAIRS_TOUCH / LEAVE_SITE | 0x70000617e0 / 1640 | ldrb w8, [x8, #0x43] | stairs (21, 22) |
 | COOP_EXIT_LEAVE_SITE / _CLEAR | 0x7000076aa0 / acc | stp x20, x19 / bl main+0x76b20 | door contact ends (23, 24) |
 | COOP_CAMERA_SCROLL_SITE | 0x70000bbdcc | ldrb w8, [x19, #0x515] | only Player 1's camera scrolls (25) |
+| COOP_DOACTION_SITE | 0x70000ea240 | sub sp, sp, #0x60 | a DoAction component checked for each player (26) |
+| COOP_DOACTION_FRAME_SITE | 0x70000e8be0 | stp x20, x19, [sp, #-0x20]! | each player's current DoAction (27) |
+| COOP_DOACTION_GET_SITE | 0x70000e8d90 | stp x20, x19, [sp, #-0x20]! | one taker per object (28) |
 
-Runtime constants: `PLAYER_VTABLE`, `PLAYER_MAX_HEALTH`, `PLAY_ANIMATION`
+Runtime constants: `PLAYER_VTABLE`, `PLAYER_MAX_HEALTH`, `PLAY_ANIMATION`,
+`DOACTION_CURRENT` / `_PENDING` / `_COOLDOWN` (the slots), `DOACTION_TAKE_RET` /
+`_CHECK_RET` (who asks), `DOACTION_TRIGGER` (an action started)
 (`runtime_v1_0_1.h`). The `case` numbers follow the order of the `COOP_*`
 entries in the `HOOK_SITES` list in `runtime/hle/hooks.c`. Add new sites at its
 end and in both `patches_v1_0_*.h` tables, in the same order.
@@ -198,6 +234,11 @@ What was checked on 1.0.1, mostly with the test inputs above and
 - **Dungeons and 2D:** Tail Cave's rooms, a side-view room, a fall into a pit
   (the player comes back at the room's entry, Player 1 stays).
 - **Enemies:** spear Moblins changing targets only after their lock.
+- **A-button actions** (`build/interact_check.sh`): Player 2 lifting and
+  throwing a rock and a pot, opening a chest (the seashell at Field 07M),
+  reading a sign (Field 04P),
+  Player 1 lifting with co-op on and off, two players pressing A together
+  at one rock, and a player away from Player 1 pressing A as he lifts.
 - **Co-op off:** unchanged.
 
 ## Not done or not checked
@@ -208,6 +249,9 @@ What was checked on 1.0.1, mostly with the test inputs above and
   examined. Another player may still trigger them for everyone.
 - **Player 1 in another room:** the others stay where they are, off the
   camera's view, until they walk over or press L3+R3.
+- **A-button actions** not tried with the other players: talking to people,
+  pushing and pulling blocks, shop counters. Event actions other than chests
+  and signs are routed the same way (any type but the lift), unchecked.
 - **Holding A to revive** also does the game's A action (beside a rock, the
   rock is lifted). The revive goes on.
 - **Shared hearts:** stacked Links hit by one attack each cost hearts.
