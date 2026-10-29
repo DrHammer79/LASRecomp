@@ -178,20 +178,23 @@ int coop_player_down(int i) { return own_hearts() && i > 0 && i < COOP_MAX && g_
 
 // A knocked-out player hit again and again lies in something that hurts: knocked back by each hit, he never lay still
 // (user 2026-10-28: spikes in a side-view room of Angler's Tunnel, kinds 11 and 3 in turn). DOWN_HITS of them, each
-// within DOWN_HIT_FRAMES of the last, and he is put on Player 1's spot, still knocked out, where he can be revived.
+// within DOWN_HIT_FRAMES of the last, and he is put on Player 1's spot as the next frame starts (down_move_tick), still
+// knocked out, where he can be revived.
 #define DOWN_HITS 2
 #define DOWN_HIT_FRAMES 180  // (3 s)
 static uint64_t g_down_hit_at[COOP_MAX];
 static int g_down_hits[COOP_MAX];
+static bool g_down_move[COOP_MAX];
+static uint64_t g_down_moved_until[COOP_MAX];  // (just put on Player 1: hits don't count - the spikes' last contact
+                                               // came after him, and he was put on Player 1 again and again)
 
 static void down_hit(int i) {
     uint64_t now = renderer_present_count();
+    if (now < g_down_moved_until[i]) return;
     g_down_hits[i] = now - g_down_hit_at[i] < DOWN_HIT_FRAMES ? g_down_hits[i] + 1 : 1;
     g_down_hit_at[i] = now;
-    if (g_down_hits[i] < DOWN_HITS) return;
-    LOG("[coop] player %d hit again while knocked out: put on Player 1\n", i + 1);
-    g_down_hits[i] = 0;
-    ride_on_host(i);
+    if (g_down_hits[i] < DOWN_HITS || g_down_move[i]) return;
+    g_down_hits[i] = 0, g_down_move[i] = true;
 }
 
 // Player 1 in an event - walked by a cutscene or a door, an item held up, a scene - while the other players stand
@@ -413,7 +416,10 @@ static void hearts_tick(Cpu *c) {
     }
     if (!g_max_hp) return;
     static int test_down;  // LARECOMP_COOP_DOWN=<player>,... (test): those players knocked out 2 s after they're placed
-    if (!test_down && g_placed_frame && renderer_present_count() > g_placed_frame + 120 && ENV("LARECOMP_COOP_DOWN"))
+                           // (LARECOMP_COOP_DOWN_AT=<frame>: at that frame instead - after a warp)
+    uint64_t down_at = ENV("LARECOMP_COOP_DOWN_AT") ? strtoull(ENV("LARECOMP_COOP_DOWN_AT"), NULL, 10)
+                                                    : g_placed_frame + 120;
+    if (!test_down && g_placed_frame && renderer_present_count() > down_at && ENV("LARECOMP_COOP_DOWN"))
         for (const char *p = ENV("LARECOMP_COOP_DOWN"); (test_down = 1) && *p; p += *p == ',') {
             int i = (int)strtol(p, (char **)&p, 10) - 1;
             if (i > 0 && i < g_n) knock_out(i);
@@ -821,6 +827,39 @@ static const uint16_t k_pos_copies[][2] = {  // ([Link + component] + offset: fo
     {0x2e8, 0xb0}, {0x318, 0x380}, {0x328, 0xb0}, {0x378, 0xb0}, {0x388, 0xb0}, {0x3c0, 0x350}, {0x3d0, 0x1f0},
     {0x4a0, 0xb0}, {0x5b8, 0x290}, {0x1358, 0x290}, {0x1850, 0x2f0}, {0x19d0, 0x1f0}};
 #define NPOS (sizeof k_pos_copies / sizeof k_pos_copies[0])
+
+// A knocked-out player hit again and again (down_hit) goes onto Player 1's spot as one fallen through the world does
+// (lost_tick): standing still (his state kind 0), he's taken off the map, his update not running, then put on Player
+// 1. Moved while knocked back or falling - his collision's position, or every copy a standing Link keeps - his state
+// put him back in the spikes; and with no knockback (dead_state) he didn't stop falling on them: so his state is
+// changed to the first of kind 0 first, through the game's own change (COOP_DEAD_STATE_SITE's function: x0 his state
+// machine, w1 the state).
+#define DOWN_AWAY 30  // (half a second)
+static void down_move_tick(Cpu *c) {
+    for (int i = 1; i < g_n; i++) {
+        if (!g_down_move[i] || g_lost_until[i]) continue;  // (the spikes go on hitting him a moment while he's away)
+        g_down_move[i] = false;
+        uint64_t link = g_extra[i];
+        float p[3], h[3];  // (on Player 1's spot already: nothing to do - moved, he was gone half a second)
+        if (player_pos(link, p) && player_pos(host_player(), h) && fabsf(p[0] - h[0]) < 1.5f &&
+            fabsf(p[1] - h[1]) < 1.5f && fabsf(p[2] - h[2]) < 1.5f)
+            continue;
+        for (unsigned s = 0; s < 0x40 && GA(COOP_DEAD_STATE_SITE) && link_state_kind(link) != 0; s++) {
+            uint64_t st = LD64(link + 0x1340 + 8ull * s);
+            if (!heap_ptr(st) || LD8(st + 0x28) != 0) continue;
+            Cpu saved = *c;
+            c->x[0] = link + 0x4e0, c->x[1] = s;
+            guest_call(c, GA(COOP_DEAD_STATE_SITE));
+            *c = saved;
+            break;
+        }
+        LOG("[coop] player %d hit again while knocked out (his state kind %d): put on Player 1\n", i + 1,
+            link_state_kind(link));
+        g_lost_until[i] = renderer_present_count() + DOWN_AWAY, g_lost_parked[i] = false;
+        g_down_moved_until[i] = g_lost_until[i] + 120;  // (and 2 s once he's there)
+    }
+}
+
 static uint64_t g_p1_updated;          // (the frame Player 1's update last ran)
 static uint64_t g_held_at;             // (the frame the other Links were put on Player 1; 0: they aren't)
 
@@ -1626,12 +1665,24 @@ static int warp_hole(Cpu *c, bool touch) {
 // entry). A death that isn't his hearts running out - an instant kill - would still be the game over for everyone:
 // with each player's own hearts, another player sent to the dead state is knocked out instead and his state stays.
 // (With "game over for everyone" his last hit is let through; with shared hearts a death is the game's own.)
+// A knocked-out player isn't knocked back again either (the change to a state of kind 11 stays undone; the hit that
+// knocked him out plays out): in spikes each knockback ended on them and the next began, and moved meanwhile his state
+// put him back. Each one counts as a hit while down (down_hit): lying still, he's put on Player 1.
 #define PLAYER_STATE_DEAD 0x12
+#define LINK_KIND_KNOCKED_BACK 11
 
 static int dead_state(Cpu *c) {
     unsigned s = (unsigned)(c->x[1] & 0xff);
-    int i = s == PLAYER_STATE_DEAD || s == PLAYER_STATE_DEAD + 1 ? coop_index(c->x[0] - 0x4e0) : 0;
-    if (!i || !own_hearts() || (g_settings.coop_knockout == COOP_KO_GAME_OVER && g_hp[i] == 0)) return 0;
+    int i = coop_index(c->x[0] - 0x4e0);
+    if (!i || !own_hearts()) return 0;
+    uint64_t st = g_down[i] && s < 0x40 ? LD64(g_extra[i] + 0x1340 + 8ull * s) : 0;
+    if (heap_ptr(st) && LD8(st + 0x28) == LINK_KIND_KNOCKED_BACK) {
+        down_hit(i);
+        return 2;  // (to the change's ret)
+    }
+    if ((s != PLAYER_STATE_DEAD && s != PLAYER_STATE_DEAD + 1) ||
+        (g_settings.coop_knockout == COOP_KO_GAME_OVER && g_hp[i] == 0))
+        return 0;
     LOG("[coop] player %d sent to the dead state (%#x): knocked out instead of a game over\n", i + 1, s);
     if (!g_down[i]) knock_out(i);
     return 2;  // (to the change's ret: the state stays)
@@ -2147,7 +2198,7 @@ void coop_tick(Cpu *c) {
     }
     hearts_tick(c);
     sleep_tick(c);
-    if (play) pause_tick(), lost_tick(), leash_tick(), room_follow_tick();
+    if (play) down_move_tick(c), pause_tick(), lost_tick(), leash_tick(), room_follow_tick();
     extern uint64_t input_coop_buttons(int player);
     uint64_t frame = renderer_present_count();
     static int test_die;  // LARECOMP_COOP_DIE=<player>,... (test): those players sent to the dead state 3 s after they
