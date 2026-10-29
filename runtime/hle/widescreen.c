@@ -58,6 +58,15 @@ float widescreen_effect_stretch(uint64_t fs_hash, float *ky) {
     return wide * zoom;
 }
 
+// Effects not drawn at all with the co-op camera moved back (outdoors): Yarna Desert's warm haze is a disc around
+// Player 1 that covers the 16:9 view, and from further back its edge showed as a hard circle on the sand (user
+// 2026-10-28). It refracts the picture behind it, so stretched (as the woods' fog) it ghosted a copy of the rocks
+// over the water beside the desert; without it the sand is as the rest of the Field. Found by skipping shaders.
+bool widescreen_effect_hidden(uint64_t fs_hash) {
+    extern float coop_camera_zoom(void), coop_camera_reach(void);  // runtime/hle/coop.c
+    return fs_hash == 0x16c48ff5e6bcfea3ull && coop_camera_zoom() == 1.0f && coop_camera_reach() > 1.05f;
+}
+
 // Untextured quads drawn with a full-screen viewport are taken for fades and flashes and fill the window
 // (runtime/nvn/renderer.m), but a layout pane draws that way too, whatever its size: the speaker-less message box's
 // dark band (622x46 behind the rounded box, "Wow! This looks pretty heavy!...") came out stretched to the window's
@@ -243,6 +252,13 @@ static bool current_zone(float lo[3], float hi[3], uint32_t *id) {
     }
     *id = *(const uint32_t *)(uintptr_t)z;
     return true;
+}
+
+// Whether the camera zone is a side-view room (thin in z: the camera looks along z). (Local co-op: runtime/hle/coop.c.)
+bool game_side_view(void) {
+    float lo[3], hi[3];
+    uint32_t id;
+    return current_zone(lo, hi, &id) && hi[2] - lo[2] < 6.0f;
 }
 
 // The current camera zone record (a dungeon room, an interior), 0 when there is none (overworld, title, loading).

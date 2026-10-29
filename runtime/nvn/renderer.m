@@ -4278,6 +4278,8 @@ static void draw_one(CmdRec *r, bool indexed) {
             for (int i = 0; i < nskip; i++) if (last_hash == skip[i]) { stat_skipped++; return; }
             extern bool pot_level_active(void);
             if (last_hash == 0xa2177dbb72197bd9ull && pot_level_active()) { stat_skipped++; return; }  // item twinkle
+            extern bool widescreen_effect_hidden(uint64_t fs_hash);  // (runtime/hle/widescreen.c: the co-op zoom)
+            if (widescreen_effect_hidden(last_hash)) { stat_skipped++; return; }
         }
         g_cur_fs_hash = last_hash;
         extern void widescreen_backdrop_seen(uint64_t hash);

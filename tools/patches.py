@@ -1194,5 +1194,11 @@ _COOP_HOOKS = {
     A.COOP_LOAD_BOX_SITE: (0xf0007297, (), 'adrp x23: the box of screens whose objects are made (s1 x s2)'),
     A.COOP_KEEP_BOX_SITE: (0x0d4092e0, (), 'ld1 {v0.s}[1], [x23]: the box of screens whose objects are kept (s0..s3)'),
     A.COOP_ACTIVE_BOX_SITE: (0x1e233808, (), 'fsub s8, s0, s3: the box of screens that are active (s3, s4, s5)'),
+    # The overworld's warp holes are objects of their own (main+0xcba000...: event/Field.bfevfl, "WarpHole"), whose
+    # contact checks the player actor's +0x43 bit 6 the same way (main+0xcbd3e0 stepped in: +0x405 set, its update
+    # then walks the game manager's player over and jumps him in; main+0xcbd250 stepped out): another player stepping
+    # in walked Player 1 - everyone with him - slowly over to it (user 2026-10-28).
+    A.COOP_WARP_OBJ_TOUCH_SITE: (0x39410d08, (), 'ldrb w8, [x8, #0x43]: a Link stepping into a warp hole object'),
+    A.COOP_WARP_OBJ_LEAVE_SITE: (0x39410d08, (), 'ldrb w8, [x8, #0x43]: a Link stepping out of a warp hole object'),
 }
 HOOKS.update({a: h for a, h in _COOP_HOOKS.items() if a})

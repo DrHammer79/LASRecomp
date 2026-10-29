@@ -191,8 +191,15 @@ extern "C" void coop_hud_draw(ImVec2 display, ImFont *font, float scale) {
     for (int i = 0; i < g_nrows; i++) {
         float px, py, w = 130 * scale, h = 38 * scale;
         if (!coop_revive_prompt(i, display.x, display.y, &px, &py)) continue;
-        for (int k = 0; k < np; k++)
-            if (fabsf(px - placed[k][0]) < w && fabsf(py - placed[k][1]) < h) py = placed[k][1] + h, k = -1;
+        // (below each one it overlaps, at most once past each: tested with |py - y| < h, py = y + h could still be
+        // short of h by a rounding and was moved there again forever - the game locked up as two players stood by a
+        // knocked-out one, user 2026-10-28)
+        for (int pass = 0, moved = 1; moved && pass <= np; pass++) {
+            moved = 0;
+            for (int k = 0; k < np; k++)
+                if (fabsf(px - placed[k][0]) < w && py > placed[k][1] - h && py < placed[k][1] + h)
+                    py = placed[k][1] + h, moved = 1;
+        }
         revive_prompt(dl, font, scale, px, py);
         if (np < 8) placed[np][0] = px, placed[np][1] = py, np++;
     }
