@@ -305,6 +305,45 @@ static void configure_inputs(float scale) {
 // Right under Inputs: the player count and who has which controller and color first, then hearts, the camera and
 // the rules, each under its own heading. The player count applies from the next file loaded (the extra Links are made
 // with Link's own as a save loads); the tunic colors' file is part of the game's data from when it starts.
+// The camera's zoom is there without co-op too (its "Always"); fitting everyone in view only with it.
+static void zoom_options(bool coop) {
+    opt_section("Camera");
+    static const char *const when[] = {"With co-op", "Always", "Off"};
+    opt_choice("Zoom out", &g_settings.coop_zoom_mode, when, 3, COOP_ZOOM_WITH_COOP,
+               "With co-op: the camera zooms out as set below with 2 players or more. Always: playing alone too. "
+               "Off: the game's own camera.", false);
+    if (g_settings.coop_zoom_mode == COOP_ZOOM_OFF || (!coop && g_settings.coop_zoom_mode == COOP_ZOOM_WITH_COOP))
+        return;
+    opt_indent(1);
+    static const char *const outs[] = {"Normal", "Out 10%", "Out 20%", "Out 30%", "Out 40%", "Out 50%", "Out 60%",
+                                       "Out 70%", "Out 80%", "Out 90%", "Out 100%", "Out 110%", "Out 120%",
+                                       "Out 130%", "Out 140%", "Out 150%", "Out 160%", "Out 170%", "Out 180%",
+                                       "Out 190%", "Out 200%"};
+    opt_choice("Camera zoom", &g_settings.coop_zoom, outs, COOP_ZOOM_MAX + 1, 5,
+               "How far out the camera always is outdoors.", false);
+    if (coop) {
+        opt_indent(1);
+        opt_toggle("Zoom out to fit everyone", &g_settings.coop_camera_fit, true,
+                   "Zooms out further as players spread out, and back in as you regroup - never closer than Camera "
+                   "zoom.");
+        if (g_settings.coop_camera_fit) {
+            opt_indent(1);
+            int f = g_settings.coop_zoom_fit - 1;
+            if (opt_choice("Fit up to", &f, outs + 1, COOP_ZOOM_FIT_MAX, COOP_ZOOM_FIT_MAX - 1,
+                           "The furthest out it zooms to fit everyone. Below Camera zoom, Camera zoom is the furthest. "
+                           "Far out, the overworld loads more around Player 1.",
+                           false))
+                g_settings.coop_zoom_fit = f + 1;
+            opt_indent(-1);
+        }
+        opt_indent(-1);
+    }
+    opt_choice("Indoor zoom", &g_settings.coop_zoom_indoor, outs, COOP_ZOOM_MAX + 1, 0,
+               "Houses, caves and dungeons: the game frames each room to fit the screen, so zoomed out it sits small "
+               "in black. Normal keeps the game's own view.", false);
+    opt_indent(-1);
+}
+
 static void coop_options(void) {
     opt_section("Co-op");
     bool supported = coop_supported();
@@ -321,7 +360,10 @@ static void coop_options(void) {
                        false))
             g_settings.coop_players = i + 1;
     }
-    if (g_settings.coop_players <= 1 || !supported) return;
+    if (g_settings.coop_players <= 1 || !supported) {
+        if (supported) zoom_options(false);
+        return;
+    }
     opt_indent(1);
     if (int cs = coop_colours_state()) {
         static char where[1400];
@@ -383,30 +425,7 @@ static void coop_options(void) {
         opt_indent(-1);
     }
 
-    opt_section("Co-op camera");
-    static const char *const outs[] = {"Normal", "Out 10%", "Out 20%", "Out 30%", "Out 40%", "Out 50%", "Out 60%",
-                                       "Out 70%", "Out 80%", "Out 90%", "Out 100%", "Out 110%", "Out 120%",
-                                       "Out 130%", "Out 140%", "Out 150%", "Out 160%", "Out 170%", "Out 180%",
-                                       "Out 190%", "Out 200%"};
-    opt_choice("Camera zoom", &g_settings.coop_zoom, outs, COOP_ZOOM_MAX + 1, 5,
-               "How far out the camera always is outdoors.", false);
-    opt_indent(1);
-    opt_toggle("Zoom out to fit everyone", &g_settings.coop_camera_fit, true,
-               "Zooms out further as players spread out, and back in as you regroup - never closer than Camera zoom.");
-    if (g_settings.coop_camera_fit) {
-        opt_indent(1);
-        int f = g_settings.coop_zoom_fit - 1;
-        if (opt_choice("Fit up to", &f, outs + 1, COOP_ZOOM_FIT_MAX, COOP_ZOOM_FIT_MAX - 1,
-                       "The furthest out it zooms to fit everyone. Below Camera zoom, Camera zoom is the furthest. "
-                       "Far out, the overworld loads more around Player 1.",
-                       false))
-            g_settings.coop_zoom_fit = f + 1;
-        opt_indent(-1);
-    }
-    opt_indent(-1);
-    opt_choice("Indoor zoom", &g_settings.coop_zoom_indoor, outs, COOP_ZOOM_MAX + 1, 0,
-               "Houses, caves and dungeons: the game frames each room to fit the screen, so zoomed out it sits small "
-               "in black. Normal keeps the game's own view.", false);
+    zoom_options(true);
 
     opt_section("Co-op rules");
     opt_toggle("Bring lost players back", &g_settings.coop_leash, true,
