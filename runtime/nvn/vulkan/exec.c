@@ -6417,6 +6417,8 @@ static void draw_(CmdRec *r, bool indexed) {
         for (int i = 0; i < nskip; i++) if (last_hash == skip[i]) { SKIP(SK_DEBUG_SKIP); return; }
         extern bool pot_level_active(void);
         if (last_hash == 0xa2177dbb72197bd9ull && pot_level_active()) { SKIP(SK_HIDDEN); return; }
+        extern bool widescreen_effect_hidden(uint64_t fs_hash);  // (runtime/hle/widescreen.c: the co-op zoom)
+        if (widescreen_effect_hidden(last_hash)) { SKIP(SK_HIDDEN); return; }
         if (g_debug_frame && getenv("LARECOMP_LOG_FSHASH")) LOG("[fshash] fs=%llx hash %016llx\n", (unsigned long long)fs, (unsigned long long)last_hash);
         g_cur_fs_hash = last_hash;
         extern void widescreen_backdrop_seen(uint64_t hash);
