@@ -176,6 +176,24 @@ static void revive(int i, const char *how) {
 
 int coop_player_down(int i) { return own_hearts() && i > 0 && i < COOP_MAX && g_down[i]; }
 
+// A knocked-out player hit again and again lies in something that hurts: knocked back by each hit, he never lay still
+// (user 2026-10-28: spikes in a side-view room of Angler's Tunnel, kinds 11 and 3 in turn). DOWN_HITS of them, each
+// within DOWN_HIT_FRAMES of the last, and he is put on Player 1's spot, still knocked out, where he can be revived.
+#define DOWN_HITS 2
+#define DOWN_HIT_FRAMES 180  // (3 s)
+static uint64_t g_down_hit_at[COOP_MAX];
+static int g_down_hits[COOP_MAX];
+
+static void down_hit(int i) {
+    uint64_t now = renderer_present_count();
+    g_down_hits[i] = now - g_down_hit_at[i] < DOWN_HIT_FRAMES ? g_down_hits[i] + 1 : 1;
+    g_down_hit_at[i] = now;
+    if (g_down_hits[i] < DOWN_HITS) return;
+    LOG("[coop] player %d hit again while knocked out: put on Player 1\n", i + 1);
+    g_down_hits[i] = 0;
+    ride_on_host(i);
+}
+
 // Player 1 in an event - walked by a cutscene or a door, an item held up, a scene - while the other players stand
 // still (their input is none: runtime/hle/input.c). His current state (+0x4ed the slot, +0x1340 the states, +0x28 the
 // kind) is one the game's own "can he go" check (main+0xd58d70) holds apart: kinds 18, 19, 22, 23, 24, 26.
@@ -237,7 +255,11 @@ int32_t rt_coop_damage(Cpu *c, int32_t dmg) {
     if (!own_hearts() || dmg <= 0) return dmg;
     int i = running_player(c);
     if (!i) return dmg;
-    if (g_down[i] || g_settings.cheat_hearts) return 0;
+    if (g_down[i]) {
+        down_hit(i);
+        return 0;
+    }
+    if (g_settings.cheat_hearts) return 0;
     if (renderer_present_count() < g_safe_until[i]) {
         CLOG("[coop] player %d hit for %d: just revived, unhurt\n", i + 1, dmg);
         return 0;
@@ -412,7 +434,7 @@ static void hearts_tick(Cpu *c) {
         if (g_hp[i] < 0 || g_settings.cheat_hearts) g_hp[i] = g_max_hp;
         if (!g_down[i]) g_hp[i] = g_hp[i] + gained > g_max_hp ? g_max_hp : g_hp[i] + gained;
     }
-    // Revives: another player who is up, within 1.6 of him, holding A
+    // Revives: another player who is up, within 1.6 of him (height too), holding A
     extern uint64_t input_coop_buttons(int player);
     extern uint64_t input_buttons_now(void);
     float step = 1.0f / (60.0f * (float)(g_settings.coop_revive_s > 0 ? g_settings.coop_revive_s : 4));
@@ -425,8 +447,10 @@ static void hearts_tick(Cpu *c) {
             for (int j = 0; j < g_n; j++) {
                 float pj[3];
                 if (j == i || (j && g_down[j]) || !player_pos(coop_player(j), pj)) continue;
-                float dx = pj[0] - pi[0], dz = pj[2] - pi[2];
-                if (dx * dx + dz * dz >= 1.6f * 1.6f) continue;
+                // (height too: in a side view a player swimming above him was "beside" him - the Angler Fish, user
+                // 2026-10-28)
+                float dx = pj[0] - pi[0], dy = pj[1] - pi[1], dz = pj[2] - pi[2];
+                if (dx * dx + dy * dy + dz * dz >= 1.6f * 1.6f) continue;
                 g_can_revive[j] = true;  // (his "A Revive" prompt: runtime/ui/coop_hud.mm)
                 uint64_t b = j ? input_coop_buttons(j) : input_buttons_now();
                 helped |= (b & 1) != 0;  // (bit 0: A)
@@ -535,11 +559,22 @@ float coop_camera_reach(void) { return g_zoom; }                    // (how much
 //   the far plane (+0x56c: at 3x the far ground was cut off, black) and the shadows' reach (+0x560, +0x350, +0x734:
 //   24 each; past it a wedge of the ground was all in shadow); the tilt-shift's focus (qol.c rt_tilt_focus_add: Player
 //   1 was blurred, the sharp band nearer the screen's bottom).
+// The eye's move is taken off again as the next frame starts (camera_back_undo, from coop_tick, as the game reads the
+// controllers - before the camera's update): a camera that goes on from where its eye is - the walk in through a
+// dungeon's door glides it - went further back each frame, to 120 away (user 2026-10-28, Angler's Tunnel).
 static float g_back, g_back_d0 = 24.8f;  // (the distance moved back; Player 1's distance from the eye before it)
+static uint64_t g_eye_node;              // (the node whose eye was moved, 0: none)
+static float g_eye_wrote[3], g_eye_moved[3];
+static void camera_back_undo(void) {
+    float *eye = g_eye_node && heap_ptr(g_eye_node) ? (float *)(uintptr_t)(g_eye_node + 0xb0) : NULL;
+    if (eye && !memcmp(eye, g_eye_wrote, sizeof g_eye_wrote))  // (as we left it: the camera hasn't been updated since)
+        for (int k = 0; k < 3; k++) eye[k] -= g_eye_moved[k];
+    g_eye_node = 0;
+}
 static void camera_back(Cpu *c) {
     static const int keep[] = {0x560, 0x56c, 0x350, 0x734};
     static uint64_t cam_was;
-    static float orig[4], wrote[4], eye_wrote[3], eye_moved[3];
+    static float orig[4], wrote[4];
     uint64_t cam = c->x[23], node = LD64(cam + 0x510);
     float p[3], v[3];
     if (cam != view_camera() || !heap_ptr(node)) return;
@@ -556,12 +591,11 @@ static void camera_back(Cpu *c) {
     g_back = back;
     float *m = (float *)(uintptr_t)(cam + 0x580), *copy = (float *)(uintptr_t)(c->x[24] + 0x20);
     float *eye = (float *)(uintptr_t)(node + 0xb0);
-    // (a camera that keeps its eye - a cutscene's, standing still - still holds last frame's: that move is taken off
-    // first, so it doesn't add up)
-    if (cam == cam_was && !memcmp(eye, eye_wrote, sizeof eye_wrote))
-        for (int k = 0; k < 3; k++) eye[k] -= eye_moved[k];
-    for (int k = 0; k < 3; k++) eye_moved[k] = back * m[2 + 4 * k], eye[k] += eye_moved[k];  // (row 2: its back axis)
-    memcpy(eye_wrote, eye, sizeof eye_wrote);
+    if (g_eye_node == node) camera_back_undo();  // (not taken off yet - two camera updates in a frame: now)
+    for (int k = 0; k < 3; k++)  // (row 2: its back axis)
+        g_eye_moved[k] = back * m[2 + 4 * k], eye[k] += g_eye_moved[k];
+    memcpy(g_eye_wrote, eye, sizeof g_eye_wrote);
+    g_eye_node = back != 0 ? node : 0;
     cam_was = cam;
     m[14] -= back, copy[14] -= back;
 }
@@ -846,14 +880,17 @@ static bool pause_updated(uint64_t actor) {
 }
 RT_ON_RESET(coop_pause_reset) { g_p1_updated = g_held_at = 0, g_nheld = 0; }
 
+// (neither while Player 1 is in an event - nobody else can act then: they showed over the warp holes' "Where to?" map,
+// 2026-10-28)
 bool coop_player_screen(int i, float w, float h, float *sx, float *sy, bool *edge) {
-    return i >= 1 && player_screen(i, 1.0f, w, h, sx, sy, edge);
+    return i >= 1 && !g_p1_event && player_screen(i, 1.0f, w, h, sx, sy, edge);
 }
 
 // Where to show player i's "A Revive" prompt (below him), when he is up beside a knocked-out player.
 bool coop_revive_prompt(int i, float w, float h, float *sx, float *sy) {
     bool edge;
-    return i >= 0 && i < COOP_MAX && g_can_revive[i] && player_screen(i, -0.3f, w, h, sx, sy, &edge) && !edge;
+    return i >= 0 && i < COOP_MAX && g_can_revive[i] && !g_p1_event && player_screen(i, -0.3f, w, h, sx, sy, &edge) &&
+           !edge;
 }
 
 // The HUD (runtime/ui/coop_hud.mm): each player's hearts, maximum, knocked out / revive progress and colour.
@@ -919,6 +956,18 @@ static bool actor_pos(uint64_t actor, float out[3]) {  // (an actor's main compo
     return true;
 }
 
+static int nearest_player(uint64_t enemy) {  // (who is nearest it, within TARGET_FAR; 0: Player 1, or nobody near)
+    float e[3], p[3], bd = TARGET_FAR * TARGET_FAR;
+    int best = 0;
+    if (!actor_pos(enemy, e)) return 0;
+    for (int i = 0; i < g_n; i++) {
+        if ((i && g_down[i]) || !player_pos(coop_player(i), p)) continue;
+        float d = (p[0] - e[0]) * (p[0] - e[0]) + (p[2] - e[2]) * (p[2] - e[2]);
+        if (d < bd) bd = d, best = i;
+    }
+    return best;
+}
+
 static int enemy_target(uint64_t enemy) {
     float e[3], p[3];
     if (!actor_pos(enemy, e)) return 0;
@@ -982,15 +1031,19 @@ static bool on_game_thread(void) {  // (per call of the actor hooks: pthread_sel
 // a zombie walked to Player 1 whoever it targeted (tested 2026-10-28) - and its player follower (TailorPlayerComp):
 // these see its target as "Link" too (AC_ENEMY_PART). Not the others (collision, animation...): Player 1's sword hits it
 // whoever it targets.
+// A Gel (EnemyMiniZol) goes for the nearest player, not one it stays on (AC_ENEMY_NEAREST): one that jumped at its
+// target and landed on another player clung to him, then went over to its target (user 2026-10-28).
 #define AC_SETS 16384
 #define AC_WAYS 4  // (an actor's set of four: the one seen longest ago makes way)
-enum { AC_OTHER, AC_ENEMY, AC_ENEMY_PART };
+enum { AC_OTHER, AC_ENEMY, AC_ENEMY_NEAREST, AC_ENEMY_PART };
+enum { GONE_NEW, GONE_LIVE, GONE_NOTED };  // (grass and rocks: not looked at yet; looked at; its death seen)
 typedef struct {
     uint64_t actor, name;  // (its name's first 24 bytes, folded)
+    uint64_t key;          // (grass and rocks: its name's hash - the level object's id; 0: not one of them)
     uint32_t seen;         // (the frame it was last looked up in)
-    int16_t gone;          // (its slot in g_gone, -1: none; -2: not looked up yet)
-    uint8_t what;
+    uint8_t what, gone;
 } ActorClass;
+static uint64_t gone_key(const char *name);
 static ActorClass g_ac[AC_SETS][AC_WAYS];
 static void actor_class_forget(void) { memset(g_ac, 0, sizeof g_ac); }
 static ActorClass *actor_class(uint64_t actor) {
@@ -1006,9 +1059,24 @@ static ActorClass *actor_class(uint64_t actor) {
     e->seen = now;
     char name[64];
     snprintf(name, sizeof name, "%.63s", nm);
-    e->actor = actor, e->name = tag, e->gone = -2;
-    e->what = !strstr(name, "Comp") ? (strncmp(name, "Enemy", 5) ? AC_OTHER : AC_ENEMY)
-              : strstr(name, "React") || strstr(name, "Player") ? AC_ENEMY_PART : AC_OTHER;
+    e->actor = actor, e->name = tag, e->key = gone_key(name), e->gone = GONE_NEW;
+    // (the reaction part is "...ReactionComp" or, for 28 kinds - Zols, Armos, Pokey, Togezo... - "...ReactionCom": red
+    // Zols hopped at Player 1 whoever they targeted, user 2026-10-28)
+    e->what = strstr(name, "React") || strstr(name, "PlayerComp") ? AC_ENEMY_PART
+              : strstr(name, "Comp") || strncmp(name, "Enemy", 5) ? AC_OTHER
+              : !strncmp(name, "EnemyMiniZol", 12) ? AC_ENEMY_NEAREST : AC_ENEMY;
+    if (e->what == AC_ENEMY_PART && ENV("LARECOMP_COOP_LOG")) {  // (each kind of part once: which ones go by "Link")
+        static uint64_t said[64];
+        static int nsaid;
+        bool known = false;
+        for (int k = 0; k < nsaid && !known; k++) known = said[k] == tag;
+        uint64_t owner = LD64(actor + 0x48);
+        if (!known && nsaid < 64) {
+            said[nsaid++] = tag;
+            LOG("[coop] %.40s: an enemy part that goes by \"Link\" (its owner %.40s)\n", name,
+                heap_ptr(owner) ? (const char *)(uintptr_t)(owner + 0x18) : "-");
+        }
+    }
     return e;
 }
 
@@ -1017,13 +1085,21 @@ static void actor_exec_begin(Cpu *c) {
     uint64_t actor = g_updating;
     if (!actor) return;
     uint8_t what = actor_class(actor)->what;
+    int t;
     if (what == AC_ENEMY_PART) {
+        // (its reaction to a hit goes by "Link" too: the target kept for the chase is the nearest player now, not the
+        // one it stays on - another player's hit knocked it back from where its target stood, up onto a ledge: user
+        // 2026-10-28, a turtle in Angler's Tunnel)
         uint64_t owner = LD64(actor + 0x48);
-        if (!heap_ptr(owner) || actor_class(owner)->what != AC_ENEMY) return;
-        actor = owner;
-    } else if (what != AC_ENEMY)
+        uint8_t of = heap_ptr(owner) ? actor_class(owner)->what : AC_OTHER;
+        if (of != AC_ENEMY && of != AC_ENEMY_NEAREST) return;
+        t = nearest_player(owner);
+    } else if (what == AC_ENEMY)
+        t = enemy_target(actor);
+    else if (what == AC_ENEMY_NEAREST)
+        t = nearest_player(actor);
+    else
         return;
-    int t = enemy_target(actor);
     uint64_t gm = LD64(GA(GAME_MGR)), own = gm ? LD64(gm + 0x4b8) : 0;
     if (!t || !own || !collision_of(g_extra[t])) return;
     g_swap_on = true, g_swapped = own;
@@ -1191,7 +1267,8 @@ static void pass_tick(void) {
 // +0x5c). With player collision off, a Link's sweep skips the capsule of another Link: they walk through each
 // other; everything else still blocks them. (Any Link's: stacked Links share one spot, so which one a capsule is
 // can't be told - and a Link's own capsule isn't among his obstacles.) With it on, it skips one where a player is
-// passing through (g_pass), and every capsule in the sweep of a player passing through.
+// passing through (g_pass), and every capsule in the sweep of a player passing through - and every one in a
+// side-view room: there a Link jumping onto another stood on his head and stuck a second or two (user 2026-10-28).
 static bool cct_sweep(Cpu *c) {
     uint64_t g = c->x[28];
     if (LD32(g) != 1) return false;
@@ -1201,7 +1278,9 @@ static bool cct_sweep(Cpu *c) {
     memcpy(p1, (const void *)(uintptr_t)(g + 0x44), 24);
     for (int k = 0; k < 3; k++) cap[k] = (p0[k] + p1[k]) / 2;
     if (link_at(vol[0], vol[1], vol[2]) < 0 || link_at(cap[0], cap[1], cap[2]) < 0) return false;
-    return !g_settings.coop_collision || passing_at(vol[0], vol[1], vol[2]) || passing_at(cap[0], cap[1], cap[2]);
+    extern bool game_side_view(void);  // runtime/hle/widescreen.c
+    return !g_settings.coop_collision || game_side_view() || passing_at(vol[0], vol[1], vol[2]) ||
+           passing_at(cap[0], cap[1], cap[2]);
 }
 
 // ---- Exits (setting coop_host_exits). Doors and loading zones are AreaLevelOpen actors: the contact signal of an
@@ -1436,11 +1515,14 @@ static void act_update_end(void) {
 // both start lifting it, as any player pressing A with Player 1 did before. So a component a player's A handler
 // took is nothing to the others' checks for a moment (CLAIM_FRAMES).
 // Actions that play an event (a chest's opening and its item, a sign's text...: component type +0x1a0 other than
-// ACT_LIFT) play it on "Link", Player 1, and the Link whose A started it waits in his "open" state (main+0xdd8060) for
-// the event to move him on - for another player, never. So another player's A on one starts the component's action
+// ACT_LIFT and ACT_PULL, own_action) play it on "Link", Player 1, and the Link whose A started it waits in his "open"
+// state (main+0xdd8060) for the event to move him on - for another player, never. So another player's A on one starts the component's action
 // itself (DOACTION_TRIGGER, as the "open" state does), and his own Link takes no part: the scene is Player 1's.
 #define CLAIM_FRAMES 30
+#define ACT_PULL 3  // (levers: the grab and pull, his own state - played on Player 1 another player's A did nothing,
+                    // user 2026-10-28, Angler's Tunnel)
 #define ACT_LIFT 4  // (rocks, pots, bushes, bombs...: the lift, his own state)
+static bool own_action(uint64_t comp) { uint8_t t = LD8(comp + 0x1a0); return t == ACT_LIFT || t == ACT_PULL; }
 static struct { uint64_t comp, until; } g_claim[COOP_MAX];  // (per player)
 extern uint64_t input_coop_buttons(int player);
 RT_ON_RESET(coop_claim_reset) { memset(g_claim, 0, sizeof g_claim); g_talking = false, g_talker = 0; }
@@ -1460,7 +1542,7 @@ static int doaction_get(Cpu *c) {
     if ((!take && !check) || who < 0 || !comp) return 0;
     if (take) {
         g_claim[who].comp = comp, g_claim[who].until = f + CLAIM_FRAMES;
-        if (!who && LD8(comp + 0x1a0) != ACT_LIFT) talk_started(0, f);  // (Player 1's own talk, chest, sign)
+        if (!who && !own_action(comp)) talk_started(0, f);  // (Player 1's own talk, chest, sign)
         return 0;
     }
     bool nothing = false;
@@ -1477,7 +1559,7 @@ static int doaction_get(Cpu *c) {
         said = f;
         nothing = true;
     }
-    if (!nothing && who > 0 && LD8(comp + 0x1a0) != ACT_LIFT && GA(DOACTION_TRIGGER)) {
+    if (!nothing && who > 0 && !own_action(comp) && GA(DOACTION_TRIGGER)) {
         if ((input_coop_buttons(who) & 1) && !(g_claim[who].comp == comp && f < g_claim[who].until)) {
             uint64_t owner = LD64(comp + 0x48);
             Cpu saved = *c;
@@ -1523,7 +1605,10 @@ static int event_box(Cpu *c) {
 // main+0x8c3d0 stepped out) keep a player actor whose +0x43 bit 6 is clear, then play the jump for the game manager's
 // player: another player stepping in sent Player 1 in. At those checks (x8 the player actor and the load's target)
 // another player's Link reads as one with the bit set: he sets nothing off, and his stepping out doesn't drop Player
-// 1. (A dungeon's warp hole back to its entrance is an exit, COOP_EXIT_TOUCH_SITE: Player 1 already leads it.)
+// 1. The overworld's warp holes are objects of their own with the same check (COOP_WARP_OBJ_TOUCH / LEAVE_SITE:
+// main+0xcbd3e0 / main+0xcbd250; stepped in, their update walked Player 1 - and everyone on him - slowly over to the
+// hole another player stood in, user 2026-10-28). (A dungeon's warp hole back to its entrance is an exit,
+// COOP_EXIT_TOUCH_SITE: Player 1 already leads it.)
 static int warp_hole(Cpu *c, bool touch) {
     int i = coop_index(c->x[8]);
     if (!i) return 0;
@@ -1561,65 +1646,88 @@ static int dead_state(Cpu *c) {
 // again while a player is near it or it's in view is killed at once (ACTOR_KILL, as its own break does), before its
 // first update: it stays gone until it comes back where nobody sees it. Not indoors: a room comes back whole as Player
 // 1 walks in, with everyone, as without co-op.
-#define GONE_SLOTS 1024
+// What counts as destroyed: dying in its own update (cut, or thrown and broken), or dying elsewhere - in another
+// actor's update: lifted, cut by another player's sword - with a player within GONE_TAKER of it. The screens the game
+// unloads as Player 1 moves on kill theirs between updates, far from everyone, and those come back whole: counted as
+// destroyed, at the zoom's wide views the tall grass around was gone, bare earth in its place (2026-10-28).
+// Only those are kept (GONE_SLOTS; the one destroyed longest ago makes way when they're all taken): a slot for every
+// one seen filled up in play - thousands walking the Field - and from then on nothing was kept, so cut grass and a
+// thrown boulder came back again (user 2026-10-28, File 3, four players: 2 kept in a session).
+#define GONE_SLOTS 4096
+#define GONE_PROBES 8
 #define GONE_NEAR 10.0f
+#define GONE_TAKER 4.0f
 #define ACTOR_DEAD (1u << 30)  // (actor +0x40: killed - runtime/hle/apple_trees.c)
-static struct { uint64_t key, actor; float at[3]; bool dead; } g_gone[GONE_SLOTS];
-// Only what its own update killed is destroyed: cut, or thrown and broken. The screens the game unloads as Player 1
-// moves on kill theirs between updates (dead as the next one begins), and those come back whole - kept gone, at the
-// zoom's wide views the tall grass around was gone, bare earth in its place (2026-10-28).
+static struct { uint64_t key, at_frame; float at[3]; } g_gone[GONE_SLOTS];
 static bool g_gone_dead_before;  // (the actor updating was dead as its update began)
-static void gone_forget(void) { memset(g_gone, 0, sizeof g_gone), actor_class_forget(); }  // (its slots: looked up again)
+static void gone_forget(void) { memset(g_gone, 0, sizeof g_gone), actor_class_forget(); }
 RT_ON_RESET(coop_gone_reset) { gone_forget(); }
 
-static int gone_slot(uint64_t actor) {  // its slot (taken for it), or -1: not one of these
+// A grass's or rock's key: the FNV-1a of its name, its level object's id (0: not one of them).
+static uint64_t gone_key(const char *name) {
     static const char *const kinds[] = {"ObjRock-", "ObjGrass-", "ObjGrass2x2-", "ObjLawn-", "ObjSkullStone-"};
-    const char *nm = (const char *)(uintptr_t)(actor + 0x18);
     bool one = false;
-    for (size_t i = 0; i < sizeof kinds / sizeof *kinds && !one && !strncmp(nm, "Obj", 3); i++)
-        one = !strncmp(nm, kinds[i], strlen(kinds[i]));
-    if (!one) return -1;
-    uint64_t key = 1469598103934665603ull;  // (FNV-1a of the name)
-    for (int k = 0; k < 48 && nm[k]; k++) key = (key ^ (uint8_t)nm[k]) * 1099511628211ull;
-    int k = (int)(key % GONE_SLOTS);
-    for (int probes = 0; g_gone[k].key && g_gone[k].key != key; k = (k + 1) % GONE_SLOTS)
-        if (++probes == GONE_SLOTS) return -1;  // (full)
-    g_gone[k].key = key;
-    return k;
+    for (size_t i = 0; i < sizeof kinds / sizeof *kinds && !one && !strncmp(name, "Obj", 3); i++)
+        one = !strncmp(name, kinds[i], strlen(kinds[i]));
+    if (!one) return 0;
+    uint64_t key = 1469598103934665603ull;
+    for (int k = 0; k < 48 && name[k]; k++) key = (key ^ (uint8_t)name[k]) * 1099511628211ull;
+    return key ? key : 1;
 }
-static int gone_slot_of(uint64_t actor) {  // (gone_slot, once per actor: actor_class; "Obj..." only)
-    if ((LD32(actor + 0x18) & 0xffffff) != ('O' | 'b' << 8 | 'j' << 16)) return -1;
-    ActorClass *e = actor_class(actor);
-    if (e->gone == -2) e->gone = (int16_t)gone_slot(actor);
-    return e->gone;
+
+static int gone_find(uint64_t key) {  // its slot, or -1: not destroyed
+    for (int p = 0; p < GONE_PROBES; p++)
+        if (g_gone[(key + p) % GONE_SLOTS].key == key) return (int)((key + p) % GONE_SLOTS);
+    return -1;
+}
+
+static void gone_keep(uint64_t key, const float at[3]) {
+    if (gone_find(key) >= 0) return;
+    int k = (int)(key % GONE_SLOTS);
+    for (int p = 0; p < GONE_PROBES; p++) {
+        int s = (int)((key + p) % GONE_SLOTS);
+        if (!g_gone[s].key) { k = s; break; }
+        if (g_gone[s].at_frame < g_gone[k].at_frame) k = s;
+    }
+    g_gone[k].key = key, g_gone[k].at_frame = renderer_present_count();
+    memcpy(g_gone[k].at, at, sizeof g_gone[k].at);
+}
+
+static bool gone_near(const float at[3], float r) {  // a player within r of it
+    float p[3];
+    for (int i = 0; i < g_n; i++)
+        if (player_pos(coop_player(i), p) && (p[0] - at[0]) * (p[0] - at[0]) + (p[2] - at[2]) * (p[2] - at[2]) < r * r)
+            return true;
+    return false;
 }
 
 static bool gone_watched(const float at[3]) {  // a player near it, or in view
-    float p[3], nx, ny;
+    float nx, ny;
     bool front;
-    for (int i = 0; i < g_n; i++)
-        if (player_pos(coop_player(i), p) &&
-            (p[0] - at[0]) * (p[0] - at[0]) + (p[2] - at[2]) * (p[2] - at[2]) < GONE_NEAR * GONE_NEAR)
-            return true;
+    if (gone_near(at, GONE_NEAR)) return true;
     extern float widescreen_factor(void);
     return view_point(at, 16.0f / 9.0f * widescreen_factor(), &nx, &ny, &front) && front && fabsf(nx) < 1.15f &&
            fabsf(ny) < 1.15f;
 }
 
-// Before an actor's update: true when it was one of these made again where it's seen, now killed.
+// Before an actor's update: true when it was one of these made again where it's seen, now killed. (Looked at once,
+// on its first update.)
 static bool gone_check(Cpu *c, uint64_t actor) {
-    int k = gone_slot_of(actor);
     g_gone_dead_before = (LD32(actor + 0x40) & ACTOR_DEAD) != 0;
-    if (k < 0 || g_gone[k].actor == actor) return false;
-    g_gone[k].actor = actor;
-    if (!g_gone[k].dead) return false;  // (new, or back after its screen was unloaded)
+    if ((LD32(actor + 0x18) & 0xffffff) != ('O' | 'b' << 8 | 'j' << 16)) return false;
+    ActorClass *e = actor_class(actor);
+    if (e->gone == GONE_NOTED && !g_gone_dead_before) e->gone = GONE_NEW;  // (alive: made again at the same address)
+    if (!e->key || e->gone != GONE_NEW) return false;
+    e->gone = GONE_LIVE;
+    int k = gone_find(e->key);
+    if (k < 0 || g_gone_dead_before) return false;
     extern const char *chaos_current_level(void);  // runtime/ui/chaos_overlay.mm
     const char *lv = chaos_current_level();
     float at[3];
     if (!actor_pos(actor, at)) memcpy(at, g_gone[k].at, sizeof at);
     if (!lv || strcmp(lv, "Field") || !gone_watched(at)) {
         CLOG("[coop] %.40s back where nobody sees it\n", (const char *)(uintptr_t)(actor + 0x18));
-        g_gone[k].dead = false;
+        g_gone[k].key = 0;
         return false;
     }
     uint64_t saved[31], sp = c->sp, pc = c->pc;
@@ -1628,22 +1736,23 @@ static bool gone_check(Cpu *c, uint64_t actor) {
     guest_call(c, GA(ACTOR_KILL));
     memcpy(c->x, saved, sizeof saved);
     c->sp = sp, c->pc = pc;
+    e->gone = GONE_NOTED;
     CLOG("[coop] %.40s made again in view at (%.2f %.2f %.2f): kept gone\n", (const char *)(uintptr_t)(actor + 0x18),
          at[0], at[1], at[2]);
     return true;  // (still gone: its next one is checked the same way)
 }
 
-// After an actor's update: where it is, and whether that update destroyed it.
+// After an actor's update: whether it was destroyed.
 static void gone_note(uint64_t actor) {
-    int k = gone_slot_of(actor);
-    if (k < 0 || g_gone[k].actor != actor) return;
-    if (!(LD32(actor + 0x40) & ACTOR_DEAD)) {
-        actor_pos(actor, g_gone[k].at);
-        return;
-    }
-    if (g_gone_dead_before) return;  // (killed before this update: its screen unloaded, it comes back whole)
-    if (!g_gone[k].dead) CLOG("[coop] %.40s destroyed\n", (const char *)(uintptr_t)(actor + 0x18));
-    g_gone[k].dead = true;
+    if (!(LD32(actor + 0x40) & ACTOR_DEAD) || (LD32(actor + 0x18) & 0xffffff) != ('O' | 'b' << 8 | 'j' << 16)) return;
+    ActorClass *e = actor_class(actor);
+    if (!e->key || e->gone == GONE_NOTED) return;
+    e->gone = GONE_NOTED;
+    float at[3];
+    if (!actor_pos(actor, at)) return;
+    if (g_gone_dead_before && !gone_near(at, GONE_TAKER)) return;  // (its screen unloaded: it comes back whole)
+    gone_keep(e->key, at);
+    CLOG("[coop] %.40s destroyed%s\n", (const char *)(uintptr_t)(actor + 0x18), g_gone_dead_before ? " (taken)" : "");
 }
 
 static void scale_s(Cpu *c, int r, float k) {  // (a float register's scalar, sN, times k)
@@ -1661,10 +1770,14 @@ static void set_s(Cpu *c, int r, float f) { memcpy(&c->v[r], &f, 4); }
 static void active_box(Cpu *c) {
     float hx, hz, oz, p1[3], p[3];
     memcpy(&hx, &c->v[3], 4), memcpy(&hz, &c->v[4], 4), memcpy(&oz, &c->v[5], 4);
-    if (!player_pos(coop_player(0), p1)) return;
-    float z0 = oz - hz, z1 = oz + hz;  // (from Player 1)
+    // Only in play, and only for a player inside the screens made: as a file loads the Links stand at the map's origin
+    // or where they were in the level before, and taken in, the box woke a large part of the Field at once - the
+    // game ran out of memory (user 2026-10-28: File 3 loaded from Angler's Tunnel, four players).
+    if (!g_back_on || !player_pos(coop_player(0), p1) || (fabsf(p1[0]) < 1 && fabsf(p1[2]) < 1)) return;
+    float z0 = oz - hz, z1 = oz + hz, far_x = LOAD_W * g_box / 2, far_z = LOAD_D * g_box / 2;  // (from Player 1)
     for (int i = 1; i < g_n; i++)
-        if (player_pos(coop_player(i), p) && p[1] > -500.0f) {  // (not taken off the map)
+        if (player_pos(coop_player(i), p) && p[1] > -500.0f &&  // (not taken off the map)
+            fabsf(p[0] - p1[0]) < far_x && fabsf(p[2] - p1[2]) < far_z) {
             hx = fmaxf(hx, fabsf(p[0] - p1[0]) + SCREEN_W);
             z0 = fminf(z0, p[2] - p1[2] - SCREEN_D), z1 = fmaxf(z1, p[2] - p1[2] + SCREEN_D);
         }
@@ -1841,6 +1954,10 @@ int rt_coop_hook(Cpu *c, int which) {
               // offset deep - grown to take in every player
         if (coop_field()) active_box(c);
         return 0;
+    case 36:  // COOP_WARP_OBJ_TOUCH_SITE - ldrb w8, [x8, #0x43]: a player actor (x8) stepped into a warp hole object
+        return warp_hole(c, true);
+    case 37:  // COOP_WARP_OBJ_LEAVE_SITE - ldrb w8, [x8, #0x43]: ... stepped out of it
+        return warp_hole(c, false);
     }
     return 0;
 }
@@ -1989,6 +2106,7 @@ void coop_level_change(const char *level, const char *locator) {
 // Once per frame on the game thread (runtime/hle/input.c, npad 1's poll).
 void coop_tick(Cpu *c) {
     g_game_thread = pthread_self(), g_game_thread_known = true;
+    camera_back_undo();
     extern int game_in_play(void);
     static bool in_play;
     bool play = game_in_play();
