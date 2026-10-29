@@ -1095,5 +1095,14 @@ _COOP_HOOKS = {
     # A state machine's change of state (main+0xd34660: x0 the machine, Link's at +0x4e0; w1 the state): another
     # player's Link sent to the dead state (0x12, 0x13), whose start plays the game over, is knocked out instead.
     A.COOP_DEAD_STATE_SITE: (0xd100c3ff, (A.COOP_DEAD_STATE_RET,), 'sub sp, sp, #0x30: a state machine changes state'),
+    # The level's screens around Player 1 (main+0x85c280, each frame), each a box centred on him: those it takes in
+    # get their objects made (s1 across x s2 deep, from a table by the level's kind at main+0x1701e40: the Field's
+    # 75 x 60), those outside a larger one lose them (s0..s3 its half sizes: 90 x 72), and those inside a third are
+    # active - their ground solid, their objects running (s3, s4 half sizes, s5 its offset deep, main+0x1701ed4: about
+    # 4 x 3 screens on the Field). With co-op the third takes in every player and the screen around him, so each one
+    # stands on ground, and the first two grow with the camera's zoom, so the view doesn't reach past what's made.
+    A.COOP_LOAD_BOX_SITE: (0xf0007297, (), 'adrp x23: the box of screens whose objects are made (s1 x s2)'),
+    A.COOP_KEEP_BOX_SITE: (0x0d4092e0, (), 'ld1 {v0.s}[1], [x23]: the box of screens whose objects are kept (s0..s3)'),
+    A.COOP_ACTIVE_BOX_SITE: (0x1e233808, (), 'fsub s8, s0, s3: the box of screens that are active (s3, s4, s5)'),
 }
 HOOKS.update({a: h for a, h in _COOP_HOOKS.items() if a})

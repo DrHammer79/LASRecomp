@@ -19,16 +19,17 @@ float widescreen_factor(void) { return g_wide; }
 // Effects drawn as a mesh around the camera, sized to cover a 16:9 view: with the widened camera their outer edge
 // shows (Mysterious Woods fog ring: a hard-edged oval at 32:9, a stray cloud piece at the far left). Their draws
 // get a viewport widened by the widescreen factor (centred), so they cover the window as they cover 16:9.
-// Identified by fragment shader hash (both backends hash the shader code the same way). The co-op camera zoom widens
-// the view both ways (rt_fovy): such an effect is then stretched by it both ways too (*ky the vertical stretch).
+// Identified by fragment shader hash (both backends hash the shader code the same way). The co-op camera zoom reaches
+// further both ways (indoors widening the view, rt_fovy; on the Field moving the camera back): such an effect is then
+// stretched by it both ways too (*ky the vertical stretch).
 float widescreen_effect_stretch(uint64_t fs_hash, float *ky) {
     static const uint64_t k[] = {
         0xffad3b2d795231a7ull,  // Mysterious Woods fog ring (Field 06C...; found 2026-10-09 by skipping shaders)
         0xd66b33b13b2eac29ull,  // Mysterious Woods haze layer
         0x1372d4fe34dd4bb4ull,  // Mysterious Woods light-shaft boxes (their sides: vertical streaks at the far left)
     };
-    extern float coop_camera_zoom(void);  // runtime/hle/coop.c (1: the game's own view)
-    float zoom = ENV("LARECOMP_NO_ZOOM_STRETCH") ? 1.0f : coop_camera_zoom(), wide = g_wide > 1.0f ? g_wide : 1.0f;
+    extern float coop_camera_reach(void);  // runtime/hle/coop.c (1: the game's own view; zoomed: widened or moved back)
+    float zoom = ENV("LARECOMP_NO_ZOOM_STRETCH") ? 1.0f : coop_camera_reach(), wide = g_wide > 1.0f ? g_wide : 1.0f;
     *ky = 1.0f;
     if (wide <= 1.0f && zoom <= 1.0f) return 1.0f;
     // the interior backdrop (behind houses' rooms: its glow showed as a hard circle zoomed out, "Indoor zoom"; interiors
@@ -48,6 +49,11 @@ float widescreen_effect_stretch(uint64_t fs_hash, float *ky) {
         else if (g_room_wide) return wide;
     }
     if (!known) return 1.0f;
+    // the camera moved back instead (outdoors): the woods' fog is a mesh around Player 1, not the camera, and from
+    // further back its near side shrinks more than its middle - stretched by the zoom alone its edge showed in the
+    // window's corners (2x and 3x)
+    extern float coop_camera_zoom(void);
+    if (coop_camera_zoom() == 1.0f && zoom > 1.0f) zoom = 1.0f + (zoom - 1.0f) * 1.6f;
     *ky = zoom;
     return wide * zoom;
 }
@@ -116,15 +122,17 @@ float rt_cull_aspect(float orig) {
 // Sky and sea pieces past the north edge (tools/patches.py SKYSEA_BOX_SITES): a piece shows while Link is within
 // its reach plus half a 16:9 view (7.5). A wider view reaches further: half its extra width, doubled for the far
 // (top) edge of the perspective view, where the sky is. Local co-op's zoomed-out camera reaches further the same way.
-extern float coop_camera_zoom(void);  // runtime/hle/coop.c (1: the game's own view)
+extern float coop_camera_zoom(void);   // runtime/hle/coop.c (1: the game's own view)
+extern float coop_camera_reach(void);  // (... widened or moved back)
 float rt_skysea_margin(void) {
-    float w = (g_wide > 1.0f ? g_wide : 1.0f) * coop_camera_zoom();
+    float w = (g_wide > 1.0f ? g_wide : 1.0f) * coop_camera_reach();
     return w > 1.0f ? 15.0f * (w - 1.0f) : 0.0f;
 }
 
 // Vertical field of view: unchanged for wide outputs; for tall ones (factor < 1) widened so the
-// horizontal view stays what the game shows at 16:9. Local co-op's zoomed-out camera widens it again, by its zoom
-// (the camera and the culling pass both load it here, so what comes into view is drawn).
+// horizontal view stays what the game shows at 16:9. Local co-op's zoomed-out camera widens it again indoors, by its
+// zoom (the camera and the culling pass both load it here, so what comes into view is drawn; on the Field the zoom
+// moves the camera back instead: coop_camera_zoom() is 1 there).
 float rt_fovy(float orig) {
     static float last = -1;
     if (orig != last && ENV("LARECOMP_LOG_CULL")) { LOG("[widescreen] fovy field %f\n", orig); last = orig; }

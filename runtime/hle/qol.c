@@ -206,7 +206,7 @@ bool rt_no_buff_actor(uint32_t type) {
 // switched P <-> X as the setting changes, live.
 static uint64_t g_tilt_obj;
 static int g_tilt_applied = -1;  // blur removal as last applied (-1: not yet)
-RT_ON_RESET(qol_reset) { g_tilt_obj = 0; g_tilt_applied = -1; }  // (reboot: a new post-process)
+RT_ON_RESET(qol_reset) { g_tilt_obj = 0; g_tilt_applied = -1; }  // (reboot: a new post-process; the focus offset lapses)
 
 void rt_tilt_obj(uint64_t obj) { g_tilt_obj = obj; g_tilt_applied = -1; }
 
@@ -251,9 +251,36 @@ static void setting_at_tick(void) {
     last = now;
 }
 
+// The tilt-shift's focus distance (the object's +0x40 and +0x80: 26.5 on the Field, the distance from the camera it
+// draws sharp) moved out by this much: local co-op's camera, moved back to zoom out (runtime/hle/coop.c), would
+// otherwise blur Player 1 and keep the band it shows sharp nearer the screen's bottom. The game's own value is kept
+// and the offset added to it each frame; an offset not given again within FOCUS_HOLD frames lapses (play ended, a
+// level change, co-op off: the game's own again).
+#define FOCUS_HOLD 4
+static float g_focus_add;
+static uint64_t g_focus_at;
+void rt_tilt_focus_add(float d) {
+    extern uint64_t renderer_present_count(void);
+    g_focus_add = d, g_focus_at = renderer_present_count();
+}
+static void tilt_focus_tick(void) {
+    extern uint64_t renderer_present_count(void);
+    static float orig[2], wrote[2];
+    static uint64_t obj;
+    if (!g_tilt_obj) return;
+    float add = renderer_present_count() - g_focus_at <= FOCUS_HOLD ? g_focus_add : 0.0f;
+    for (int k = 0; k < 2; k++) {
+        float *f = (float *)(uintptr_t)(g_tilt_obj + (k ? 0x80 : 0x40));
+        if (obj != g_tilt_obj || *f != wrote[k]) orig[k] = *f;  // (the game's own: a new object, or it changed it)
+        *f = wrote[k] = orig[k] + add;
+    }
+    obj = g_tilt_obj;
+}
+
 // Game thread, once per frame (runtime/hle/input.c).
 void qol_tick(void) {
     setting_at_tick();
+    tilt_focus_tick();
     static int env = -1;  // LARECOMP_BLUR_REMOVAL=0/1: test override
     if (env < 0) { const char *e = getenv("LARECOMP_BLUR_REMOVAL"); env = e ? atoi(e) != 0 : 2; }
     int want = env == 2 ? g_settings.blur_removal : env;
