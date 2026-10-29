@@ -45,6 +45,11 @@ for players 2.. (npad ids 1..7, `GetNpadStyleSet` reports them as FullKey).
 `COOP_PAD_STATE_SITE` and `COOP_APPLET_*` keep the controller manager polling
 and tell the controller applet it has that many players. A knocked-out player's
 input is blocked. Both sticks pressed in (L3+R3) puts a player on Player 1.
+Player 1's own controller follows the one in use (#455: a press, or a stick
+pushed while his rests, on another pad makes it his), but never one that
+another player has: their pads' events go to their slots before that check,
+and neither a pad added nor the one left when his is unplugged becomes his if
+it's in a slot (`tools/test_active_pad.c`, with two players and three pads).
 
 The game reads which controllers are connected when the npad's "style set
 changed" event is signalled. A controller turned on after the game had read
@@ -333,8 +338,17 @@ to 1.6 in 0.1 steps (Camera zoom, Normal to Out 60%; default Out 50%). With
 "fit everyone" on, the camera zooms out further until every player who is up
 is inside 70% of the view (`back_need`), up to "Fit up to" (Out 10% to Out
 200%: 1.1 to 3.0; default 3.0), eased in and out, and never closer than the
-base. Out of play, and with co-op off, it is 1. The sky and sea margin
-(`rt_skysea_margin`) grows with it (`coop_camera_reach()`).
+base. Out of play it is 1. The sky and sea margin (`rt_skysea_margin`) grows
+with it (`coop_camera_reach()`).
+- **On with co-op, always, or off** ("Zoom out", `coop_zoom_mode`, `zoom_on`):
+  With co-op (the default) zooms with 2 players or more, as before, so a game
+  alone keeps the game's own camera. Always zooms playing alone too: of the
+  co-op hooks only the zoom's run then (`zoom_hook`: `COOP_CAMERA_SITE`, the
+  three boxes of screens, and on the Field the actors' updates for cut grass
+  and thrown rocks only - zoomed out, the screen Link just left is still in
+  view, so what he cut there is kept gone as with co-op). With no other player
+  fit adds nothing (its rows show only with co-op). Off: 1 with co-op too. The
+  section is shown without co-op ("Camera", under Players); hidden on 1.0.0.
 
 **On the Field the camera is moved back** (`camera_back`, at
 `COOP_CAMERA_SITE`, right after the camera's view matrix is set). The view
@@ -560,8 +574,9 @@ off, one row. On, four headings:
 | | Revive time | coop_revive_s | 4 | seconds of holding A to revive (knocked out) |
 | | Other players' hearts | coop_hud | 0 | 0 bottom left, 1 bottom right, 2 top right (own hearts) |
 | | Hearts in player colors | coop_heart_colours | 1 | hearts in each player's colour, Player 1's too (own hearts) |
-| Co-op camera | Camera zoom | coop_zoom | 5 | the least zoom, 10% steps out: 0 normal .. 6 out 60% |
-| | Zoom out to fit everyone | coop_camera_fit | 1 | further out to keep every player in view |
+| Camera | Zoom out | coop_zoom_mode | 0 | 0 with co-op (2+ players), 1 always (alone too), 2 off; shown without co-op |
+| | Camera zoom | coop_zoom | 5 | the least zoom, 10% steps out: 0 normal .. 6 out 60% |
+| | Zoom out to fit everyone | coop_camera_fit | 1 | further out to keep every player in view (shown with co-op) |
 | | Fit up to | coop_zoom_fit | 20 | the furthest fit goes, 10% steps: 1 out 10% .. 20 out 200% (3x as far) |
 | | Indoor zoom | coop_zoom_indoor | 0 | houses, caves, dungeons: 0 normal .. 6 out 60%, no fit |
 | Co-op rules | Bring lost players back | coop_leash | 1 | players off screen are brought back to Player 1 |
