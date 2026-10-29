@@ -724,6 +724,12 @@ seen in play with co-op on and its cause isn't known yet: the log line names it.
     above the door frame" not reproduced); the Spiked Beetle's reaction part
     among those that follow the target (`Togezo:EnemyReactionCom`). A Gel
     (a split red Zol) wasn't brought about by a script.
+  - The pause menu's hold writes every position copy of the other Links
+    (`k_pos_copies`, found on a standing Link) whatever their state - written
+    for good, as the spikes' first move did, one of them knocked back held a
+    pointer and the game crashed. Held: 16 pauses with Player 2 bouncing in
+    the spikes (kinds 11 and 3), 16 with him knocked out asleep - no crash
+    (his update doesn't run while held, and every copy is put back).
 
 ## Not done or not checked
 
