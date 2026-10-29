@@ -285,9 +285,22 @@ stairs' rock, `ObjRock-4800A5005B88BEDC`, back as he stepped onto them).
   each moved below the one it overlaps at most once (moved while it was
   within `h` of it, `y + h` could still test within it by a rounding: the HUD
   looped forever and the game locked up with two players by a knocked-out
-  one). A knocked-out player hit twice within 3 s (`DOWN_HITS`: he lies in
-  spikes, knocked back by each hit) is put on Player 1's spot, still knocked
-  out.
+  one).
+- **Knocked out in spikes:** each spike hit knocked him back (kind 11), the
+  knockback ended on the spikes and the next began - he never lay still. A
+  knocked-out player isn't knocked back again (`dead_state`: a change to a
+  state of kind 11 stays undone; the hit that knocked him out plays out), and
+  two such hits within 3 s (`DOWN_HITS`) put him on Player 1's spot
+  (`down_move_tick`): his state changed to the first of kind 0 through the
+  game's own change (`COOP_DEAD_STATE_SITE`'s function), then taken off the
+  map half a second and put on Player 1 as a player lost below the world is.
+  Moved while knocked back or falling - the collision's position, or every
+  copy of it a standing Link keeps (one of those held a pointer then: written
+  over, the game crashed) - his state put him back in the spikes. For 2 s
+  after, hits don't count (the spikes' last contact followed him), and one
+  already on Player 1's spot isn't moved. Checked in Angler's Tunnel's spike
+  room (06B): Player 2 knocked out in the spikes is put on Player 1 once and
+  lies there; the build before kept him bouncing in them (kinds 11 and 3).
 - **Getting up:** a hit that knocks a player out leaves him in the knocked-back
   state (kind 11), which never ended under the lying pose, so a revived player
   couldn't move until a door reset him. The pose waits for his state to be
@@ -572,6 +585,7 @@ Test switches (environment):
 | `LARECOMP_COOP=<n>` | the player count, without touching the settings |
 | `LARECOMP_COOP_LOG=1` | `[coop]` lines: Links made and placed, hits, knock-outs, exits, target changes, positions every 30 frames |
 | `LARECOMP_COOP_DOWN=<p>,...` | those players knocked out 2 s after they are placed |
+| `LARECOMP_COOP_DOWN_AT=<frame>` | with `LARECOMP_COOP_DOWN`: at that frame instead (after a warp) |
 | `LARECOMP_COOP_DIE=<p>,...` | those players sent to the dead state 3 s after they are placed |
 | `LARECOMP_COOP_HP=<p>:<q>` | player p's hearts set to q quarters 2 s after he is placed |
 | `LARECOMP_COOP_AT=<frame>:<n>` | the player count changed to n at that frame, as from the menu (late controllers) |
@@ -699,6 +713,17 @@ seen in play with co-op on and its cause isn't known yet: the log line names it.
     play, only as a level loads.
   - A copy of the user's File 3 loaded with 4 players: all stand, no
     allocation failure.
+  - The follow-up checks, each also run on the build before the round
+    (`EXE=` in `build/run_test.sh`): Angler's Tunnel's spikes (above); the
+    Angler Fish's room - Player 3 held 4 below a knocked-out Player 2: no
+    prompt; beside him: the prompt; a side-view room with collision on,
+    Player 2 dropped onto Player 1's head: through to the floor at once (the
+    build before: on his head 1.5 s); the dungeon's door walked out of and in
+    with 4 players at Out 50%, and the fight room's door with collision on: in
+    both builds everyone through, nobody left on the door (the user's "stuck
+    above the door frame" not reproduced); the Spiked Beetle's reaction part
+    among those that follow the target (`Togezo:EnemyReactionCom`). A Gel
+    (a split red Zol) wasn't brought about by a script.
 
 ## Not done or not checked
 
@@ -724,9 +749,12 @@ seen in play with co-op on and its cause isn't known yet: the log line names it.
   doesn't die, so the game over itself wasn't seen.
 - **A-button actions:** event actions other than chests, signs and talks are
   routed the same way (any type but the lift and the pull), unchecked.
-- **Not tried in the game:** a Gel clinging (needs a split red Zol), a
-  knocked-out player in spikes, the Angler Fish's revive prompt, a 4-player
-  zoomed-out door entry in Angler's Tunnel.
+- **Not seen in the game:** a Gel clinging (a split red Zol wasn't brought
+  about by a script), the Spiked Beetle knocked back by another player's hit
+  (its reaction part is now followed: seen in the log), the user's other
+  Links "stuck above the door frame" (not reproduced at Angler's Tunnel's
+  doors), the camera zooming in and out fast (not reproduced; no snap in
+  play logged frame by frame).
 - **Enemy kinds** besides zombies, Moblins and Zols weren't checked. One
   whose chasing is in a component not named `...React...` or `...PlayerComp`
   would still go to Player 1. Bosses weren't checked.
