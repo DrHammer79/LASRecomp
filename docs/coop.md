@@ -9,7 +9,9 @@ Everything is in `runtime/hle/coop.c` (game logic), `runtime/ui/coop_hud.mm`
 (the other players' hearts, the "Zzz" bubbles) and hook sites in
 `tools/patches.py` (`_COOP_HOOKS`). Co-op is off by default: with
 `coop_players = 1`, every hook returns 0 and runs its own instruction, so the
-game plays exactly as without the feature.
+game plays exactly as without the feature - unless "Zoom out" is set to
+Always, when the zoom's own hooks run alone (`zoom_hook`, under "Camera
+zoom").
 
 ## How it works
 
@@ -562,7 +564,8 @@ end and in both `patches_v1_0_*.h` tables, in the same order.
 ## Settings (Controls tab)
 
 Right under Inputs (`coop_options` in `runtime/ui/controls_ui.mm`): with co-op
-off, one row. On, four headings:
+off, the Players row and the Camera heading (`zoom_options`; its zoom rows
+only with "Zoom out" Always). On, four headings:
 
 | Heading | Row | Key | Default | |
 |---|---|---|---|---|
@@ -608,7 +611,7 @@ Test switches (environment):
 | `LARECOMP_COOP_MOVE=<frame>:<p>:<x>:<y>:<z>[:hold]` | player p put there at that frame (left far away); `:hold` keeps him there |
 | `LARECOMP_COOP_ZOOM=<factor>` | the camera zoom forced (`build/zoom_audit.sh`) |
 | `LARECOMP_NO_ZOOM_STRETCH=1` | camera-attached effects not stretched by the zoom (to see what it fixes) |
-| `LARECOMP_TRACK_RESPAWN=1` | `[respawn]` lines: a rock or grass actor made again under its name (came back) |
+| `LARECOMP_TRACK_RESPAWN=1` | `[respawn]` lines: a rock or grass actor made again under its name (came back), where, Player 1's distance and SEEN when near a player or in view; with co-op, or alone with "Zoom out" Always |
 
 What was checked on 1.0.1, mostly with the test inputs above and
 `LARECOMP_WARP_AT`:
@@ -702,7 +705,25 @@ seen in play with co-op on and its cause isn't known yet: the log line names it.
 - **Player 1's talk:** Player 1 talks to the shopkeeper twice while Player 2
   stands across the shop. Player 2 stays where he is, and still comes in
   with Player 1 through the door.
-- **Co-op off:** unchanged.
+- **Co-op off:** unchanged with "Zoom out" at With co-op (the default).
+- **"Zoom out"** (`build/zoom_solo.sh`, frame 2600 of the save seed's Tal Tal
+  Heights and Marin and Tarin's house): alone at With co-op the game's own
+  view, alone at Always the Field as co-op's Out 50%, two players at Off the
+  game's own view, alone at Always with Indoor zoom Out 30% the room zoomed
+  out (its backdrop stretched), and at With co-op the game's own room. Alone
+  at Always and Out 60% (`build/zoom_solo_grass.sh`), spin attacks in tall
+  grass south of Mabe Village and a walk away and back: what he cut is noted,
+  nothing came back in view.
+- **The boulder carried past a screen's edge** (`build/rock_run.sh`, the
+  user's "picking up the boulder and running past slightly" 2026-10-29): at
+  Tal Tal Heights' start, two players and alone at Always, Player 1 lifts the
+  boulder, runs east past the edge and back: it isn't made again, and none of
+  the 44 rocks and grass made again was near a player or in view (47 to 58
+  units away, `[respawn]`). Not reproduced on this build; the user's report
+  likely came from the build before the evening round's fix.
+- **Upstream's controller tests** (`tools/test_active_pad.c`,
+  `tools/test_rumble.c`: both include `runtime/hle/input.c`): build and pass at
+  each of the commits, the first with co-op cases (two players, three pads).
 - **The evening round** (user playtest 2026-10-28):
   - Revive prompts (`build/hud_pair.sh`): 4 players on one spot, Player 2
     knocked out, the others stepping round him, at the user's 3840x2071 window:
