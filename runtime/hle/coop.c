@@ -514,67 +514,164 @@ static bool player_screen(int i, float lift, float w, float h, float *sx, float 
     return true;
 }
 
-// ---- The camera zoomed out (settings coop_zoom, coop_camera_fit, coop_zoom_fit): its field of view widened by this
-// (runtime/hle/widescreen.c rt_fovy, also the culling pass's, and the sky and sea's reach). coop_zoom 10% steps out
+// ---- The camera zoomed out (settings coop_zoom, coop_camera_fit, coop_zoom_fit): g_zoom, coop_zoom 10% steps out
 // always (up to 60%); with coop_camera_fit, further out as far as it takes to keep every player who is up in view, up
-// to coop_zoom_fit steps (up to 100%: twice the view), never in of coop_zoom, eased in and out. 1 out of play and
-// without co-op.
+// to coop_zoom_fit steps (up to 200%: three times as far), never in of coop_zoom, eased in and out. 1 out of play and
+// without co-op. On the Field the camera is moved back by it (camera_back); indoors its field of view is widened
+// instead (runtime/hle/widescreen.c rt_fovy, also the culling pass's).
+// Widening the view on the Field first (to 2.3): its top edge ran toward the horizon, so each step out needed far more
+// of the world made and drawn - at 2.5 the game's own thread took 13 ms a frame, and its frame pacing fell to 30 fps.
+// Moved back, the view grows evenly: at 3 the game's thread took 6.6 ms, with the screens it makes anyway.
 static float g_zoom = 1.0f;
-float coop_camera_zoom(void) { return g_zoom; }
+static bool g_back_on;          // (the zoom moves the camera back: on the Field)
+float coop_camera_zoom(void) { return g_back_on ? 1.0f : g_zoom; }  // (the field of view's: rt_fovy, effect stretch)
+float coop_camera_reach(void) { return g_zoom; }                    // (how much further the view reaches)
 
-// On the Field the game makes the level objects - tall grass, grass, rocks, trees - of the 7 x 7 screens (15 x 12 each)
-// around Player 1's, and only those: past them the ground shows bare earth where tall grass goes (dark ovals - "weird
-// shadows" zoomed far out, user report 2026-10-28) and the rest is missing, and further out comes the sky's black. The
-// zoom stays inside ROOM_X x ROOM_Z of Player 1 - those screens wherever he is in his (3 screens each way, less a
-// tall grass patch's reach and some ground lower than him): the view as drawn reaches past them once any point of
-// their edge (on the ground at his height) is in it. The most it can zoom out here (about 1.9 on the Field's open
-// ground, build/zoom_audit.sh), or 0 (no camera).
-#define ROOM_X 42.0f
-#define ROOM_Z 33.0f
+// The camera moved back (COOP_CAMERA_SITE: its view matrix just set). On the Field each frame: the view camera's eye -
+// its node's position (+0x510, +0xb0), which the culling pass builds its own view from - goes back along its view
+// axis by g_back, Player 1's distance from it times g_zoom - 1, and so do the view matrix (+0x580) and the renderer's
+// copy of it (x24 +0x20). The camera rebuilds its eye from what it follows every frame, so the move doesn't add up.
+// With it, what the game keeps by that distance (each the game's own value plus g_back, put back with g_back 0):
+//   the far plane (+0x56c: at 3x the far ground was cut off, black) and the shadows' reach (+0x560, +0x350, +0x734:
+//   24 each; past it a wedge of the ground was all in shadow); the tilt-shift's focus (qol.c rt_tilt_focus_add: Player
+//   1 was blurred, the sharp band nearer the screen's bottom).
+static float g_back, g_back_d0 = 24.8f;  // (the distance moved back; Player 1's distance from the eye before it)
+static void camera_back(Cpu *c) {
+    static const int keep[] = {0x560, 0x56c, 0x350, 0x734};
+    static uint64_t cam_was;
+    static float orig[4], wrote[4], eye_wrote[3], eye_moved[3];
+    uint64_t cam = c->x[23], node = LD64(cam + 0x510);
+    float p[3], v[3];
+    if (cam != view_camera() || !heap_ptr(node)) return;
+    float back = 0;
+    if (g_back_on && g_zoom > 1.0f && player_pos(host_player(), p) && cam_view(cam, p, v))  // (a camera not on him: 24.8)
+        g_back_d0 = -v[2] > 5.0f && -v[2] < 60.0f ? -v[2] : 24.8f, back = (g_zoom - 1.0f) * g_back_d0;
+    for (int k = 0; k < 4; k++) {
+        float *f = (float *)(uintptr_t)(cam + keep[k]);
+        if (cam != cam_was || *f != wrote[k]) orig[k] = *f;  // (the game's own: a new camera, or it changed it)
+        *f = wrote[k] = orig[k] + back;
+    }
+    extern void rt_tilt_focus_add(float);  // runtime/hle/qol.c
+    rt_tilt_focus_add(back);
+    g_back = back;
+    float *m = (float *)(uintptr_t)(cam + 0x580), *copy = (float *)(uintptr_t)(c->x[24] + 0x20);
+    float *eye = (float *)(uintptr_t)(node + 0xb0);
+    // (a camera that keeps its eye - a cutscene's, standing still - still holds last frame's: that move is taken off
+    // first, so it doesn't add up)
+    if (cam == cam_was && !memcmp(eye, eye_wrote, sizeof eye_wrote))
+        for (int k = 0; k < 3; k++) eye[k] -= eye_moved[k];
+    for (int k = 0; k < 3; k++) eye_moved[k] = back * m[2 + 4 * k], eye[k] += eye_moved[k];  // (row 2: its back axis)
+    memcpy(eye_wrote, eye, sizeof eye_wrote);
+    cam_was = cam;
+    m[14] -= back, copy[14] -= back;
+}
+
+// The zoom at which a point is inside frac of the view, the camera moved back (1: in it now, or nearer). From the
+// view before the move (the matrix holds it moved by g_back): x across, y up, depth d. Moved back by B = (Z - 1) d0,
+// it is in when |x| <= frac (d + B) tan(fovy / 2) aspect, and as much for y.
+static float back_need(const float p[3], float aspect, float frac) {
+    uint64_t cam = view_camera();
+    float v[3];
+    if (!cam) return 0;
+    cam_view(cam, p, v);
+    extern float rt_fovy(float);
+    float t = tanf(rt_fovy(*(const float *)(uintptr_t)(cam + 0x564)) * 0.5f), d = -(v[2] + g_back);
+    if (!(t > 0.01f && t < 10)) return 0;
+    float zx = 1.0f + (fabsf(v[0]) / (frac * t * aspect) - d) / g_back_d0, zy = 1.0f + (fabsf(v[1]) / (frac * t) - d) / g_back_d0;
+    return fmaxf(zx, zy);
+}
+
+// The level's screens around Player 1 (main+0x85c280, each frame; COOP_LOAD_BOX_SITE...). On the Field each screen
+// (15 x 12) has its objects made - tall grass, grass, rocks, trees, enemies, and its ground (MapStatic) - once it meets
+// a 75 x 60 box centred on Player 1 (7 x 7 screens), and loses them outside 90 x 72; only those meeting a much smaller
+// box (about 4 x 3 screens) are active: ground solid, objects running. Zoomed out the view reached past the screens
+// made, where the ground shows bare earth for tall grass (dark ovals - the "weird shadows" zoomed far out, user report
+// 2026-10-28), and another player in view one screen past the active ones fell through the ground. With co-op the
+// active box takes in every player (active_box), and the boxes that make and keep the screens grow by g_box with the
+// zoom, up to BOX_MAX.
+#define SCREEN_W 15.0f  // a Field screen (Field_01A .. Field_16P), across
+#define SCREEN_D 12.0f  // ... and deep
+#define LOAD_W 75.0f    // the box whose screens' objects are made (main+0x1701e40, the Field's)
+#define LOAD_D 60.0f
+#define BOX_STEP 0.25f
+#define BOX_MAX 2.0f
+#define BOX_LOAD_FRAMES 90     // (the screens a grown box takes in: their objects made about 40 frames on)
+#define BOX_SHRINK_FRAMES 300  // (5 s needing less before it shrinks back)
+static float g_box = 1.0f;        // the boxes' scale
+static float g_box_ready = 1.0f;  // ... the one whose screens are made by now
+static uint64_t g_box_at, g_box_less;
+static bool coop_field(void) {
+    extern const char *chaos_current_level(void);  // runtime/ui/chaos_overlay.mm
+    const char *lv = chaos_current_level();
+    return rt_coop_on() && lv && !strcmp(lv, "Field");
+}
+
+// The furthest the zoom can go before the view reaches past the screens a box of that scale makes (their edge, on the
+// ground at Player 1's height, less ROOM_MARGIN: a tall grass patch's reach, ground lower than him), or 0 (no camera).
+#define ROOM_MARGIN 2.0f
 #define ROOM_STEPS 32  // (points along each side)
-static float zoom_room(float aspect) {
+static float zoom_room(float aspect, float box) {
     float p[3], most = 1e9f;
-    bool front;
     if (!player_pos(coop_player(0), p) || !view_camera()) return 0;
+    float x0 = SCREEN_W * floorf((p[0] - LOAD_W * box / 2) / SCREEN_W) + ROOM_MARGIN;
+    float x1 = SCREEN_W * ceilf((p[0] + LOAD_W * box / 2) / SCREEN_W) - ROOM_MARGIN;
+    float z0 = SCREEN_D * floorf((p[2] - LOAD_D * box / 2) / SCREEN_D) + ROOM_MARGIN;
+    float z1 = SCREEN_D * ceilf((p[2] + LOAD_D * box / 2) / SCREEN_D) - ROOM_MARGIN;
     for (int k = 0; k < 4 * ROOM_STEPS; k++) {
-        float t = (float)(k % ROOM_STEPS) / ROOM_STEPS * 2 - 1, s = k / ROOM_STEPS & 1 ? 1.0f : -1.0f, nx, ny;
-        float c[3] = {p[0] + (k < 2 * ROOM_STEPS ? s * ROOM_X : t * ROOM_X), p[1],
-                      p[2] + (k < 2 * ROOM_STEPS ? t * ROOM_Z : s * ROOM_Z)};
-        if (view_point(c, aspect, &nx, &ny, &front) && front)  // (behind the camera: never in view)
-            most = fminf(most, fmaxf(fabsf(nx), fabsf(ny)) * g_zoom);  // (the zoom it comes into view at)
+        float t = (float)(k % ROOM_STEPS) / ROOM_STEPS, side = k / ROOM_STEPS;
+        float c[3] = {side == 0 ? x0 : side == 1 ? x1 : x0 + t * (x1 - x0), p[1],
+                      side >= 2 ? (side == 2 ? z0 : z1) : z0 + t * (z1 - z0)};
+        float z = back_need(c, aspect, 1.0f);  // (the zoom it comes into view at)
+        if (z > 0) most = fminf(most, z);
     }
     return most < 1e9f ? most : 0;
 }
+
+// The box for a zoom wanted: grown at once, shrunk after BOX_SHRINK_FRAMES wanting less; g_box_ready catches up once
+// the screens it takes in are made.
+static void box_tick(float need, float aspect) {
+    uint64_t now = renderer_present_count();
+    float box = 1.0f;
+    while (box < BOX_MAX && zoom_room(aspect, box) < need) box += BOX_STEP;
+    if (box >= g_box) g_box_less = 0;
+    if (box > g_box) g_box = box, g_box_at = now;
+    else if (box < g_box && !g_box_less) g_box_less = now;
+    else if (box < g_box && now - g_box_less > BOX_SHRINK_FRAMES) g_box = g_box_ready = box, g_box_less = 0;
+    if (now - g_box_at >= BOX_LOAD_FRAMES) g_box_ready = g_box;
+}
+RT_ON_RESET(coop_box_reset) { g_box = g_box_ready = 1.0f, g_box_at = g_box_less = 0; }
 
 // Indoors - any level but the Field: houses, caves, dungeons - only the room the camera frames is drawn, one screen:
 // zoomed out it sat small in black (at 2x, every dungeon and house in build/zoom_audit.sh), most houses with their
 // lighting's glow a hard circle. There the zoom is coop_zoom_indoor (Normal by default), without fit.
 static void zoom_tick(bool play) {
+    extern float widescreen_factor(void);  // (runtime/hle/widescreen.c: the window's aspect over 16:9)
     extern const char *chaos_current_level(void);  // runtime/ui/chaos_overlay.mm
     const char *lv = chaos_current_level();
     bool indoor = lv && *lv && strcmp(lv, "Field");
     float base = 1.0f + 0.1f * (indoor ? g_settings.coop_zoom_indoor : g_settings.coop_zoom);
     float top = indoor ? base : fmaxf(base, 1.0f + 0.1f * g_settings.coop_zoom_fit), want = base;
+    float aspect = 16.0f / 9.0f * widescreen_factor();
     bool fit = g_settings.coop_camera_fit && top > base;
+    g_back_on = play && coop_field();
     if (!play || !rt_coop_on()) want = 1.0f;
-    else if (fit) {  // (how far out each player is at the game's own view: x, y beyond 0.7 zoom out; never in of base)
-        extern float widescreen_factor(void);  // (runtime/hle/widescreen.c: the window's aspect over 16:9)
-        float far = 0, p[3], nx, ny, aspect = 16.0f / 9.0f * widescreen_factor();
-        bool front;
+    else if (fit) {  // (each player who is up inside 0.7 of the view; never in of base)
+        float p[3];
         for (int i = 1; i < g_n; i++)
-            if (!g_down[i] && player_pos(g_extra[i], p) && view_point(p, aspect, &nx, &ny, &front) && front)
-                far = fmaxf(far, fmaxf(fabsf(nx), fabsf(ny)) * g_zoom);
-        want = fminf(fmaxf(far / 0.7f, base), top);
+            if (!g_down[i] && player_pos(g_extra[i], p)) want = fmaxf(want, back_need(p, aspect, 0.7f));
+        want = fminf(want, top);
     }
     if (!fit || !play) g_zoom = want;
     else g_zoom += (want - g_zoom) * (want > g_zoom ? 0.06f : 0.02f);  // (out quicker than back in)
     if (fabsf(g_zoom - want) < 0.002f) g_zoom = want;
-    if (play && rt_coop_on() && !indoor && g_zoom > 1.0f) {  // (the screens made around Player 1: at once, not eased)
-        extern float widescreen_factor(void);
-        float room = zoom_room(16.0f / 9.0f * widescreen_factor());
+    const char *forced = play && rt_coop_on() ? ENV("LARECOMP_COOP_ZOOM") : NULL;  // (test)
+    if (g_back_on) {  // (inside the screens made around Player 1: at once, not eased)
+        box_tick(forced ? (float)atof(forced) : want, aspect);
+        float room = g_zoom > 1.0f ? zoom_room(aspect, g_box_ready) : 0;
         if (room > 0) g_zoom = fmaxf(fminf(g_zoom, room), 1.0f);
-    }
-    if (play && rt_coop_on() && ENV("LARECOMP_COOP_ZOOM")) g_zoom = (float)atof(ENV("LARECOMP_COOP_ZOOM"));  // (test)
+    } else
+        g_box = g_box_ready = 1.0f;
+    if (forced) g_zoom = (float)atof(forced);
 }
 
 // A player out of the camera's view (zoomed out as far as it goes) for LEASH_FRAMES is put back on Player 1 (setting
@@ -868,27 +965,64 @@ static uint64_t g_updating;  // the actor whose update is running (COOP_ACTOR_EX
 static pthread_t g_game_thread;  // (coop_tick's: only the game thread's updates take part)
 static bool g_game_thread_known;
 
-static bool on_game_thread(void) { return g_game_thread_known && pthread_equal(pthread_self(), g_game_thread); }
+static bool on_game_thread(void) {  // (per call of the actor hooks: pthread_self once per thread)
+    static __thread pthread_t self;
+    static __thread bool have;
+    if (!have) self = pthread_self(), have = true;
+    return g_game_thread_known && pthread_equal(self, g_game_thread);
+}
+
+// What an actor is, from its name (+0x18), worked out once: the update hooks (COOP_ACTOR_EXEC_*) run for every actor and
+// component every frame - about 21,000 a frame with the screens made out to a far zoom - and reading each name there
+// (snprintf, strstr; the grass and rocks' name hashed twice) cost the game thread about 2 ms a frame. Kept by the
+// actor's address and its name's first 24 bytes, folded (another actor made at the same address is worked out
+// again), in a table small enough for the CPU's cache.
+// An enemy's components update on their own (the owner at +0x48). The one it reacts to the player with
+// (EnemyReactionComponent: "<kind>:ReactionComp", "...ReactComp") keeps "Link" (Zombie:ReactionComp +0x278: Player 1's) -
+// a zombie walked to Player 1 whoever it targeted (tested 2026-10-28) - and its player follower (TailorPlayerComp):
+// these see its target as "Link" too (AC_ENEMY_PART). Not the others (collision, animation...): Player 1's sword hits it
+// whoever it targets.
+#define AC_SETS 16384
+#define AC_WAYS 4  // (an actor's set of four: the one seen longest ago makes way)
+enum { AC_OTHER, AC_ENEMY, AC_ENEMY_PART };
+typedef struct {
+    uint64_t actor, name;  // (its name's first 24 bytes, folded)
+    uint32_t seen;         // (the frame it was last looked up in)
+    int16_t gone;          // (its slot in g_gone, -1: none; -2: not looked up yet)
+    uint8_t what;
+} ActorClass;
+static ActorClass g_ac[AC_SETS][AC_WAYS];
+static void actor_class_forget(void) { memset(g_ac, 0, sizeof g_ac); }
+static ActorClass *actor_class(uint64_t actor) {
+    const char *nm = (const char *)(uintptr_t)(actor + 0x18);
+    uint64_t tag = LD64(actor + 0x18) ^ LD64(actor + 0x20) ^ LD64(actor + 0x28);
+    uint32_t now = (uint32_t)renderer_present_count();
+    // (the set: a multiplicative hash's top bits - actors sit on 4 KB boundaries, and the low bits used 64 sets of them)
+    ActorClass *set = g_ac[(uint32_t)(((actor >> 4) * 0x9E3779B97F4A7C15ull) >> 50) & (AC_SETS - 1)], *e = set;
+    for (int w = 0; w < AC_WAYS; w++) {
+        if (set[w].actor == actor && set[w].name == tag) return set[w].seen = now, &set[w];
+        if (set[w].seen < e->seen) e = &set[w];
+    }
+    e->seen = now;
+    char name[64];
+    snprintf(name, sizeof name, "%.63s", nm);
+    e->actor = actor, e->name = tag, e->gone = -2;
+    e->what = !strstr(name, "Comp") ? (strncmp(name, "Enemy", 5) ? AC_OTHER : AC_ENEMY)
+              : strstr(name, "React") || strstr(name, "Player") ? AC_ENEMY_PART : AC_OTHER;
+    return e;
+}
 
 static void actor_exec_begin(Cpu *c) {
     if (!g_settings.coop_targets || g_swap_on) return;
     uint64_t actor = g_updating;
     if (!actor) return;
-    char name[64];
-    snprintf(name, sizeof name, "%.63s", (const char *)(uintptr_t)(actor + 0x18));
-    if (strstr(name, "Comp")) {
-        // An enemy's components update on their own (the owner at +0x48). The one it reacts to the player with
-        // (EnemyReactionComponent: "<kind>:ReactionComp", "...ReactComp") keeps "Link" (Zombie:ReactionComp +0x278:
-        // Player 1's) - a zombie walked to Player 1 whoever it targeted (tested 2026-10-28) - and its player follower
-        // (TailorPlayerComp): these see its target as "Link" too. Not the
-        // others (collision, animation...): Player 1's sword hits it whoever it targets.
-        uint64_t owner = strstr(name, "React") || strstr(name, "Player") ? LD64(actor + 0x48) : 0;
-        if (!heap_ptr(owner)) return;
+    uint8_t what = actor_class(actor)->what;
+    if (what == AC_ENEMY_PART) {
+        uint64_t owner = LD64(actor + 0x48);
+        if (!heap_ptr(owner) || actor_class(owner)->what != AC_ENEMY) return;
         actor = owner;
-        snprintf(name, sizeof name, "%.63s", (const char *)(uintptr_t)(actor + 0x18));
-        if (strstr(name, "Comp")) return;
-    }
-    if (strncmp(name, "Enemy", 5)) return;
+    } else if (what != AC_ENEMY)
+        return;
     int t = enemy_target(actor);
     uint64_t gm = LD64(GA(GAME_MGR)), own = gm ? LD64(gm + 0x4b8) : 0;
     if (!t || !own || !collision_of(g_extra[t])) return;
@@ -1435,7 +1569,7 @@ static struct { uint64_t key, actor; float at[3]; bool dead; } g_gone[GONE_SLOTS
 // moves on kill theirs between updates (dead as the next one begins), and those come back whole - kept gone, at the
 // zoom's wide views the tall grass around was gone, bare earth in its place (2026-10-28).
 static bool g_gone_dead_before;  // (the actor updating was dead as its update began)
-static void gone_forget(void) { memset(g_gone, 0, sizeof g_gone); }
+static void gone_forget(void) { memset(g_gone, 0, sizeof g_gone), actor_class_forget(); }  // (its slots: looked up again)
 RT_ON_RESET(coop_gone_reset) { gone_forget(); }
 
 static int gone_slot(uint64_t actor) {  // its slot (taken for it), or -1: not one of these
@@ -1453,6 +1587,12 @@ static int gone_slot(uint64_t actor) {  // its slot (taken for it), or -1: not o
     g_gone[k].key = key;
     return k;
 }
+static int gone_slot_of(uint64_t actor) {  // (gone_slot, once per actor: actor_class; "Obj..." only)
+    if ((LD32(actor + 0x18) & 0xffffff) != ('O' | 'b' << 8 | 'j' << 16)) return -1;
+    ActorClass *e = actor_class(actor);
+    if (e->gone == -2) e->gone = (int16_t)gone_slot(actor);
+    return e->gone;
+}
 
 static bool gone_watched(const float at[3]) {  // a player near it, or in view
     float p[3], nx, ny;
@@ -1468,7 +1608,7 @@ static bool gone_watched(const float at[3]) {  // a player near it, or in view
 
 // Before an actor's update: true when it was one of these made again where it's seen, now killed.
 static bool gone_check(Cpu *c, uint64_t actor) {
-    int k = gone_slot(actor);
+    int k = gone_slot_of(actor);
     g_gone_dead_before = (LD32(actor + 0x40) & ACTOR_DEAD) != 0;
     if (k < 0 || g_gone[k].actor == actor) return false;
     g_gone[k].actor = actor;
@@ -1495,7 +1635,7 @@ static bool gone_check(Cpu *c, uint64_t actor) {
 
 // After an actor's update: where it is, and whether that update destroyed it.
 static void gone_note(uint64_t actor) {
-    int k = gone_slot(actor);
+    int k = gone_slot_of(actor);
     if (k < 0 || g_gone[k].actor != actor) return;
     if (!(LD32(actor + 0x40) & ACTOR_DEAD)) {
         actor_pos(actor, g_gone[k].at);
@@ -1504,6 +1644,31 @@ static void gone_note(uint64_t actor) {
     if (g_gone_dead_before) return;  // (killed before this update: its screen unloaded, it comes back whole)
     if (!g_gone[k].dead) CLOG("[coop] %.40s destroyed\n", (const char *)(uintptr_t)(actor + 0x18));
     g_gone[k].dead = true;
+}
+
+static void scale_s(Cpu *c, int r, float k) {  // (a float register's scalar, sN, times k)
+    float f;
+    memcpy(&f, &c->v[r], 4);
+    f *= k;
+    memcpy(&c->v[r], &f, 4);
+}
+static void set_s(Cpu *c, int r, float f) { memcpy(&c->v[r], &f, 4); }
+
+// The active screens (COOP_ACTIVE_BOX_SITE): the game's box around Player 1 (s3 across and s4 deep its half sizes, s5
+// its offset deep) grown to take in every other player and the screen around him - his ground solid, what's near him
+// running - wherever the view lets him be (the zoom keeps it inside the screens made). Every screen made active
+// instead held 30 fps at 2.5 (13 x 13 screens' objects running).
+static void active_box(Cpu *c) {
+    float hx, hz, oz, p1[3], p[3];
+    memcpy(&hx, &c->v[3], 4), memcpy(&hz, &c->v[4], 4), memcpy(&oz, &c->v[5], 4);
+    if (!player_pos(coop_player(0), p1)) return;
+    float z0 = oz - hz, z1 = oz + hz;  // (from Player 1)
+    for (int i = 1; i < g_n; i++)
+        if (player_pos(coop_player(i), p) && p[1] > -500.0f) {  // (not taken off the map)
+            hx = fmaxf(hx, fabsf(p[0] - p1[0]) + SCREEN_W);
+            z0 = fminf(z0, p[2] - p1[2] - SCREEN_D), z1 = fmaxf(z1, p[2] - p1[2] + SCREEN_D);
+        }
+    set_s(c, 3, hx), set_s(c, 4, (z1 - z0) / 2), set_s(c, 5, (z0 + z1) / 2);
 }
 
 int rt_coop_hook(Cpu *c, int which) {
@@ -1625,8 +1790,9 @@ int rt_coop_hook(Cpu *c, int which) {
         if (g_updating) coop_actor_updated(c, g_updating);
         g_updating = 0;
         return 0;
-    case 17:  // COOP_CAMERA_SITE - a camera's view matrix is set (x23)
+    case 17:  // COOP_CAMERA_SITE - a camera's view matrix is set (x23; x24 the renderer's copy)
         camera_seen(c->x[23]);
+        camera_back(c);
         return 0;
     case 18: case 19: {  // COOP_HEAL_SITE_0 / _1 - strh w8, [x9, #0x84]: the hearts after a heal; w23 the total uncapped
         int before = game_hearts(), total = (int)(int16_t)c->x[23];
@@ -1663,6 +1829,18 @@ int rt_coop_hook(Cpu *c, int which) {
         return warp_hole(c, false);
     case 32:  // COOP_DEAD_STATE_SITE - sub sp, sp, #0x30: a state machine (x0) changes to state w1
         return dead_state(c);
+    case 33:  // COOP_LOAD_BOX_SITE - adrp x23: s1 x s2 the box of screens whose objects are made
+        if (coop_field() && g_box != 1.0f) scale_s(c, 1, g_box), scale_s(c, 2, g_box);
+        return 0;
+    case 34:  // COOP_KEEP_BOX_SITE - ld1 {v0.s}[1], [x23]: s0, s1 (across) and s3, s2 (deep) the half sizes of the
+              // box of screens whose objects are kept
+        if (coop_field() && g_box != 1.0f)
+            for (int r = 0; r < 4; r++) scale_s(c, r, g_box);
+        return 0;
+    case 35:  // COOP_ACTIVE_BOX_SITE - fsub s8, s0, s3: s3 x s4 the half sizes of the box of active screens, s5 its
+              // offset deep - grown to take in every player
+        if (coop_field()) active_box(c);
+        return 0;
     }
     return 0;
 }
