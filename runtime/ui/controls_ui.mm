@@ -385,10 +385,11 @@ static void coop_options(void) {
 
     opt_section("Co-op camera");
     static const char *const outs[] = {"Normal", "Out 10%", "Out 20%", "Out 30%", "Out 40%", "Out 50%", "Out 60%",
-                                       "Out 70%", "Out 80%", "Out 90%", "Out 100%"};
+                                       "Out 70%", "Out 80%", "Out 90%", "Out 100%", "Out 110%", "Out 120%",
+                                       "Out 130%", "Out 140%", "Out 150%", "Out 160%", "Out 170%", "Out 180%",
+                                       "Out 190%", "Out 200%"};
     opt_choice("Camera zoom", &g_settings.coop_zoom, outs, COOP_ZOOM_MAX + 1, 5,
-               "How far out the camera always is outdoors. Far out, the next screen's enemies may wait until you walk "
-               "in.", false);
+               "How far out the camera always is outdoors.", false);
     opt_indent(1);
     opt_toggle("Zoom out to fit everyone", &g_settings.coop_camera_fit, true,
                "Zooms out further as players spread out, and back in as you regroup - never closer than Camera zoom.");
@@ -396,7 +397,8 @@ static void coop_options(void) {
         opt_indent(1);
         int f = g_settings.coop_zoom_fit - 1;
         if (opt_choice("Fit up to", &f, outs + 1, COOP_ZOOM_FIT_MAX, COOP_ZOOM_FIT_MAX - 1,
-                       "The furthest out it zooms to fit everyone. Below Camera zoom, Camera zoom is the furthest.",
+                       "The furthest out it zooms to fit everyone. Below Camera zoom, Camera zoom is the furthest. "
+                       "Far out, the overworld loads more around Player 1.",
                        false))
             g_settings.coop_zoom_fit = f + 1;
         opt_indent(-1);
