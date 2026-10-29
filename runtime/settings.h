@@ -28,6 +28,7 @@ enum { COOP_HEALTH_SHARED = 0, COOP_HEALTH_OWN = 1 };
 enum { COOP_KO_REVIVE = 0, COOP_KO_GAME_OVER = 1 };
 enum { COOP_HUD_BOTTOM_LEFT = 0, COOP_HUD_BOTTOM_RIGHT = 1, COOP_HUD_TOP_RIGHT = 2 };
 enum { COOP_ZOOM_MAX = 6, COOP_ZOOM_FIT_MAX = 20 };  // co-op camera zoom, in 10% steps out
+enum { COOP_ZOOM_WITH_COOP = 0, COOP_ZOOM_ALWAYS = 1, COOP_ZOOM_OFF = 2 };  // when the camera zoom is on
 enum { COOP_COLOURS = 8 };  // the co-op Playerlink.bfres colour sets: green, red, blue, yellow, purple, pink, black, white
 // System language served to the game (runtime/services/am.c GetDesiredLanguage, services/hid_set.c GetLanguageCode):
 // the game picks its text language from it, as it would from the Switch's own system setting, and the menus follow it
@@ -111,6 +112,7 @@ typedef struct {
     int coop_revive_s;   // co-op: seconds of holding A beside a knocked-out player to revive him
     bool coop_heart_colours;  // co-op: hearts in each player's colour (Player 1's own hearts too: runtime/nvn/texpatch.c)
     int coop_hud;        // co-op: where the other players' hearts show (COOP_HUD_*: runtime/ui/coop_hud.mm)
+    int coop_zoom_mode;  // the camera zoom below: COOP_ZOOM_WITH_COOP (2+ players), _ALWAYS (playing alone too), _OFF
     int coop_zoom;       // co-op: the camera zoomed out by this many 10% steps (0..COOP_ZOOM_MAX), the least it shows
     bool coop_camera_fit;  // co-op: ... and further out, as far as it takes to show every player
     int coop_zoom_fit;   // co-op: ... up to this many 10% steps out (1..COOP_ZOOM_FIT_MAX)
