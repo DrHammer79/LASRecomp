@@ -78,7 +78,9 @@ back in. A player put on Player 1 (a spawn, a door, being brought back,
 L3+R3) now passes through the others (`g_pass`) until he walks off the spot
 himself: 0.8 from where he was put, clear of every other Link (`pass_tick`).
 Until then the sweep skips a capsule where a passing player is, and every Link
-capsule in a passing player's own sweep.
+capsule in a passing player's own sweep. In side-view rooms (the camera zone
+thin in z: `game_side_view`, `widescreen.c`) Links never block each other: one
+jumping onto another stood on his head and stuck a second or two.
 
 **Doors and exits.**
 - Player 1 walks in through a door (`COOP_ENTER_SITE`) and the others ride on
@@ -135,7 +137,8 @@ alone.
   the others for half a second (`CLAIM_FRAMES`). Two players beside the same
   rock pressing A together don't both lift it.
 - Actions that play an event (a chest, a sign, talking: any type but the
-  lift, 4) play it on "Link", Player 1. The Link whose A starts one waits in
+  lift, 4, and a lever's pull, 3 - the player's own states) play it on
+  "Link", Player 1. The Link whose A starts one waits in
   his "open" state for the event to move him on, which for another player
   never came. So another player's A on one starts the component's action
   itself (`DOACTION_TRIGGER`) and his Link stays as he is. Items from chests go
@@ -184,7 +187,11 @@ into 07E). Only Player 1's contact fires a box (`COOP_EVENT_BOX_SITE`).
 **Warp holes.** An `AreaWarpHoleEventBox` keeps a player actor whose `+0x43`
 bit 6 is clear, then plays the jump and the "Where to?" menu for Player 1,
 whoever stepped in. Another player's Link reads as one with the bit set
-(`COOP_WARP_HOLE_TOUCH/LEAVE_SITE`). A dungeon's warp hole back to its entrance
+(`COOP_WARP_HOLE_TOUCH/LEAVE_SITE`). The overworld's warp holes are objects of
+their own with the same check (`COOP_WARP_OBJ_TOUCH/LEAVE_SITE`, main+0xcbd3e0 /
+main+0xcbd250): another player stepping in set the object's "player inside"
+flag, and its update walked Player 1 - everyone riding on him - slowly over to
+the hole and jumped him in. A dungeon's warp hole back to its entrance
 is an exit, which Player 1 already leads (`COOP_EXIT_TOUCH_SITE`).
 
 **Deaths.** A Link dies by his state machine (`+0x4e0`) changing to the dead
@@ -202,11 +209,18 @@ after. Its components update on their own (the owner at `+0x48`). The one it
 reacts to the player with keeps "Link" (`Zombie:ReactionComp +0x278`), and a
 zombie walked to Player 1 whoever it targeted. So the swap also covers its
 reaction component (the game's `EnemyReactionComponent`: `...ReactionComp`,
-`...ReactComp`) and its player follower (`TailorPlayerComp`), not the others
+`...ReactComp`, and for 28 kinds - Zols, Armos, Pokey, Togezo, Ghini... -
+`...ReactionCom`: missed, red Zols hopped at Player 1 whoever they targeted)
+and its player follower (`TailorPlayerComp`), not the others
 (collision, animation): Player 1's sword hits it whoever it targets. Checked
 with the graveyard zombies by Marin and Tarin's house, and a Moblin and a red
 Zol west of it with Player 1 17 units away: each goes for the player it
-targets. The rules:
+targets. The reaction component also reacts to hits by "Link": it sees the
+nearest player (`nearest_player`), not the one the enemy stays on - another
+player's hit knocked a turtle back from where its target stood, up onto a
+ledge (Angler's Tunnel). A Gel (`EnemyMiniZol`) goes for the nearest player
+throughout: one that jumped at its target and landed on another player clung
+to him, then went over to its target. The rules:
 - An enemy targets the nearest player who is up.
 - Within `TARGET_ENGAGE` (6 units, about 4 tiles) it keeps him until he is
   knocked out, so an attack, a wind-up or a boss pattern plays out on one
@@ -223,13 +237,19 @@ co-op the others cut and throw in screens Player 1 isn't in, and the view
 shows the screens around. Grass and rocks came back beside the players, and a
 thrown rock came back on the stairs in Player 1's way (the user's log: the
 stairs' rock, `ObjRock-4800A5005B88BEDC`, back as he stepped onto them).
-- Each one destroyed (actor `+0x40` bit 30 set by its own update: cut, or
-  thrown and broken) is remembered by its actor's name, the level object's id:
-  `ObjRock`, `ObjGrass`, `ObjGrass2x2`, `ObjLawn`, `ObjSkullStone`. The screens
-  the game unloads as Player 1 moves on kill theirs between updates (dead as
-  the next update begins): those come back whole. Counted as destroyed, the
+- Each one destroyed is remembered by its actor's name, the level object's id
+  (`ObjRock`, `ObjGrass`, `ObjGrass2x2`, `ObjLawn`, `ObjSkullStone`; its hash
+  worked out once per actor, `actor_class`). Destroyed: actor `+0x40` bit 30
+  set by its own update (cut, or thrown and broken), or set before it with a
+  player within `GONE_TAKER` (4 units: lifted, cut by another player's sword).
+  The screens the game unloads as Player 1 moves on kill theirs between
+  updates, far from everyone: those come back whole. Counted as destroyed, the
   tall grass around was kept gone at the zoom's wide views, bare earth in its
   place.
+- Only those destroyed take a slot (`GONE_SLOTS` 4096; when they're all taken
+  the one destroyed longest ago makes way). The first version took one for
+  every one seen: walking the Field filled the table, and from then on nothing
+  was kept (the user's session: 2 kept, cut grass and a thrown boulder back).
 - One made again while a player is within `GONE_NEAR` (10 units) of it or
   it's in view is killed before its first update (`ACTOR_KILL`, as its own
   break does): it isn't drawn and stays gone.
@@ -258,9 +278,16 @@ stairs' rock, `ObjRock-4800A5005B88BEDC`, back as he stepped onto them).
 - **Knocked out:** the player lies in the `down_lp` animation (`PLAY_ANIMATION`
   on his event component, played again after each of his own updates) with a
   breathing "Zzz" bubble over him. Another player holding A beside him (within
-  1.6) for `coop_revive_s` seconds revives him with 30% of the maximum and 2 s
+  1.6, height too: in a side view a player swimming above him had the prompt)
+  for `coop_revive_s` seconds revives him with 30% of the maximum and 2 s
   of no damage (`REVIVE_SAFE`). An "(A) Revive" prompt shows under a player
-  who can revive someone (`coop_revive_prompt`).
+  who can revive someone (`coop_revive_prompt`); two on one spot are stacked,
+  each moved below the one it overlaps at most once (moved while it was
+  within `h` of it, `y + h` could still test within it by a rounding: the HUD
+  looped forever and the game locked up with two players by a knocked-out
+  one). A knocked-out player hit twice within 3 s (`DOWN_HITS`: he lies in
+  spikes, knocked back by each hit) is put on Player 1's spot, still knocked
+  out.
 - **Getting up:** a hit that knocks a player out leaves him in the knocked-back
   state (kind 11), which never ended under the lying pose, so a revived player
   couldn't move until a door reset him. The pose waits for his state to be
@@ -301,9 +328,11 @@ base. Out of play, and with co-op off, it is 1. The sky and sea margin
 camera's eye (its node, camera `+0x510`, position at `+0xb0`; the culling pass
 builds its own view from it) goes back along the view's back axis by Player
 1's distance from it times `g_zoom - 1`, and so do the view matrix (`+0x580`)
-and the renderer's copy of it (`x24 +0x20`). The camera rebuilds its eye from
-what it follows every frame; one that doesn't (standing still) has last
-frame's move taken off first. With it, by the same distance (each the game's
+and the renderer's copy of it (`x24 +0x20`). The eye's move is taken off
+again as the next frame starts (`camera_back_undo`, from `coop_tick`, before
+the camera's update): a camera that goes on from where its eye is (the walk in
+through Angler's Tunnel's door glides it) went further back every frame, to
+120 away, the walk-in dragged on and the others stood stuck above the door. With it, by the same distance (each the game's
 own value plus the move, the game's own again at 1):
 - the far plane (`+0x56c`): at 3x the far ground was cut off, black;
 - the shadows' reach (`+0x560`, `+0x350`, `+0x734`, 24 each): past it a wedge
@@ -350,7 +379,11 @@ through the ground and was taken off the map. With co-op on the Field:
 - **The active box takes in every player** (`active_box`), and the screen
   around each, so a player stands wherever the view lets him be. Making every
   screen made active instead held 30 fps at 2.5 (13 x 13 screens' objects
-  running).
+  running). Only in play, and only players inside the screens made: as a file
+  loads the Links stand at the map's origin or where they were in the level
+  before, and taken in, the box woke much of the Field at once and the game ran
+  out of memory (`[heaps] standard allocation FAILED`; the user's File 3
+  loaded from Angler's Tunnel, four players).
 - **The first two boxes grow with the zoom** (`g_box`, 1 to `BOX_MAX` 2 in
   0.25 steps, `box_tick`): the smallest that covers the zoom wanted, grown at
   once, shrunk after 5 s of wanting less.
@@ -383,7 +416,12 @@ dungeon darkness. Checked at Out 60% and 2.0, 16:9, 21:9 and 32:9: no edge
 back the woods' fog is a mesh around Player 1, not the camera: stretched by the
 zoom alone its edge showed in the window's corners (its near side shrinks more
 than its middle), so moved back it is stretched by 1 + 1.6 (zoom - 1). Checked
-at 2 and 3: no edge.
+at 2 and 3: no edge. Yarna Desert's warm haze is a disc around Player 1 too
+(fragment shader `16c48ff5e6bcfea3`, found by skipping shaders): moved back its
+edge showed as a hard circle on the sand. It refracts the picture behind it, so
+stretched it ghosted a copy of the rocks over the water beside the desert; moved
+back past 1.05 it isn't drawn (`widescreen_effect_hidden`, both renderers).
+Checked at Out 50% and 3: no circle, no ghosting.
 
 **Indoors** (any level but the Field: houses, caves, dungeons) the zoom is
 "Indoor zoom" (`coop_zoom_indoor`, Normal by default), without fit. The game
@@ -485,6 +523,7 @@ the game's reads of it by the RomFS index's patch list.
 | COOP_LOAD_BOX_SITE | 0x700085c430 | adrp x23 | the box whose screens are made, grown with the zoom (33) |
 | COOP_KEEP_BOX_SITE | 0x700085c628 | ld1 {v0.s}[1], [x23] | the box whose screens are kept, the same (34) |
 | COOP_ACTIVE_BOX_SITE | 0x700085c848 | fsub s8, s0, s3 | the active screens' box takes in every player (35) |
+| COOP_WARP_OBJ_TOUCH / LEAVE_SITE | 0x7000cbd42c / d290 | ldrb w8, [x8, #0x43] | the overworld's warp hole objects (36, 37) |
 
 Runtime constants: `PLAYER_VTABLE`, `PLAYER_MAX_HEALTH`, `PLAY_ANIMATION`,
 `DOACTION_CURRENT` / `_PENDING` / `_COOLDOWN` (the slots), `DOACTION_TAKE_RET` /
@@ -635,6 +674,31 @@ seen in play with co-op on and its cause isn't known yet: the log line names it.
   stands across the shop. Player 2 stays where he is, and still comes in
   with Player 1 through the door.
 - **Co-op off:** unchanged.
+- **The evening round** (user playtest 2026-10-28):
+  - Revive prompts (`build/hud_pair.sh`): 4 players on one spot, Player 2
+    knocked out, the others stepping round him, at the user's 3840x2071 window:
+    three prompts stacked, presenting to the end. (The old loop's rounding was
+    shown in a test program - at 3840x2071 it trips for about 7% of prompt
+    positions below y 1024 - not landed on in a scripted run.) Over the warp
+    hole's "Where to?" map neither bubble nor prompt shows.
+  - Command memory: every buffer without a handler capped to 4 KB of the
+    game's memory (a temporary test switch), 70 s at 3x: four buffers (64 KB to
+    4 MB) went on in host memory, no error, the picture as before, 60 fps.
+  - Warp hole objects: Players 3 and 4 stepping onto the Martha's Bay warp
+    hole: "only Player 1 jumps in", Player 1 not in an event; Player 1 stepping
+    on it: the jump and "Where to?".
+  - The lever in Angler's Tunnel (by 02E): Player 2 under its handle, A held,
+    down: his state 7 (the pull), the lever drawn out with him, the blocks
+    moving; Player 1 where he was.
+  - Enemy parts (`LARECOMP_COOP_LOG`, each kind once): `ZolRed:` /
+    `ZolGreen:` / `Ghini:` / `Armos:` / `AnaMonea:EnemyReactionCom` among those
+    that go by the target, their owners the enemies.
+  - Yarna Desert (Field_13P) at Out 50% and 3: no circle, no ghosting.
+  - The zoom logged every frame (a temporary switch), players spread at Ukuku
+    Prairie (to 2.5) and at Martha's Bay, the map's edge (to 3): no snap in
+    play, only as a level loads.
+  - A copy of the user's File 3 loaded with 4 players: all stand, no
+    allocation failure.
 
 ## Not done or not checked
 
@@ -643,9 +707,10 @@ seen in play with co-op on and its cause isn't known yet: the log line names it.
   put back on Player 1 (`lost_tick`): he's out of view by then.
 - **The camera moved back** was checked on the Field at Field_09E, Field_06C
   and Field_02B, and in play only by scripts: not yet in cutscenes on the
-  Field, the overworld's edges, or with the sound (the listener may be the
-  camera). At 3x the shadows leave a thin darker wedge at the window's far
-  left edge.
+  Field or with the sound (the listener may be the camera). At 3x the shadows
+  leave a thin darker wedge at the window's far left edge. At the overworld's
+  edges (Martha's Bay, Yarna Desert) far out, the view reaches past the map:
+  black beyond it (the zoom isn't held back there; it didn't snap there).
 - **Slower PCs:** 60 fps at 3x was on an i7-13700K (the game's thread is the
   limit: single-threaded game code).
 
@@ -657,11 +722,13 @@ seen in play with co-op on and its cause isn't known yet: the log line names it.
 - **Instant kills:** none was found to try. The dead-state change was checked
   with `LARECOMP_COOP_DIE` for Player 2 (knocked out); sent that way Player 1
   doesn't die, so the game over itself wasn't seen.
-- **A-button actions** not tried with the other players: pulling. Event
-  actions other than chests, signs and talks are routed the same way (any type
-  but the lift), unchecked.
-- **Enemy kinds** besides zombies, Moblins and red Zols weren't checked. One
-  whose chasing is in a component not named `...React...` or `...Player...`
+- **A-button actions:** event actions other than chests, signs and talks are
+  routed the same way (any type but the lift and the pull), unchecked.
+- **Not tried in the game:** a Gel clinging (needs a split red Zol), a
+  knocked-out player in spikes, the Angler Fish's revive prompt, a 4-player
+  zoomed-out door entry in Angler's Tunnel.
+- **Enemy kinds** besides zombies, Moblins and Zols weren't checked. One
+  whose chasing is in a component not named `...React...` or `...PlayerComp`
   would still go to Player 1. Bosses weren't checked.
 - **Holding A to revive** also does the game's A action (beside a rock, the
   rock is lifted). The revive goes on.
