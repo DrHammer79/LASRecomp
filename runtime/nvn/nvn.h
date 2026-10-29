@@ -107,6 +107,7 @@ typedef struct {
     uint64_t callback, callback_data;
     bool recording;
     uint64_t guest;  // the guest NVNcommandBuffer*
+    struct Overflow *overflow;  // host chunks it went on in, out of memory with no handler (cmdbuf.c)
 } NvnCmdBuf;
 
 // One recorded command: header, the call's integer and float arguments, then copied data.
