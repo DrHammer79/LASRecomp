@@ -547,7 +547,7 @@ static bool player_screen(int i, float lift, float w, float h, float *sx, float 
 // ---- The camera zoomed out (settings coop_zoom, coop_camera_fit, coop_zoom_fit): g_zoom, coop_zoom 10% steps out
 // always (up to 60%); with coop_camera_fit, further out as far as it takes to keep every player who is up in view, up
 // to coop_zoom_fit steps (up to 200%: three times as far), never in of coop_zoom, eased in and out. 1 out of play and
-// without co-op. On the Field the camera is moved back by it (camera_back); indoors its field of view is widened
+// while zoom_on() isn't. On the Field the camera is moved back by it (camera_back); indoors its field of view is widened
 // instead (runtime/hle/widescreen.c rt_fovy, also the culling pass's).
 // Widening the view on the Field first (to 2.3): its top edge ran toward the horizon, so each step out needed far more
 // of the world made and drawn - at 2.5 the game's own thread took 13 ms a frame, and its frame pacing fell to 30 fps.
@@ -556,6 +556,13 @@ static float g_zoom = 1.0f;
 static bool g_back_on;          // (the zoom moves the camera back: on the Field)
 float coop_camera_zoom(void) { return g_back_on ? 1.0f : g_zoom; }  // (the field of view's: rt_fovy, effect stretch)
 float coop_camera_reach(void) { return g_zoom; }                    // (how much further the view reaches)
+
+// The zoom by setting coop_zoom_mode: with co-op (2 players or more), playing alone too, or never. Alone, only its
+// own hooks run (rt_coop_hook: the camera, the Field's boxes of screens); with no other player its fit is the least.
+static bool zoom_on(void) {
+    int m = g_settings.coop_zoom_mode;
+    return GA(COOP_CAMERA_SITE) && m != COOP_ZOOM_OFF && (m == COOP_ZOOM_ALWAYS || rt_coop_on());
+}
 
 // The camera moved back (COOP_CAMERA_SITE: its view matrix just set). On the Field each frame: the view camera's eye -
 // its node's position (+0x510, +0xb0), which the culling pass builds its own view from - goes back along its view
@@ -640,10 +647,10 @@ static float back_need(const float p[3], float aspect, float frac) {
 static float g_box = 1.0f;        // the boxes' scale
 static float g_box_ready = 1.0f;  // ... the one whose screens are made by now
 static uint64_t g_box_at, g_box_less;
-static bool coop_field(void) {
+static bool zoom_field(void) {
     extern const char *chaos_current_level(void);  // runtime/ui/chaos_overlay.mm
     const char *lv = chaos_current_level();
-    return rt_coop_on() && lv && !strcmp(lv, "Field");
+    return zoom_on() && lv && !strcmp(lv, "Field");
 }
 
 // The furthest the zoom can go before the view reaches past the screens a box of that scale makes (their edge, on the
@@ -693,8 +700,8 @@ static void zoom_tick(bool play) {
     float top = indoor ? base : fmaxf(base, 1.0f + 0.1f * g_settings.coop_zoom_fit), want = base;
     float aspect = 16.0f / 9.0f * widescreen_factor();
     bool fit = g_settings.coop_camera_fit && top > base;
-    g_back_on = play && coop_field();
-    if (!play || !rt_coop_on()) want = 1.0f;
+    g_back_on = play && zoom_field();
+    if (!play || !zoom_on()) want = 1.0f;
     else if (fit) {  // (each player who is up inside 0.7 of the view; never in of base)
         float p[3];
         for (int i = 1; i < g_n; i++)
@@ -704,7 +711,7 @@ static void zoom_tick(bool play) {
     if (!fit || !play) g_zoom = want;
     else g_zoom += (want - g_zoom) * (want > g_zoom ? 0.06f : 0.02f);  // (out quicker than back in)
     if (fabsf(g_zoom - want) < 0.002f) g_zoom = want;
-    const char *forced = play && rt_coop_on() ? ENV("LARECOMP_COOP_ZOOM") : NULL;  // (test)
+    const char *forced = play && zoom_on() ? ENV("LARECOMP_COOP_ZOOM") : NULL;  // (test)
     if (g_back_on) {  // (inside the screens made around Player 1: at once, not eased)
         box_tick(forced ? (float)atof(forced) : want, aspect);
         float room = g_zoom > 1.0f ? zoom_room(aspect, g_box_ready) : 0;
@@ -1835,8 +1842,15 @@ static void active_box(Cpu *c) {
     set_s(c, 3, hx), set_s(c, 4, (z1 - z0) / 2), set_s(c, 5, (z0 + z1) / 2);
 }
 
+// Alone (no co-op) with the zoom on, only the zoom's hooks run: the camera, the Field's boxes of screens, and on the
+// Field the actors' updates for the cut grass and thrown rocks kept gone in view (zoomed out, the screen Player 1 just
+// left is still in view).
+static bool zoom_hook(int which) {
+    return zoom_on() && (which == 17 || (which >= 33 && which <= 35) || ((which == 15 || which == 16) && zoom_field()));
+}
+
 int rt_coop_hook(Cpu *c, int which) {
-    if (!rt_coop_on()) return 0;
+    if (!rt_coop_on() && !zoom_hook(which)) return 0;
     switch (which) {
     case 0:  // COOP_CREATE_SITE
         return coop_create(c);
@@ -1903,6 +1917,11 @@ int rt_coop_hook(Cpu *c, int which) {
         if (!on_game_thread()) return 0;
         uint64_t a = heap_ptr(c->x[0]) ? LD64(c->x[0] + 8) : 0;
         g_updating = heap_ptr(a) ? a : 0;
+        if (!rt_coop_on()) {  // (alone, zoomed out: grass and rocks kept gone, nothing else - zoom_hook)
+            bool killed = heap_ptr(g_updating) && gone_check(c, g_updating);
+            if (killed) g_updating = 0;
+            return killed;
+        }
         // (held on Player 1's spot for the pause menu: hold_on_p1; off the map after falling through it: lost_tick)
         if (pause_updated(g_updating) || lost_away(g_updating)) {
             g_updating = 0;
@@ -1948,6 +1967,11 @@ int rt_coop_hook(Cpu *c, int which) {
     }
     case 16:  // COOP_ACTOR_EXEC_DONE - after it
         if (!on_game_thread()) return 0;
+        if (!rt_coop_on()) {  // (alone, zoomed out: zoom_hook)
+            if (heap_ptr(g_updating)) gone_note(g_updating);
+            g_updating = 0;
+            return 0;
+        }
         act_update_end();
         actor_exec_end();
         if (heap_ptr(g_updating)) gone_note(g_updating);
@@ -1994,16 +2018,16 @@ int rt_coop_hook(Cpu *c, int which) {
     case 32:  // COOP_DEAD_STATE_SITE - sub sp, sp, #0x30: a state machine (x0) changes to state w1
         return dead_state(c);
     case 33:  // COOP_LOAD_BOX_SITE - adrp x23: s1 x s2 the box of screens whose objects are made
-        if (coop_field() && g_box != 1.0f) scale_s(c, 1, g_box), scale_s(c, 2, g_box);
+        if (zoom_field() && g_box != 1.0f) scale_s(c, 1, g_box), scale_s(c, 2, g_box);
         return 0;
     case 34:  // COOP_KEEP_BOX_SITE - ld1 {v0.s}[1], [x23]: s0, s1 (across) and s3, s2 (deep) the half sizes of the
               // box of screens whose objects are kept
-        if (coop_field() && g_box != 1.0f)
+        if (zoom_field() && g_box != 1.0f)
             for (int r = 0; r < 4; r++) scale_s(c, r, g_box);
         return 0;
     case 35:  // COOP_ACTIVE_BOX_SITE - fsub s8, s0, s3: s3 x s4 the half sizes of the box of active screens, s5 its
               // offset deep - grown to take in every player
-        if (coop_field()) active_box(c);
+        if (zoom_field()) active_box(c);
         return 0;
     case 36:  // COOP_WARP_OBJ_TOUCH_SITE - ldrb w8, [x8, #0x43]: a player actor (x8) stepped into a warp hole object
         return warp_hole(c, true);

@@ -57,6 +57,7 @@ Settings g_settings = {
     .coop_revive_s = 4,
     .coop_heart_colours = true,
     .coop_hud = COOP_HUD_BOTTOM_LEFT,
+    .coop_zoom_mode = COOP_ZOOM_WITH_COOP,
     .coop_zoom = 5,
     .coop_zoom_fit = COOP_ZOOM_FIT_MAX,
     .coop_zoom_indoor = 0,
@@ -284,6 +285,8 @@ void settings_load(void) {
         else if (!strcmp(key, "coop_revive_s")) g_settings.coop_revive_s = atoi(val) < 1 ? 1 : atoi(val) > 10 ? 10 : atoi(val);
         else if (!strcmp(key, "coop_heart_colours")) g_settings.coop_heart_colours = atoi(val) != 0;
         else if (!strcmp(key, "coop_hud")) g_settings.coop_hud = atoi(val) < 0 || atoi(val) > 2 ? 0 : atoi(val);
+        else if (!strcmp(key, "coop_zoom_mode"))
+            g_settings.coop_zoom_mode = atoi(val) < 0 || atoi(val) > COOP_ZOOM_OFF ? COOP_ZOOM_WITH_COOP : atoi(val);
         else if (!strcmp(key, "coop_zoom"))  // (coop_camera before: other steps - left to the default)
             g_settings.coop_zoom = atoi(val) < 0 ? 0 : atoi(val) > COOP_ZOOM_MAX ? COOP_ZOOM_MAX : atoi(val);
         else if (!strcmp(key, "coop_zoom_fit"))
@@ -391,11 +394,12 @@ void settings_save(void) {
     fprintf(f, "walk_speed_dungeons = %d\n", g_settings.walk_speed_dungeons);
     fprintf(f, "coop_players = %d\ncoop_collision = %d\n", g_settings.coop_players, g_settings.coop_collision);
     fprintf(f, "coop_targets = %d\ncoop_host_exits = %d\ncoop_health = %d\ncoop_knockout = %d\ncoop_revive_s = %d\n"
-            "coop_heart_colours = %d\ncoop_hud = %d\ncoop_zoom = %d\ncoop_camera_fit = %d\ncoop_zoom_fit = %d\n"
-            "coop_zoom_indoor = %d\ncoop_leash = %d\n",
+            "coop_heart_colours = %d\ncoop_hud = %d\ncoop_zoom_mode = %d\ncoop_zoom = %d\ncoop_camera_fit = %d\n"
+            "coop_zoom_fit = %d\ncoop_zoom_indoor = %d\ncoop_leash = %d\n",
             g_settings.coop_targets, g_settings.coop_host_exits, g_settings.coop_health, g_settings.coop_knockout,
-            g_settings.coop_revive_s, g_settings.coop_heart_colours, g_settings.coop_hud, g_settings.coop_zoom,
-            g_settings.coop_camera_fit, g_settings.coop_zoom_fit, g_settings.coop_zoom_indoor, g_settings.coop_leash);
+            g_settings.coop_revive_s, g_settings.coop_heart_colours, g_settings.coop_hud, g_settings.coop_zoom_mode,
+            g_settings.coop_zoom, g_settings.coop_camera_fit, g_settings.coop_zoom_fit, g_settings.coop_zoom_indoor,
+            g_settings.coop_leash);
     fprintf(f, "coop_colours = %d,%d,%d,%d,%d,%d,%d,%d\n", g_settings.coop_colour[0], g_settings.coop_colour[1],
             g_settings.coop_colour[2], g_settings.coop_colour[3], g_settings.coop_colour[4], g_settings.coop_colour[5],
             g_settings.coop_colour[6], g_settings.coop_colour[7]);
