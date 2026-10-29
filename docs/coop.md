@@ -288,31 +288,90 @@ stairs' rock, `ObjRock-4800A5005B88BEDC`, back as he stepped onto them).
 - **Hidden** on the pause menu's Items and Map pages.
 
 **Camera zoom** (`coop_zoom`, `coop_camera_fit`, `coop_zoom_fit`, `zoom_tick`).
-`rt_fovy` (`runtime/hle/widescreen.c`) multiplies the field of view's tangent
-by `coop_camera_zoom()`; the culling pass loads its field of view there too, so
-what comes into view is drawn. The base is 1.0 to 1.6 in 0.1 steps (Camera
-zoom, Normal to Out 60%; default Out 50%). With "fit everyone" on, the camera
-zooms out further until every player who is up is inside 70% of the view, up
-to "Fit up to" (Out 10% to Out 100%: 1.1 to 2.0; default 2.0), eased in and
-out, and never closer than the base. The sky and sea margin
-(`rt_skysea_margin`) grows with it. Out of play, and with co-op off, it is 1.
-At 2.0 the game held 60 fps in the tests.
+The zoom `g_zoom` is how many times further the view reaches. The base is 1.0
+to 1.6 in 0.1 steps (Camera zoom, Normal to Out 60%; default Out 50%). With
+"fit everyone" on, the camera zooms out further until every player who is up
+is inside 70% of the view (`back_need`), up to "Fit up to" (Out 10% to Out
+200%: 1.1 to 3.0; default 3.0), eased in and out, and never closer than the
+base. Out of play, and with co-op off, it is 1. The sky and sea margin
+(`rt_skysea_margin`) grows with it (`coop_camera_reach()`).
 
-**The loaded screens** (`zoom_room`). On the Field the game makes the level
-objects (tall grass, grass, rocks, trees) of the 7 x 7 screens around Player
-1's, a screen 15 x 12 units (measured: the objects alive at Field_09E span
-3 screens each way, and the next column is made as he steps into the next
-screen; the same at 1x and 3x, so it doesn't follow the view). Past them the
-ground shows bare earth where tall grass goes, dark ovals (the user's "weird
-shadows" zoomed far out), the rest is missing, and further out is the sky's
-black. So outdoors the zoom stays inside `ROOM_X` x `ROOM_Z` (42 x 33) of
-Player 1: points along that rectangle's edge, on the ground at his height,
-are put through the view, and the zoom is held below the one at which the
-first comes into view, at once, not eased. On open ground that's about 1.9.
-Zooming further needs more screens made (the loader's radius isn't found
-yet), or a zoom that moves the camera back instead of widening the view: the
-widened view's top edge runs toward the horizon, where the loaded screens end
-first.
+**On the Field the camera is moved back** (`camera_back`, at
+`COOP_CAMERA_SITE`, right after the camera's view matrix is set). The view
+camera's eye (its node, camera `+0x510`, position at `+0xb0`; the culling pass
+builds its own view from it) goes back along the view's back axis by Player
+1's distance from it times `g_zoom - 1`, and so do the view matrix (`+0x580`)
+and the renderer's copy of it (`x24 +0x20`). The camera rebuilds its eye from
+what it follows every frame; one that doesn't (standing still) has last
+frame's move taken off first. With it, by the same distance (each the game's
+own value plus the move, the game's own again at 1):
+- the far plane (`+0x56c`): at 3x the far ground was cut off, black;
+- the shadows' reach (`+0x560`, `+0x350`, `+0x734`, 24 each): past it a wedge
+  of the ground was all in shadow;
+- the tilt-shift's focus (`qol.c` `rt_tilt_focus_add`: the post-process
+  object's `+0x40` and `+0x80`, 26.5): Player 1 was blurred and the band shown
+  sharp sat near the screen's bottom.
+
+The first version widened the field of view instead (`rt_fovy` multiplies its
+tangent by `coop_camera_zoom()`, the culling pass's too), which is still what
+**indoors** uses. On the Field its top edge ran toward the horizon: each step
+out needed far more of the world made and drawn (a box of 2 for 2.5, more
+than 3 for 3), and at 2.5 the game's own thread took 13 ms a frame (game
+code, single-threaded: the GPU took 2.6) and its frame pacing held 30 fps.
+Moved back, the view grows evenly: 3x took the game's thread 6.6 ms with the
+game's own box, 11 ms with a player 40 away (the boxes grown, the active
+screens taken out to him).
+
+**The screens around Player 1** (`COOP_LOAD_BOX_SITE`, `COOP_KEEP_BOX_SITE`,
+`COOP_ACTIVE_BOX_SITE`, `zoom_room`, `box_tick`, `active_box`). A level's
+screens (on the Field 15 x 12 units each, `Field_01A.leb` .. `Field_16P.leb`)
+are handled each frame by main+0x85c280, with three boxes centred on Player 1:
+- A screen meeting the first gets its objects made: tall grass, grass, rocks,
+  trees, enemies, and its ground (`MapStatic`, one per screen). The size comes
+  from a table by the level's kind (main+0x1701e40; the Field, kind 3: 75 x
+  60, which is 7 x 7 screens).
+- One outside the second (90 x 72) loses them again.
+- Only those meeting the third are active: their ground solid, their objects
+  running (actor flag `+0x40` bit 1). It's much smaller (main+0x1701ed4 by the
+  screen's type, plus a screen around another point: about 4 x 3 screens).
+
+Found by backtracing a tall grass actor's constructor while Player 1 walked
+into a new screen (to the loader's queue, then the queue's filler), by
+moving Player 1 across a screen's middle on a set frame (a column is made
+when its middle comes within 45, not at the screen's edge), and by watching
+which `MapStatic` lost bit 1 under a player who fell through.
+
+That caused two things. Zoomed out, the view reached past the screens made:
+the ground there shows bare earth where tall grass goes, dark ovals (the
+user's "weird shadows" zoomed far out), the rest is missing, and further out
+is the sky's black. And another player in view, one screen past the active
+ones (north of Player 1 most of all, where the view reaches furthest), fell
+through the ground and was taken off the map. With co-op on the Field:
+- **The active box takes in every player** (`active_box`), and the screen
+  around each, so a player stands wherever the view lets him be. Making every
+  screen made active instead held 30 fps at 2.5 (13 x 13 screens' objects
+  running).
+- **The first two boxes grow with the zoom** (`g_box`, 1 to `BOX_MAX` 2 in
+  0.25 steps, `box_tick`): the smallest that covers the zoom wanted, grown at
+  once, shrunk after 5 s of wanting less.
+- **The zoom stays inside the screens made** (`zoom_room`): points along their
+  edge (the screens the first box meets, less 2 for a tall grass patch's
+  reach), on the ground at Player 1's height, are put through the view, and the
+  zoom is held below the one at which the first comes into view, at once, not
+  eased. It uses the box whose screens are made by now (`g_box_ready`, 90
+  frames after it grew; they come about 40 frames on), so as players spread the
+  zoom stops for a moment (2.5 with a player 40 away), then goes on.
+
+The dark ovals still seen far out at Ukuku Prairie are holes in its ground:
+they're there at the normal view.
+
+**The co-op hooks' own cost.** The actor update hooks (`COOP_ACTOR_EXEC_*`)
+run for every actor and component every frame, about 21,000 a frame with the
+screens made out far. Reading each name there cost the game thread about 2 ms
+a frame; what an actor is now is worked out once (`actor_class`, a 4-way table
+by address and the name's start), the grass and rocks' check only for names
+starting `Obj`, the game thread check once per thread: 1.5 ms left at 2.5
+(with the hooks off, measured: 11.1 ms; on, 12.6).
 
 Effects drawn as a mesh around the camera, sized for the game's own view, showed
 their edge once the view was wider: the Mysterious Woods fog as a hard-edged
@@ -320,7 +379,11 @@ oval. `widescreen_effect_stretch` already widened their viewport for wide
 windows; it now also stretches it by the zoom, both ways (`exec.c`,
 `renderer.m`): the fog ring, haze layer and light shafts of the woods, and the
 dungeon darkness. Checked at Out 60% and 2.0, 16:9, 21:9 and 32:9: no edge
-(`LARECOMP_NO_ZOOM_STRETCH=1` shows the oval it was).
+(`LARECOMP_NO_ZOOM_STRETCH=1` shows the oval it was). With the camera moved
+back the woods' fog is a mesh around Player 1, not the camera: stretched by the
+zoom alone its edge showed in the window's corners (its near side shrinks more
+than its middle), so moved back it is stretched by 1 + 1.6 (zoom - 1). Checked
+at 2 and 3: no edge.
 
 **Indoors** (any level but the Field: houses, caves, dungeons) the zoom is
 "Indoor zoom" (`coop_zoom_indoor`, Normal by default), without fit. The game
@@ -345,9 +408,11 @@ waits 30 s (`LEASH_DOWN`), then is revived and put on him. Nothing happens
 while Player 1 is in an event. A player more than 30 units away who isn't
 brought back is logged every 10 s with the reason.
 
-**Players lost below the world** (`lost_tick`). On the Field only the area
-Player 1 is in has its ground loaded. Another player in the next area (one
-screen on, or left behind) falls through it, and the game puts him back on the
+**Players lost below the world** (`lost_tick`). On the Field only the screens
+around Player 1 have solid ground (see "The screens around Player 1": with
+co-op the active ones now take in every player, so this is for a player who
+gets past the screens made). Another player past them (left behind, or
+running off) falls through, and the game puts him back on the
 spot he fell from, where he falls again, for good. At Out 50% he is still in
 view, so bring-back never takes him, and a teleport doesn't stick while he
 falls (the game sets his position). A player whose height drops 8 below where
@@ -360,13 +425,11 @@ until it's time, then put on Player 1 standing, which a teleport needs.
 Teleports (`ride_on_host`) also set the Link's safe spot (`Link+0x1b40`, where
 the game puts him back after a fall).
 
-What decides where the ground is loaded wasn't found (2026-10-28): the game
-runs the objects of a 7×7 block of screens around Player 1, but the ground
-reaches less far, unevenly: on Ukuku Prairie another player stood 30 units east
-and 20 west of Player 1, while at Tal Tal Heights idle players fell a few steps
-from him as he crossed into the next screen. Neither the screens' `area`
-entries nor the music and camera zones of `Field.lvb` match it; it's in the
-game's world streaming code.
+Where the ground is solid (the active screens) was found later the same day:
+see "The screens around Player 1". It explains what was seen before: on Ukuku
+Prairie another player stood 30 units east and 20 west of Player 1, while at
+Tal Tal Heights idle players fell a few steps from him as he crossed into the
+next screen.
 
 **The pause menu** (`hold_on_p1`). The pause menu takes "the player's" spot as
 it opens, for its map and for a save's restart point (file `0x559c`), from the
@@ -407,7 +470,7 @@ the game's reads of it by the RomFS index's patch list.
 | COOP_APPLET_SITE / _SINGLE | 0x7000881ebc / ee4 | strb | applet player count (11, 12) |
 | COOP_CCT_SWEEP_SITE_0 / _1 | 0x70012a88c8 / 89d0 | cbz x8 | Link capsules skipped (13, 14) |
 | COOP_ACTOR_EXEC_SITE / _DONE | 0x7000facbf8 / bfc | blr x9 / ldr x8, [sp, #8] | enemy targets, sleep pose (15, 16) |
-| COOP_CAMERA_SITE | 0x7000010908 | ldr x8, [x23, #0x2a8] | camera for the bubbles (17) |
+| COOP_CAMERA_SITE | 0x7000010908 | ldr x8, [x23, #0x2a8] | camera for the bubbles; moved back on the Field (17) |
 | COOP_HEAL_SITE_0 / _1 | 0x70008d0a5c / 0x70008a39d4 | strh w8, [x9, #0x84] | hearts gained (18, 19) |
 | COOP_EXIT_TOUCH_SITE | 0x7000076f5c | ldrb w9, [x23, #0x43] | door touch (20) |
 | COOP_STAIRS_TOUCH / LEAVE_SITE | 0x70000617e0 / 1640 | ldrb w8, [x8, #0x43] | stairs (21, 22) |
@@ -419,6 +482,9 @@ the game's reads of it by the RomFS index's patch list.
 | COOP_EVENT_BOX_SITE | 0x7000067210 | str x19, [sp, #-0x20]! | an event box fires for Player 1 only (29) |
 | COOP_WARP_HOLE_TOUCH / LEAVE_SITE | 0x700008c5ac / c410 | ldrb w8, [x8, #0x43] | warp holes (30, 31) |
 | COOP_DEAD_STATE_SITE | 0x7000d34660 | sub sp, sp, #0x30 | another player's death is a knock-out (32) |
+| COOP_LOAD_BOX_SITE | 0x700085c430 | adrp x23 | the box whose screens are made, grown with the zoom (33) |
+| COOP_KEEP_BOX_SITE | 0x700085c628 | ld1 {v0.s}[1], [x23] | the box whose screens are kept, the same (34) |
+| COOP_ACTIVE_BOX_SITE | 0x700085c848 | fsub s8, s0, s3 | the active screens' box takes in every player (35) |
 
 Runtime constants: `PLAYER_VTABLE`, `PLAYER_MAX_HEALTH`, `PLAY_ANIMATION`,
 `DOACTION_CURRENT` / `_PENDING` / `_COOLDOWN` (the slots), `DOACTION_TAKE_RET` /
@@ -444,7 +510,7 @@ off, one row. On, four headings:
 | | Hearts in player colors | coop_heart_colours | 1 | hearts in each player's colour, Player 1's too (own hearts) |
 | Co-op camera | Camera zoom | coop_zoom | 5 | the least zoom, 10% steps out: 0 normal .. 6 out 60% |
 | | Zoom out to fit everyone | coop_camera_fit | 1 | further out to keep every player in view |
-| | Fit up to | coop_zoom_fit | 10 | the furthest fit goes, 10% steps: 1 out 10% .. 10 out 100% (twice the view) |
+| | Fit up to | coop_zoom_fit | 20 | the furthest fit goes, 10% steps: 1 out 10% .. 20 out 200% (3x as far) |
 | | Indoor zoom | coop_zoom_indoor | 0 | houses, caves, dungeons: 0 normal .. 6 out 60%, no fit |
 | Co-op rules | Bring lost players back | coop_leash | 1 | players off screen are brought back to Player 1 |
 | | Only Player 1 triggers exits | coop_host_exits | 1 | only Player 1 leads everyone out |
@@ -517,7 +583,8 @@ What was checked on 1.0.1, mostly with the test inputs above and
     old creation order and the new). Both things that went wrong around it in
     the user's session (another player stuck falling far away, taken as "the
     player" by the pause menu) are fixed. `LARECOMP_TRACK_RESPAWN=1` logs any
-    rock or grass that comes back.
+    rock or grass that comes back. (Found later the same day, from the user's
+    log: see "Cut grass and thrown rocks" and its test below.)
 
 **ImGui checks.** `IM_ASSERT` (`third_party/imgui/imconfig.h`) calls
 `imgui_check_failed` (`runtime/ui/menu.mm`), which logs the failed check and a
@@ -542,9 +609,24 @@ seen in play with co-op on and its cause isn't known yet: the log line names it.
   stairs (before, he stood against the rock). At 3x (`LARECOMP_COOP_ZOOM=3`)
   after a warp to Field_09E: nothing destroyed and nothing kept gone (before
   the unload fix, 155 tall grass and rocks were, in view).
-- **Zoom held to the loaded screens:** Out 60% with fit up to Out 100%, Player
-  2 held 30 units east of Player 1 at Field_09E: the zoom stops at 1.92, no
-  bare earth in view.
+- **The screens around Player 1 and the camera moved back** (Field_09E, Out
+  60% with fit up to Out 200%):
+  - Player 2 held 40 units east: the zoom stops at 2.5 while the grown box's
+    screens are made, then goes on to 3.0; 60 fps, the game's thread 11 ms; the
+    far ground drawn, Player 1 sharp, no missing grass in view.
+  - Player 2 dropped 40 units north (a screen whose ground the game had
+    switched off): he lands and stands; at 40 he's just past the 3x view, so
+    bring-back takes him after 3 s. (With the widened view: 28 north, in view
+    at 2.3, he stayed.)
+  - Player 2 dropped 38 units east with bring-back off: he lands and stands
+    (before, he fell through and was taken off the map).
+  - The Mysterious Woods (Field_06C) at 2 and 3, Tal Tal (Field_02B) at 3: no
+    fog edge; the sky and sea drawn.
+  - The game's own boxes, measured: the ground pieces active with Player 1
+    standing still, a 4 x 3 block; ×5 the third box, 7 x 4; the first two
+    ×2, 13 x 13 screens made.
+  - The widened view, before: 30 fps at 2.4 and 2.5 (box 2), the game's thread
+    13 ms; moved back, 2.5 and 3 with the game's own box: 6.3 and 6.6 ms.
 - **Enemy targets:** Player 2 six units from Player 1 among the graveyard
   zombies. Each zombie walks to the player it targets and Player 2 is hit by
   his. Player 2 17 units from Player 1 beside a Moblin and a red Zol: both
@@ -556,13 +638,16 @@ seen in play with co-op on and its cause isn't known yet: the log line names it.
 
 ## Not done or not checked
 
-- **Only Player 1's area is loaded** on the Field. Another player who walks into
-  the next area falls through it and is put back on Player 1 (`lost_tick`).
-  Loading areas around every player isn't possible from here: the game's
-  streaming follows its one player.
-- **Zooming out past about 1.9 on the Field** (see "The loaded screens"): the
-  game makes only the 7 x 7 screens around Player 1. More would need the
-  loader's radius raised, or the zoom done by moving the camera back.
+- **Only the screens around Player 1 are made** on the Field (see "The screens
+  around Player 1"). Another player who walks past them falls through and is
+  put back on Player 1 (`lost_tick`): he's out of view by then.
+- **The camera moved back** was checked on the Field at Field_09E, Field_06C
+  and Field_02B, and in play only by scripts: not yet in cutscenes on the
+  Field, the overworld's edges, or with the sound (the listener may be the
+  camera). At 3x the shadows leave a thin darker wedge at the window's far
+  left edge.
+- **Slower PCs:** 60 fps at 3x was on an i7-13700K (the game's thread is the
+  limit: single-threaded game code).
 
 - **Tunic colours** need the mod's `Playerlink.bfres`. Recolouring the tunic
   at run time (as the cosmetics do) would remove the file and the restart.
