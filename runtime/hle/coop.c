@@ -1784,7 +1784,10 @@ static bool gone_check(Cpu *c, uint64_t actor) {
     float at[3];
     if (!actor_pos(actor, at)) memcpy(at, g_gone[k].at, sizeof at);
     if (!lv || strcmp(lv, "Field") || !gone_watched(at)) {
-        CLOG("[coop] %.40s back where nobody sees it\n", (const char *)(uintptr_t)(actor + 0x18));
+        float p1[3] = {0};
+        player_pos(host_player(), p1);
+        CLOG("[coop] %.40s back where nobody sees it (%.2f %.2f %.2f; Player 1 at %.2f %.2f %.2f)\n",
+             (const char *)(uintptr_t)(actor + 0x18), at[0], at[1], at[2], p1[0], p1[1], p1[2]);
         g_gone[k].key = 0;
         return false;
     }
@@ -1840,6 +1843,30 @@ static void active_box(Cpu *c) {
             z0 = fminf(z0, p[2] - p1[2] - SCREEN_D), z1 = fmaxf(z1, p[2] - p1[2] + SCREEN_D);
         }
     set_s(c, 3, hx), set_s(c, 4, (z1 - z0) / 2), set_s(c, 5, (z0 + z1) / 2);
+}
+
+// LARECOMP_TRACK_RESPAWN=1 (diagnostic): a rock or grass actor made again under the same name - one that came back -
+// logged as "[respawn]", with where it is and whether a player is near it or it's in view (gone_watched): one made
+// again in view, destroyed or not, pops (cut grass and lifted rocks came back beside Player 1 in play, 2026-10-28).
+static void respawn_track(uint64_t actor) {
+    if (!ENV("LARECOMP_TRACK_RESPAWN") || !heap_ptr(actor)) return;
+    static struct { uint64_t key, actor; } seen[8192];
+    const char *nm = (const char *)(uintptr_t)(actor + 0x18);
+    if (strncmp(nm, "ObjRock", 7) && strncmp(nm, "ObjGrass", 8) && strncmp(nm, "ObjLawn", 7)) return;
+    uint64_t key = 1469598103934665603ull;
+    for (int k = 0; k < 64 && nm[k]; k++) key = (key ^ (uint8_t)nm[k]) * 1099511628211ull;
+    int k = (int)(key % 8192), probes = 0;
+    while (seen[k].key && seen[k].key != key && ++probes < 8192) k = (k + 1) % 8192;
+    if (seen[k].key && seen[k].key == key && seen[k].actor != actor) {
+        float at[3] = {0}, p1[3] = {0};
+        actor_pos(actor, at);
+        player_pos(host_player(), p1);
+        LOG("[respawn] %.48s again (actor %#llx, was %#llx), frame %llu, at (%.2f %.2f %.2f)%s, Player 1 %.1f away\n",
+            nm, (unsigned long long)actor, (unsigned long long)seen[k].actor,
+            (unsigned long long)renderer_present_count(), at[0], at[1], at[2], gone_watched(at) ? " SEEN" : "",
+            sqrtf((at[0] - p1[0]) * (at[0] - p1[0]) + (at[2] - p1[2]) * (at[2] - p1[2])));
+    }
+    seen[k].key = key, seen[k].actor = actor;
 }
 
 // Alone (no co-op) with the zoom on, only the zoom's hooks run: the camera, the Field's boxes of screens, and on the
@@ -1918,6 +1945,7 @@ int rt_coop_hook(Cpu *c, int which) {
         uint64_t a = heap_ptr(c->x[0]) ? LD64(c->x[0] + 8) : 0;
         g_updating = heap_ptr(a) ? a : 0;
         if (!rt_coop_on()) {  // (alone, zoomed out: grass and rocks kept gone, nothing else - zoom_hook)
+            respawn_track(g_updating);
             bool killed = heap_ptr(g_updating) && gone_check(c, g_updating);
             if (killed) g_updating = 0;
             return killed;
@@ -1940,23 +1968,7 @@ int rt_coop_hook(Cpu *c, int which) {
                 return 1;
             }
         }
-        // LARECOMP_TRACK_RESPAWN=1 (diagnostic): a rock or grass actor made again under the same name - one that came
-        // back - logged as "[respawn]" (cut grass and lifted rocks came back beside Player 1 in play, 2026-10-28)
-        if (ENV("LARECOMP_TRACK_RESPAWN") && heap_ptr(g_updating)) {
-            static struct { uint64_t key, actor; } seen[8192];
-            const char *nm = (const char *)(uintptr_t)(g_updating + 0x18);
-            if (!strncmp(nm, "ObjRock", 7) || !strncmp(nm, "ObjGrass", 8) || !strncmp(nm, "ObjLawn", 7)) {
-                uint64_t key = 1469598103934665603ull;
-                for (int k = 0; k < 64 && nm[k]; k++) key = (key ^ (uint8_t)nm[k]) * 1099511628211ull;
-                int k = (int)(key % 8192), probes = 0;
-                while (seen[k].key && seen[k].key != key && ++probes < 8192) k = (k + 1) % 8192;
-                if (seen[k].key && seen[k].key == key && seen[k].actor != g_updating)
-                    LOG("[respawn] %.48s again (actor %#llx, was %#llx), frame %llu\n", nm,
-                        (unsigned long long)g_updating, (unsigned long long)seen[k].actor,
-                        (unsigned long long)renderer_present_count());
-                seen[k].key = key, seen[k].actor = g_updating;
-            }
-        }
+        respawn_track(g_updating);
         if (heap_ptr(g_updating) && gone_check(c, g_updating)) {
             g_updating = 0;
             return 1;
