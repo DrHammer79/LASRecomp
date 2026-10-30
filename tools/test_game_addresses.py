@@ -90,12 +90,20 @@ except AttributeError:
 else:
     raise AssertionError('An unknown address name was accepted')
 assert all(a < 0x7004000000 for a in list(patches.PATCHES) + list(patches.HOOKS)), 'patch sites are main addresses'
-# every version: the same patches and hooks, at that version's addresses
+# every version: the same patches and hooks, at that version's addresses (local co-op's hooks only where it has them:
+# all of its addresses, none left at 0 - a hook at 0 is dropped, and nothing else would notice)
+own_hooks = None
 for key in VERSIONS:
     select_version(key)
     p = importlib.reload(patches)
-    assert len(p.PATCHES) == len(fixture['patches']) and len(p.HOOKS) == len(patches.HOOKS), key
+    own = set(p.HOOKS) - set(p._COOP_HOOKS)
+    own_hooks = len(own) if own_hooks is None else own_hooks
+    assert len(p.PATCHES) == len(fixture['patches']) and len(own) == own_hooks, key
     assert set(p.PATCHES) | set(p.HOOKS) <= set(tables[key][0].values()), key
+    coop = {n: v for n, v in tables[key][0].items() if n.startswith('COOP_')}
+    if coop.get('COOP_CREATE_SITE'):
+        assert all(coop.values()), f'{key}: co-op addresses at 0: {[n for n, v in coop.items() if not v]}'
+        assert set(p._COOP_HOOKS) <= set(p.HOOKS), key
 select_version('v1_0_0')
 patches = importlib.reload(patches)
 
@@ -361,8 +369,9 @@ if games:
                 continue
             mapper = version_map.Mapper(games['v1_0_0'], games[key])
             for kind in ('patches', 'runtime'):
-                src = table_path('v1_0_0', kind)
-                text, _ = version_map.map_header(src.read_text(encoding='utf-8'), load_table(src), mapper, VERSIONS[key][0])
+                src, dst = table_path('v1_0_0', kind), table_path(key, kind)
+                text, _ = version_map.map_header(src.read_text(encoding='utf-8'), load_table(src), mapper, VERSIONS[key][0],
+                                                 load_table(dst))  # (what 1.0.0 doesn't have: the table's own)
                 assert text == table_path(key, kind).read_text(encoding='utf-8'), f'{kind}_{key}.h: run tools/version_map.py'
             print(f'{key}: the committed tables match tools/version_map.py')
 

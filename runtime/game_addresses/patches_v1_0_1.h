@@ -141,7 +141,7 @@ GA_ADDR(SHAPE_SIM_SKIP_0,                 0x7001408edc)
 GA_ADDR(SHAPE_SIM_SKIP_1,                 0x7001408e68)
 GA_ADDR(EFFECT_BONE_SITE,                 0x7000e44e48)
 GA_ADDR(EFFECT_BONE_SKIP,                 0x7000e444cc)
-// Local co-op (runtime/hle/coop.c; the community LA co-op mod's 1.0.1 hook points, ported)
+// Local co-op (runtime/hle/coop.c; the community LA co-op mod's 1.0.1 hook points, ported): 0 = not in this version
 GA_ADDR(COOP_CREATE_SITE,                 0x700083a470)
 GA_ADDR(COOP_CREATE_RET,                  0x700083a728)
 GA_ADDR(COOP_ZONE_SITE,                   0x700083a678)
