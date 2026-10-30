@@ -126,8 +126,12 @@ jumping onto another stood on his head and stuck a second or two.
   (`COOP_EXIT_LEAVE_*`) - with `coop_host_exits` off his own touch is kept, so
   then his leaving drops it, as Player 1's does.
 - **New rooms.** When Player 1's camera scrolls to a new camera area indoors,
-  or he moves more than 10 units in one frame (stairs into a side-view room),
-  the others follow him (`room_follow_tick`). That waits for Player 1 to stand
+  or he moves more than 10 units in one frame as the view turns side-on or back
+  within half a second (stairs into a side-view room, or out of one), the
+  others follow him (`room_follow_tick`). A jump alone isn't a new room: put
+  back at a room's entry after a pit, everyone else was put on him there
+  (checked: Player 1 moved 11 units in Bottle Grotto 08C, Player 2 stays; the
+  build before put him on Player 1). That waits for Player 1 to stand
   in the room (state kind 0, no event), then puts each player more than 4
   units away on him once that player is on his own feet. Put on him while the
   stairs still carried him, they were in the floor. A player still falling had
@@ -855,6 +859,14 @@ runtime gives the menus was checked and is valid, so its cause isn't known yet.
   leave a thin darker wedge at the window's far left edge. At the overworld's
   edges (Martha's Bay, Yarna Desert) far out, the view reaches past the map:
   black beyond it (the zoom isn't held back there; it didn't snap there).
+- **Shadows far out in a wide window:** past about 2.3, in a window wider than
+  16:9 (the user's 3840x2071), the far top corner's ground shows dark diagonal
+  stripes: the shadows' reach doesn't cover it. Raising the three values more
+  than the move back doesn't fix it (checked 2026-10-29 at Martha's Bay, 1.6 to
+  3.0, each value alone and together): `+0x560` raised gives dark wedges and
+  unmade ground at 1.6 to 2.3, and no one factor is clean at every zoom. It
+  needs the game's shadow set-up (its cascades' split and the light's box)
+  worked out. Until then "Fit up to" Out 130% (2.3) avoids it.
 - **Slower PCs:** 60 fps at 3x was on an i7-13700K (the game's thread is the
   limit: single-threaded game code).
 
@@ -889,8 +901,6 @@ runtime gives the menus was checked and is valid, so its cause isn't known yet.
     started an event, or 60 frames): a talk an NPC starts would put the others
     on Player 1 each frame of its walk, and a door within 60 frames of an A that
     started nothing leaves them at the door (the room follow brings them).
-  - Player 1 put back at a room's entry after a pit counts as "moved more than
-    10 units": the others are put on him there, bring-back on or off.
   - Host command memory (an out-of-memory buffer with no handler) is freed 8
     frames after the buffer gets the game's memory again: a list recorded there
     and kept to be called or sent again later would read freed memory. The
