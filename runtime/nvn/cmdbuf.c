@@ -76,8 +76,9 @@ NVN(nvnCommandBufferInitialize) {
     RET(1);
 }
 NVN(nvnCommandBufferFinalize) {
-    overflow_retire(cb_of(A(0)));
-    free(cb_of(A(0)));
+    NvnCmdBuf *cb = cb_of(A(0));
+    if (cb) overflow_retire(cb);  // (none: finalized already, or never initialized - nothing to do, as free(NULL))
+    free(cb);
     SET_HOST(A(0), 0);
 }
 NVN(nvnCommandBufferSetDebugLabel) { (void)c; }

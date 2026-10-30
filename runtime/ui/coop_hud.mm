@@ -57,15 +57,16 @@ static void zzz_bubble(ImDrawList *dl, ImFont *font, float scale, float hx, floa
 }
 
 // "(A) Revive" under a player who is up beside a knocked-out one, as the game's own "(A) Lift" by a rock: the button
-// in a light disc and the word, in a dark rounded box.
+// in a light disc and the word, in a dark rounded box. The button as the game's prompts show it: Switch A wherever it
+// is bound, with the controller's own letter or symbol (an Xbox pad's B, a PlayStation pad's circle by default).
+void confirm_glyph(ImDrawList *dl, ImFont *font, ImVec2 c, float r);  // inventory_overlay.mm
 static void revive_prompt(ImDrawList *dl, ImFont *font, float scale, float x, float y) {
     float ts = 26 * scale, r = ts * 0.5f, pad = 7 * scale;
-    ImVec2 wz = font->CalcTextSizeA(ts, FLT_MAX, 0, "Revive"), az = font->CalcTextSizeA(ts * 0.85f, FLT_MAX, 0, "A");
+    ImVec2 wz = font->CalcTextSizeA(ts, FLT_MAX, 0, "Revive");
     float w = pad + 2 * r + 6 * scale + wz.x + pad, h = 2 * r + 1.2f * pad;
     ImVec2 a(x - w * 0.5f, y), z(x + w * 0.5f, y + h), c(x - w * 0.5f + pad + r, y + h * 0.5f);
     dl->AddRectFilled(a, z, IM_COL32(20, 20, 20, 190), h * 0.5f);
-    dl->AddCircleFilled(c, r, IM_COL32(245, 240, 225, 255), 20);
-    dl->AddText(font, ts * 0.85f, ImVec2(c.x - az.x * 0.5f, c.y - az.y * 0.5f), IM_COL32(40, 30, 20, 255), "A");
+    confirm_glyph(dl, font, c, r);
     dl->AddText(font, ts, ImVec2(c.x + r + 6 * scale, c.y - wz.y * 0.5f), IM_COL32(250, 250, 250, 255), "Revive");
 }
 
