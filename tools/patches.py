@@ -1200,5 +1200,10 @@ _COOP_HOOKS = {
     # in walked Player 1 - everyone with him - slowly over to it (user 2026-10-28).
     A.COOP_WARP_OBJ_TOUCH_SITE: (0x39410d08, (), 'ldrb w8, [x8, #0x43]: a Link stepping into a warp hole object'),
     A.COOP_WARP_OBJ_LEAVE_SITE: (0x39410d08, (), 'ldrb w8, [x8, #0x43]: a Link stepping out of a warp hole object'),
+    # The shadow map's light box (main+0x100a460, each frame: x0 the shadow pass, w1 its cascade - only 0 is fitted -,
+    # x2 the view): the light-space bounds of a world box around Player 1 (+0x200 min, +0x210 max: about 34 x 16 x 33
+    # on the Field) become the light's projection and the shadow lookups' matrix. Zoomed out the view reached past it,
+    # and the shadows at its edge ran on as dark diagonal stripes (user 2026-10-29): it grows with the camera's zoom.
+    A.COOP_SHADOW_BOX_SITE: (0x350025c1, (), 'cbnz w1: the shadow map\'s light box fitted to a world box around Player 1'),
 }
 HOOKS.update({a: h for a, h in _COOP_HOOKS.items() if a})
