@@ -386,9 +386,10 @@ with it (`coop_camera_reach()`).
   With co-op (the default) zooms with 2 players or more, as before, so a game
   alone keeps the game's own camera. Always zooms playing alone too: of the
   co-op hooks only the zoom's run then (`alone_hook`: `COOP_CAMERA_SITE`, the
-  three boxes of screens, and on the Field the actors' updates for cut grass
-  and thrown rocks only - zoomed out, the screen Link just left is still in
-  view, so what he cut there is kept gone as with co-op). With no other player
+  three boxes of screens, the shadow map's box, and on the Field the actors'
+  updates for cut grass and thrown rocks only - zoomed out, the screen Link
+  just left is still in view, so what he cut there is kept gone as with
+  co-op). With no other player
   fit adds nothing (its rows show only with co-op). Off: 1 with co-op too. The
   section is shown without co-op ("Camera", under Players); hidden on 1.0.0.
   Switched off in play the zoom goes to 1 at once (eased, the view widened for
@@ -421,6 +422,28 @@ These are kept for the camera they're in (`g_back_cam`): when the view camera
 changes, the last one gets its own values back first (`camera_back_put`), and
 so does the camera as play ends. Read again from moved values, the move added
 up each time it was the view again.
+
+**The shadow map's box** (`COOP_SHADOW_BOX_SITE`, `shadow_box`). The game
+draws one 2048 x 2048 shadow map a frame (a depth-only pass), and a
+screen-space pass (704 x 396) looks each pixel up in it through a matrix in
+the scene's constants. main+0x100a460 fits the map: it takes a world box
+around Player 1 from the view (`+0x200` min, `+0x210` max: about 34 x 16 x 33
+on the Field, set again each frame), turns its corners into the light's space
+and makes their bounds the light's projection; main+0x1009f30 then makes the
+lookups' matrix from it (the renderer's "View" `+0x2a0`). Zoomed out, the view
+reached past the box: the shadows at its edge ran on as dark diagonal stripes
+across the far ground (user 2026-10-29, past about 2.3 in a 3840x2071 window),
+and past it nothing cast one. The hook (on the fit's first instruction, for
+cascade 0, the only one fitted) grows the box across and deep by `g_zoom`, as
+much as the view grows, so the map's texels cover as much of the screen as at
+1 (its height stays). A second fit in the same frame, the game not having set
+the box since, doesn't grow it again. It costs nothing measurable: the game
+draws every caster into the map anyway (checked 2026-10-30 at Martha's Bay,
+1920x1035: the same draws a frame with and without it at 2.0, 2.6 and 3.0,
+GPU time within 0.2 ms either way, 60 fps). Checked clean at 1.6, 2.0, 2.3,
+2.6 and 3.0, and at 2.6 in a 16:9 window; the far trees now cast shadows too.
+Found from the lookups' matrix (the same at 1 and 2.6, about 47 units across
+in the light's space), the object holding it and the functions storing there.
 
 The first version widened the field of view instead (`rt_fovy` multiplies its
 tangent by `coop_camera_zoom()`, the culling pass's too), which is still what
@@ -621,6 +644,7 @@ the game's reads of it by the RomFS index's patch list, while co-op is on
 | COOP_KEEP_BOX_SITE | 0x700085c628 | ld1 {v0.s}[1], [x23] | the box whose screens are kept, the same (34) |
 | COOP_ACTIVE_BOX_SITE | 0x700085c848 | fsub s8, s0, s3 | the active screens' box takes in every player (35) |
 | COOP_WARP_OBJ_TOUCH / LEAVE_SITE | 0x7000cbd42c / d290 | ldrb w8, [x8, #0x43] | the overworld's warp hole objects (36, 37) |
+| COOP_SHADOW_BOX_SITE | 0x700100a460 | cbnz w1 | the shadow map's box grown with the zoom (38) |
 
 Runtime constants: `PLAYER_VTABLE`, `PLAYER_MAX_HEALTH`, `PLAY_ANIMATION`,
 `DOACTION_CURRENT` / `_PENDING` / `_COOLDOWN` (the slots), `DOACTION_TAKE_RET` /
@@ -856,17 +880,11 @@ runtime gives the menus was checked and is valid, so its cause isn't known yet.
 - **The camera moved back** was checked on the Field at Field_09E, Field_06C
   and Field_02B, and in play only by scripts: not yet in cutscenes on the
   Field or with the sound (the listener may be the camera). At 3x the shadows
-  leave a thin darker wedge at the window's far left edge. At the overworld's
+  left a thin darker wedge at the window's far left edge (seen before the
+  shadow map's box grew with the zoom, likely the same cause; not looked for
+  there since). At the overworld's
   edges (Martha's Bay, Yarna Desert) far out, the view reaches past the map:
   black beyond it (the zoom isn't held back there; it didn't snap there).
-- **Shadows far out in a wide window:** past about 2.3, in a window wider than
-  16:9 (the user's 3840x2071), the far top corner's ground shows dark diagonal
-  stripes: the shadows' reach doesn't cover it. Raising the three values more
-  than the move back doesn't fix it (checked 2026-10-29 at Martha's Bay, 1.6 to
-  3.0, each value alone and together): `+0x560` raised gives dark wedges and
-  unmade ground at 1.6 to 2.3, and no one factor is clean at every zoom. It
-  needs the game's shadow set-up (its cascades' split and the light's box)
-  worked out. Until then "Fit up to" Out 130% (2.3) avoids it.
 - **Slower PCs:** 60 fps at 3x was on an i7-13700K (the game's thread is the
   limit: single-threaded game code).
 
