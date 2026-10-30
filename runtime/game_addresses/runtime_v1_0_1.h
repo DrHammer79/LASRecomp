@@ -88,9 +88,9 @@ GA_ADDR(MAIN_CODE_SIZE,                  0x16a0000)
 GA_ADDR(DELEGATE_JOB_VTABLE_LIVE,         0x7001c51308)
 GA_ADDR(DELEGATE_JOB_VTABLE_BASE,         0x7001c51358)
 // The graphics library's (nn::gfx) command buffer memory event: the NVN callback that passes it to the buffer's own
-// handlers (runtime/nvn/cmdbuf.c)
+// handlers (runtime/nvn/cmdbuf.c); 0 = not in this version
 GA_ADDR(GFX_CMDBUF_MEMORY_EVENT,          0x700113e790)
-// Local co-op (runtime/hle/coop.c): Link's actor class (its objects' vtable pointer)
+// Local co-op (runtime/hle/coop.c; 0 = not in this version): Link's actor class (its objects' vtable pointer)
 GA_ADDR(PLAYER_VTABLE,                    0x7001c17b70)
 GA_ADDR(PLAYER_MAX_HEALTH,                0x7000df8260)
 GA_ADDR(PLAY_ANIMATION,                   0x7000119810)
