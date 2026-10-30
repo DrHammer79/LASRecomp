@@ -1117,7 +1117,7 @@ HOOKS = {
 # own. The hook points of the community Link's Awakening co-op mod (an exlaunch "pxtch" module for 1.0.1: subsdk9 with
 # its patch table, read 2026-10-27), ported; each asks the runtime, which with co-op off runs the instruction as it is.
 # The creator / placement / door-entry hooks sit on their function's first instruction: with co-op on the runtime
-# calls the function once per player itself (rt_coop_create...) and the hook then jumps to its `ret`. The other
+# calls the function once per player itself (coop_create...) and the hook then jumps to its `ret`. The other
 # 1.0.0-and-other-versions tables have 0 there: no co-op in those versions.
 _COOP_HOOKS = {
     A.COOP_CREATE_SITE: (0xf81c0ffc, (A.COOP_CREATE_RET,),

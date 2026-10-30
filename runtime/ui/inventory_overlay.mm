@@ -307,8 +307,9 @@ static void companion_icon(ImDrawList *dl, ImVec2 c, float s, int who) {
 }
 
 // The confirm button (Switch A, wherever it is bound) as the game's prompts draw it: a light disc with the
-// controller's own letter / symbol (texpatch.c relabels the game's glyphs the same way)
-static void confirm_glyph(ImDrawList *dl, ImFont *font, ImVec2 c, float r) {
+// controller's own letter / symbol (texpatch.c relabels the game's glyphs the same way). Also local co-op's revive
+// prompt (coop_hud.mm).
+void confirm_glyph(ImDrawList *dl, ImFont *font, ImVec2 c, float r) {
     int h = bind_prompt_host(BIND_A), fam = bind_label_family();
     ImU32 bg = IM_COL32(240, 232, 210, 255), fg = IM_COL32(52, 38, 20, 255);
     dl->AddCircleFilled(c, r, bg, 24);

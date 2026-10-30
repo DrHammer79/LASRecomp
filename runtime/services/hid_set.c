@@ -51,8 +51,8 @@ SERVICE("hid", hid) {
         if (req->data_size < 1) { resp->result = 0xD401; break; }
         input_rumble_permit((IN(uint8_t, 0) & 1) != 0); break;
     case 205: OUT(uint8_t, 0) = input_rumble_permitted(); resp_size(resp, 1); break;
-    case 211:  // virtual player-1 vibration device is mounted, as advertised by HLE
-        OUT(uint8_t, 0) = req->data_size >= 4 && rumble_side(IN(uint32_t, 0)) >= 0;
+    case 211:  // virtual player-1 vibration device is mounted, as advertised by HLE (local co-op's: with a controller)
+        OUT(uint8_t, 0) = req->data_size >= 4 && input_rumble_mounted(IN(uint32_t, 0));
         resp_size(resp, 1); break;
     case 206: {  // SendVibrationValues: parallel handle/value pointer buffers
         IpcBuf *handles = in_buf(req, 0), *values = in_buf(req, 1);
