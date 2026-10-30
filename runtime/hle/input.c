@@ -30,13 +30,16 @@ static _Atomic uint64_t key_buttons, pad_buttons;
 static _Atomic int32_t key_lx, key_ly, key_rx, key_ry, pad_lx, pad_ly, pad_rx, pad_ry;
 static uint8_t keys_down[SDL_SCANCODE_COUNT];
 static SDL_Gamepad *pad;
+#define COOP_PADS 7                      // local co-op: players 2..8's controllers (below, coop_pad_open)
+static SDL_Gamepad *coop_pad[COOP_PADS];
 static _Atomic int64_t sampling;
 static bool host_test;  // scripted runs must not vibrate the user's controller
 
 // Guest IPC threads publish values; only the UI thread touches SDL's pad.
 // The lock also makes paired value snapshots consistent with permission/reset.
+// Per player: local co-op's players 2.. (npad 1..) rumble their own controllers.
 static SDL_SpinLock rumble_lock;
-static RumbleValue rumble_values[2];
+static RumbleValue rumble_values[1 + COOP_PADS][2];
 static bool rumble_allowed = true;
 static _Atomic uint64_t rumble_frame_ms;
 static uint16_t rumble_last_lo, rumble_last_hi;
@@ -51,25 +54,39 @@ void input_rumble_pulse(uint16_t lo, uint16_t hi, uint32_t ms) {
     atomic_store(&rumble_pulse_until, SDL_GetTicks() + ms);
 }
 
+static uint16_t coop_rumble_last[COOP_PADS][2];  // (players 2..: as rumble_last_lo / _hi / _ms for theirs)
+static uint64_t coop_rumble_ms[COOP_PADS];
+
+// A vibration handle's side (rumble_side), -1 if none, and its player (*player: the npad, 0 = Player 1).
+static int rumble_slot(uint32_t h, int *player) {
+    *player = (h & 0xff000000u) ? 0 : (h >> 8) & 255;
+    return *player <= COOP_PADS ? rumble_side(h & ~0xff00u) : -1;
+}
+
 static void rumble_clear(void) {
     SDL_LockSpinlock(&rumble_lock);
     memset(rumble_values, 0, sizeof rumble_values);
     SDL_UnlockSpinlock(&rumble_lock);
 }
 void input_rumble_send(uint32_t h, const RumbleValue *v) {
-    int side = rumble_side(h);
+    int p, side = rumble_slot(h, &p);
     SDL_LockSpinlock(&rumble_lock);
     if (side < 0) { SDL_UnlockSpinlock(&rumble_lock); return; }
-    if (rumble_allowed) rumble_values[side] = *v;
+    if (rumble_allowed) rumble_values[p][side] = *v;
     SDL_UnlockSpinlock(&rumble_lock);
 }
 RumbleValue input_rumble_get(uint32_t h) {
     RumbleValue v = {0, 160, 0, 320};
-    int side = rumble_side(h);
+    int p, side = rumble_slot(h, &p);
     SDL_LockSpinlock(&rumble_lock);
-    if (side >= 0 && rumble_allowed) v = rumble_values[side];
+    if (side >= 0 && rumble_allowed) v = rumble_values[p][side];
     SDL_UnlockSpinlock(&rumble_lock);
     return v;  // requested value, not physical motor feedback
+}
+// A vibration device mounted (IPC 211): Player 1's as advertised, another player's while he has a controller.
+bool input_rumble_mounted(uint32_t h) {
+    int p;
+    return rumble_slot(h, &p) >= 0 && (p == 0 || coop_pad[p - 1]);
 }
 void input_rumble_permit(bool allowed) {
     SDL_LockSpinlock(&rumble_lock);
@@ -83,44 +100,56 @@ bool input_rumble_permitted(void) {
     SDL_UnlockSpinlock(&rumble_lock);
     return allowed;
 }
+// One player's controller (g, maybe none) to lo / hi: changed, or renewed every 100 ms while on.
+static void rumble_play(SDL_Gamepad *g, uint16_t lo, uint16_t hi, uint16_t *last_lo, uint16_t *last_hi,
+                        uint64_t *last_ms, bool *warned, uint64_t now) {
+    if (g && (lo != *last_lo || hi != *last_hi || ((lo || hi) && now - *last_ms >= 100))) {
+        if (!SDL_RumbleGamepad(g, lo, hi, (lo || hi) ? 250 : 0) && warned && !*warned) {
+            LOG("[rumble] unavailable: %s\n", SDL_GetError());
+            *warned = true;  // keyboard/non-rumble pads are still usable
+        }
+        *last_ms = now;
+    }
+    *last_lo = lo; *last_hi = hi;
+}
 void input_rumble_poll(void) {
     uint64_t now = SDL_GetTicks();
     uint64_t last_frame = atomic_load(&rumble_frame_ms);
-    uint16_t lo = 0, hi = 0;
     // Switch values are latched until changed: they contain no duration.
     // Renew SDL's 250 ms effect every 100 ms while frames are progressing.
     // A stalled render/UI thread therefore cannot leave an infinite effect.
     // This watchdog is a host policy, not a duration supplied by the game.
-    bool suppress = (now > last_frame && now - last_frame > 250) || !pad || host_test || !g_settings.rumble || menu_is_open() ||
+    bool suppress = (now > last_frame && now - last_frame > 250) || host_test || !g_settings.rumble || menu_is_open() ||
                     !SDL_GetKeyboardFocus();
-    SDL_LockSpinlock(&rumble_lock);
-    if (suppress) memset(rumble_values, 0, sizeof rumble_values);
-    else if (rumble_allowed) {
-        rumble_mix(rumble_values, &lo, &hi);
-        if (now < atomic_load(&rumble_pulse_until)) {
-            uint32_t p = atomic_load(&rumble_pulse_amp);
-            if ((p >> 16) > lo) lo = (uint16_t)(p >> 16);
-            if ((p & 0xFFFF) > hi) hi = (uint16_t)(p & 0xFFFF);
+    for (int p = 0; p <= COOP_PADS; p++) {  // (Player 1, then local co-op's players 2..)
+        SDL_Gamepad *g = p ? coop_pad[p - 1] : pad;
+        uint16_t lo = 0, hi = 0;
+        SDL_LockSpinlock(&rumble_lock);
+        if (suppress || !g) memset(rumble_values[p], 0, sizeof rumble_values[p]);
+        else if (rumble_allowed) {
+            rumble_mix(rumble_values[p], &lo, &hi);
+            if (now < atomic_load(&rumble_pulse_until)) {  // (the thunder: every player's)
+                uint32_t a = atomic_load(&rumble_pulse_amp);
+                if ((a >> 16) > lo) lo = (uint16_t)(a >> 16);
+                if ((a & 0xFFFF) > hi) hi = (uint16_t)(a & 0xFFFF);
+            }
+            int pct = g_settings.rumble_strength;  // (Controls tab: Intensity)
+            if (pct > 0 && pct < 100) lo = (uint16_t)(lo * pct / 100), hi = (uint16_t)(hi * pct / 100);
         }
-        int pct = g_settings.rumble_strength;  // (Controls tab: Intensity)
-        if (pct > 0 && pct < 100) lo = (uint16_t)(lo * pct / 100), hi = (uint16_t)(hi * pct / 100);
+        SDL_UnlockSpinlock(&rumble_lock);
+        if (!p) rumble_play(pad, lo, hi, &rumble_last_lo, &rumble_last_hi, &rumble_last_ms, &rumble_warned, now);
+        else rumble_play(g, lo, hi, &coop_rumble_last[p - 1][0], &coop_rumble_last[p - 1][1], &coop_rumble_ms[p - 1],
+                         NULL, now);
     }
-    SDL_UnlockSpinlock(&rumble_lock);
-    if (pad && (lo != rumble_last_lo || hi != rumble_last_hi ||
-                ((lo || hi) && now - rumble_last_ms >= 100))) {
-        if (!SDL_RumbleGamepad(pad, lo, hi, (lo || hi) ? 250 : 0) && !rumble_warned) {
-            LOG("[rumble] unavailable: %s\n", SDL_GetError());
-            rumble_warned = true;  // keyboard/non-rumble pads are still usable
-        }
-        rumble_last_ms = now;
-    }
-    rumble_last_lo = lo; rumble_last_hi = hi;
 }
 void input_rumble_stop(void) {  // UI thread: also called before normal app exit
     rumble_clear();
     atomic_store(&rumble_frame_ms, 0);
     if (pad) SDL_RumbleGamepad(pad, 0, 0, 0);
     rumble_last_lo = rumble_last_hi = 0;
+    for (int i = 0; i < COOP_PADS; i++)
+        if (coop_pad[i]) SDL_RumbleGamepad(coop_pad[i], 0, 0, 0);
+    memset(coop_rumble_last, 0, sizeof coop_rumble_last);
 }
 RT_ON_RESET(input_rumble_reset) {
     input_rumble_stop();
@@ -226,9 +255,8 @@ static void recompute_pad(void) {
 
 // Local co-op (runtime/hle/coop.c): Player 1 keeps the keyboard and the first controller (pad); the second, third...
 // controller connected is player 2, 3... (npad 2.., below in fill_state), with the same controller bindings. A slot
-// keeps its controller until it is disconnected; a controller connected later takes the first free slot.
-#define COOP_PADS 7
-static SDL_Gamepad *coop_pad[COOP_PADS];
+// keeps its controller until it is disconnected; a controller connected later takes the first free slot. (coop_pad:
+// above, with the rumble.)
 static _Atomic uint64_t coop_btn[COOP_PADS];
 static _Atomic int32_t coop_axis[COOP_PADS][4];  // lx, ly, rx, ry
 static _Atomic uint64_t coop_seen[COOP_PADS];    // the buttons the game was last given (coop.c: teleport combo)
@@ -263,8 +291,8 @@ static void coop_recompute(int i) {
 
 // A controller that isn't Player 1's: the first free co-op slot, while co-op is on (UI thread).
 static void coop_pad_open(SDL_JoystickID id) {
-    extern int coop_players_setting(void);  // (coop.c: the setting, readable before the game boots)
-    int n = coop_players_setting() - 1;
+    extern int coop_players_now(void);  // (coop.c: the count in effect - the setting before the game boots)
+    int n = coop_players_now() - 1;
     if (n < 1 || (pad && SDL_GetGamepadID(pad) == id) || coop_slot_of(id) >= 0) return;
     for (int i = 0; i < n && i < COOP_PADS; i++)
         if (!coop_pad[i]) {
@@ -280,22 +308,39 @@ static void coop_pad_open(SDL_JoystickID id) {
 static void coop_pad_close(SDL_JoystickID id) {
     int i = coop_slot_of(id);
     if (i < 0) return;
+    SDL_RumbleGamepad(coop_pad[i], 0, 0, 0);
     SDL_CloseGamepad(coop_pad[i]);
     coop_pad[i] = NULL;
+    coop_rumble_last[i][0] = coop_rumble_last[i][1] = 0;
     coop_recompute(i);
     LOG("[input] co-op player %d: controller disconnected\n", i + 2);
 }
 
 // The controller player `player` (0 = Player 1) has, by name, or NULL (the co-op rows: runtime/ui/controls_ui.mm, UI
-// thread).
+// thread). On the start screen, before the game's first event (input_handle_event takes the controllers then): the
+// ones connected, in the order they'll be taken.
+static bool pads_scanned;
 const char *input_player_pad_name(int player) {
+    if (!pads_scanned) {
+        int n = 0;
+        SDL_JoystickID *ids = SDL_GetGamepads(&n);
+        const char *name = ids && player >= 0 && player < n ? SDL_GetGamepadNameForID(ids[player]) : NULL;
+        SDL_free(ids);
+        return name;
+    }
     SDL_Gamepad *g = player == 0 ? pad : player >= 1 && player <= COOP_PADS ? coop_pad[player - 1] : NULL;
-    return g ? SDL_GetGamepadName(g) : NULL;
+    return g && SDL_GamepadConnected(g) ? SDL_GetGamepadName(g) : NULL;  // (unplugged on the start screen: none)
 }
 
 // The buttons player `player` (1 = player 2) was last given (runtime/hle/coop.c).
 uint64_t input_coop_buttons(int player) {
     return player >= 1 && player <= COOP_PADS ? coop_seen[player - 1] : 0;
+}
+
+// ... and the ones held on his controller (or his test script) now, given to the game or not (coop.c: an A action of
+// his starts on a press, not on A still held as a talk ends).
+uint64_t input_coop_held(int player) {
+    return player >= 1 && player <= COOP_PADS ? coop_btn[player - 1] | coop_script_btn[player - 1] : 0;
 }
 
 // Every press reaches the game, however short. recompute_pad reads the pad as it is now, so a quick tap whose press
@@ -310,17 +355,39 @@ static uint64_t pad_bits(int host) {   // the game buttons bound to host button 
         if (bind_pad_host(i) == host) b |= 1ull << i;
     return b;
 }
-static void note_press(uint64_t down, uint64_t up) {
-    if (down) press_unseen |= down;
+static void note_press_in(_Atomic uint64_t *unseen, _Atomic uint64_t *tap, uint64_t down, uint64_t up) {
+    if (down) *unseen |= down;
     if (up) {
-        uint64_t u = atomic_fetch_and(&press_unseen, ~up) & up;
-        if (u) tap_buttons |= u;
+        uint64_t u = atomic_fetch_and(unseen, ~up) & up;
+        if (u) *tap |= u;
     }
+}
+static void note_press(uint64_t down, uint64_t up) { note_press_in(&press_unseen, &tap_buttons, down, up); }
+
+// The same for local co-op's players 2..: each controller's own (its events here, its polls in coop_fill).
+static _Atomic uint64_t coop_unseen[COOP_PADS], coop_tap[COOP_PADS];
+static void coop_event_press(int i, const SDL_Event *e) {
+    uint64_t down = 0, up = 0;
+    if (e->type == SDL_EVENT_GAMEPAD_BUTTON_DOWN || e->type == SDL_EVENT_GAMEPAD_BUTTON_UP) {
+        uint64_t b = pad_bits(e->gbutton.button);
+        if (e->gbutton.down) down = b; else up = b;
+    } else if (e->gaxis.axis == SDL_GAMEPAD_AXIS_LEFT_TRIGGER || e->gaxis.axis == SDL_GAMEPAD_AXIS_RIGHT_TRIGGER) {
+        static bool trig[COOP_PADS][2];  // (the triggers as buttons: past half way)
+        int t = e->gaxis.axis == SDL_GAMEPAD_AXIS_RIGHT_TRIGGER;
+        bool on = e->gaxis.value > 16000;
+        if (on != trig[i][t]) {
+            uint64_t b = pad_bits(PADB_LTRIGGER + t);
+            if (on) down = b; else up = b;
+            trig[i][t] = on;
+        }
+    }
+    if (!host_test) note_press_in(&coop_unseen[i], &coop_tap[i], down, up);
 }
 
 // Forget held keys (the menu took focus); the gamepad is re-read on its next event.
 void input_reset(void) {
     press_unseen = 0, tap_buttons = 0;
+    for (int i = 0; i < COOP_PADS; i++) coop_unseen[i] = 0, coop_tap[i] = 0;
     rumble_clear();
     memset(keys_down, 0, sizeof keys_down);
     recompute_keyboard();
@@ -495,24 +562,30 @@ static void open_pad(SDL_JoystickID id) {
 }
 
 void input_handle_event(const SDL_Event *e) {
-    static bool scanned;  // pads present at startup: their ADDED event may have gone to the start screen's loop
-    extern int coop_players_setting(void);
+    // (pads present at startup: their ADDED event may have gone to the start screen's loop - pads_scanned)
+    extern int coop_players_now(void);
     static int coop_n = -1;  // (local co-op: the player count the slots were last filled for)
-    if (!scanned) {
-        scanned = true;
+    if (!pads_scanned) {
+        pads_scanned = true;
         int n = 0;
         SDL_JoystickID *ids = SDL_GetGamepads(&n);
         for (int i = 0; ids && i < n; i++) open_pad(ids[i]);
         SDL_free(ids);
     }
-    if (coop_players_setting() != coop_n) {  // local co-op: the others are players 2.. (the count changed: again)
-        coop_n = coop_players_setting();
+    // Local co-op: the others are players 2.. - again when the count in effect changes (the game's own, which changes
+    // out of play only: a controller let go mid-play took over Player 1's Link, and its own stood still)
+    if (coop_players_now() != coop_n) {
+        coop_n = coop_players_now();
         for (int i = coop_n - 1; i < COOP_PADS; i++)  // (slots past the count let go)
             if (i >= 0 && coop_pad[i]) coop_pad_close(SDL_GetGamepadID(coop_pad[i]));
         int n = 0;
         SDL_JoystickID *ids = SDL_GetGamepads(&n);
-        for (int i = 0; i < n; i++)
-            if (!pad || SDL_GetGamepadID(pad) != ids[i]) coop_pad_open(ids[i]);
+        for (int i = 0; ids && i < n; i++) {
+            // (its own open first, as when it's added: one plugged in with the menu up was listed here before its
+            // ADDED event - the slot's open was its only one, and letting the slot go closed it for good)
+            if (coop_slot_of(ids[i]) < 0) open_pad(ids[i]);
+            coop_pad_open(ids[i]);
+        }
         SDL_free(ids);
     }
     // Local co-op: another player's controller is his alone (not Player 1's pad, not the menus' taps)
@@ -520,7 +593,11 @@ void input_handle_event(const SDL_Event *e) {
                            : e->type == SDL_EVENT_GAMEPAD_AXIS_MOTION ? e->gaxis.which : 0;
     if (which && which != TEST_DEVICE) {
         int slot = coop_slot_of(which);
-        if (slot >= 0) { coop_recompute(slot); return; }
+        if (slot >= 0) {
+            coop_event_press(slot, e);
+            coop_recompute(slot);
+            return;
+        }
     }
     switch (e->type) {
     case SDL_EVENT_KEY_DOWN: case SDL_EVENT_KEY_UP: {
@@ -772,31 +849,53 @@ static void host_test_frame(uint64_t frame) {
     }
 }
 
-// LARECOMP_INPUT_P2 .. _P8 (tests): LARECOMP_INPUT's script (below) for local co-op player 2..8.
-static void coop_script_frame(uint64_t frame) {
+// A LARECOMP_INPUT script (below) at a frame: the buttons it holds, its sticks (lx, ly, rx, ry). buf: a copy to cut up.
+static void script_at(const char *spec, uint64_t frame, char *buf, size_t cap, uint64_t *b, int32_t st[4]) {
     static const char *const names[] = {"A", "B", "X", "Y", "LSTICK", "RSTICK", "L", "R", "ZL", "ZR", "PLUS",
                                         "MINUS", "LEFT", "UP", "RIGHT", "DOWN"};
-    for (int i = 0; i < COOP_PADS; i++) {
-        char var[24];
-        snprintf(var, sizeof var, "LARECOMP_INPUT_P%d", i + 2);
-        const char *spec = getenv(var);
-        if (!spec) continue;
-        uint64_t b = 0;
-        int32_t st[4] = {0};
-        static char buf[8192];
-        snprintf(buf, sizeof buf, "%s", spec);
-        char *save = NULL;
-        for (char *tok = strtok_r(buf, ",", &save); tok; tok = strtok_r(NULL, ",", &save)) {
-            unsigned long start = 0, len = 10;
-            char name[32] = "";
-            if (sscanf(tok, "%lu:%31[A-Z_0-9]:%lu", &start, name, &len) < 2) continue;
-            if (frame < start || frame >= start + len) continue;
-            if (!strcmp(name, "STICK_UP")) st[1] = 32767;
-            else if (!strcmp(name, "STICK_DOWN")) st[1] = -32767;
-            else if (!strcmp(name, "STICK_LEFT")) st[0] = -32767;
-            else if (!strcmp(name, "STICK_RIGHT")) st[0] = 32767;
-            for (int k = 0; k < 16; k++) if (!strcmp(name, names[k])) b |= 1ull << k;
+    *b = 0;
+    for (int a = 0; a < 4; a++) st[a] = 0;
+    snprintf(buf, cap, "%s", spec);
+    char *save = NULL;
+    for (char *tok = strtok_r(buf, ",", &save); tok; tok = strtok_r(NULL, ",", &save)) {
+        unsigned long start = 0, len = 10;
+        char name[32] = "";
+        if (sscanf(tok, "%lu:%31[A-Z_0-9]:%lu", &start, name, &len) < 2) continue;
+        if (frame < start || frame >= start + len) continue;
+        if (!strcmp(name, "STICK_UP")) st[1] = 32767;
+        else if (!strcmp(name, "STICK_DOWN")) st[1] = -32767;
+        else if (!strcmp(name, "STICK_LEFT")) st[0] = -32767;
+        else if (!strcmp(name, "STICK_RIGHT")) st[0] = 32767;
+        else if (!strcmp(name, "RSTICK_UP")) st[3] = 32767;
+        else if (!strcmp(name, "RSTICK_DOWN")) st[3] = -32767;
+        else if (!strcmp(name, "RSTICK_LEFT")) st[2] = -32767;
+        else if (!strcmp(name, "RSTICK_RIGHT")) st[2] = 32767;
+        else if (!strncmp(name, "STICK_", 6) && name[6] >= '0' && name[6] <= '9') {
+            double r = atoi(name + 6) * 3.14159265358979 / 180;
+            st[0] = (int32_t)lround(cos(r) * 32767), st[1] = (int32_t)lround(sin(r) * 32767);
         }
+        for (int k = 0; k < 16; k++) if (!strcmp(name, names[k])) *b |= 1ull << k;
+    }
+}
+
+// LARECOMP_INPUT_P2 .. _P8 (tests): LARECOMP_INPUT's script (below) for local co-op player 2..8.
+static void coop_script_frame(uint64_t frame) {
+    static const char *spec[COOP_PADS];
+    static bool read, any;
+    if (!read) {  // (the environment, once: this runs every frame)
+        read = true;
+        for (int i = 0; i < COOP_PADS; i++) {
+            char var[24];
+            snprintf(var, sizeof var, "LARECOMP_INPUT_P%d", i + 2);
+            any |= (spec[i] = getenv(var)) != NULL;
+        }
+    }
+    for (int i = 0; any && i < COOP_PADS; i++) {
+        if (!spec[i]) continue;
+        uint64_t b;
+        int32_t st[4];
+        static char buf[8192];
+        script_at(spec[i], frame, buf, sizeof buf, &b, st);
         coop_script_btn[i] = b;
         for (int a = 0; a < 4; a++) coop_script_axis[i][a] = st[a];
     }
@@ -826,31 +925,11 @@ void input_frame(uint64_t frame) {
     coop_script_frame(frame);
     const char *spec = getenv("LARECOMP_INPUT");
     if (!spec) return;
-    static const char *const names[] = {"A", "B", "X", "Y", "LSTICK", "RSTICK", "L", "R", "ZL", "ZR", "PLUS",
-                                        "MINUS", "LEFT", "UP", "RIGHT", "DOWN"};
-    uint64_t b = 0;
-    int32_t lx = 0, ly = 0, rx = 0, ry = 0;
+    uint64_t b;
+    int32_t st[4];
     static char buf[16384];  // (long scripted sessions: the perf walk is ~4 KB)
-    snprintf(buf, sizeof buf, "%s", spec);
-    for (char *tok = strtok(buf, ","); tok; tok = strtok(NULL, ",")) {
-        unsigned long start = 0, len = 10;
-        char name[32] = "";
-        if (sscanf(tok, "%lu:%31[A-Z_0-9]:%lu", &start, name, &len) < 2) continue;
-        if (frame < start || frame >= start + len) continue;
-        if (!strcmp(name, "STICK_UP")) ly = 32767;
-        else if (!strcmp(name, "STICK_DOWN")) ly = -32767;
-        else if (!strcmp(name, "STICK_LEFT")) lx = -32767;
-        else if (!strcmp(name, "STICK_RIGHT")) lx = 32767;
-        else if (!strcmp(name, "RSTICK_UP")) ry = 32767;
-        else if (!strcmp(name, "RSTICK_DOWN")) ry = -32767;
-        else if (!strcmp(name, "RSTICK_LEFT")) rx = -32767;
-        else if (!strcmp(name, "RSTICK_RIGHT")) rx = 32767;
-        else if (!strncmp(name, "STICK_", 6) && name[6] >= '0' && name[6] <= '9') {
-            double r = atoi(name + 6) * 3.14159265358979 / 180;
-            lx = (int32_t)lround(cos(r) * 32767), ly = (int32_t)lround(sin(r) * 32767);
-        }
-        for (int i = 0; i < 16; i++) if (!strcmp(name, names[i])) b |= 1ull << i;
-    }
+    script_at(spec, frame, buf, sizeof buf, &b, st);
+    int32_t lx = st[0], ly = st[1], rx = st[2], ry = st[3];
     {  // test hooks steering the stick (runtime/hle/doorjump.c LARECOMP_DOORJUMP_TEST)
         extern int32_t g_test_lx, g_test_ly;
         extern uint64_t g_test_stick_until;
@@ -877,8 +956,19 @@ static int32_t clamp_axis(int32_t v) { return v > 32767 ? 32767 : v < -32767 ? -
 static void coop_fill(uint8_t *s, int i) {
     // (knocked out, or Player 1 in a cutscene: no input, scripted too - runtime/hle/coop.c)
     extern int coop_input_blocked(int player);
+    extern uint64_t renderer_present_count(void);
     bool off = coop_input_blocked(i + 1), menu = menu_input_captured() || off;
-    uint64_t b = (menu ? 0 : coop_btn[i]) | (off ? 0 : coop_script_btn[i]);
+    // (a press released before this poll saw it - a quick tap: as for Player 1, note_press)
+    uint64_t held = coop_btn[i];
+    atomic_fetch_and(&coop_unseen[i], ~held);  // (the game sees these now)
+    static uint64_t tap[COOP_PADS], tap_frame[COOP_PADS];  // (held for the rest of the frame: it polls more than once)
+    uint64_t t = atomic_exchange(&coop_tap[i], 0), f = renderer_present_count();
+    if (t) tap[i] |= t, tap_frame[i] = f;
+    else if (f > tap_frame[i]) tap[i] = 0;
+    // (+ and -, the pause menu and the map, are Player 1's: the menu and a save take their spot from his - the hold,
+    // runtime/hle/coop.c hold_on_p1 - and no other player's)
+    uint64_t own = ~((1ull << BTN_PLUS) | (1ull << BTN_MINUS));
+    uint64_t b = ((menu ? 0 : held | tap[i]) | (off ? 0 : coop_script_btn[i])) & own;
     int32_t lx = clamp_axis((menu ? 0 : coop_axis[i][0]) + (off ? 0 : coop_script_axis[i][0]));
     int32_t ly = clamp_axis((menu ? 0 : coop_axis[i][1]) + (off ? 0 : coop_script_axis[i][1]));
     int32_t rx = clamp_axis((menu ? 0 : coop_axis[i][2]) + (off ? 0 : coop_script_axis[i][2]));
@@ -1113,6 +1203,6 @@ HLE_FUNC("_ZN2nn3hid22GetVibrationDeviceInfoEPNS0_19VibrationDeviceInfoERKNS0_21
     uint32_t *info = (uint32_t *)(uintptr_t)c->x[0];
     uint32_t h = *(uint32_t *)(uintptr_t)c->x[1];
     info[0] = 1;        // VibrationDeviceType_LinearResonantActuator
-    int side = rumble_side(h);
+    int player, side = rumble_slot(h, &player);  // (local co-op's players 2.. too)
     info[1] = side < 0 ? 0 : (uint32_t)side + 1;  // None=0, Left=1, Right=2
 }

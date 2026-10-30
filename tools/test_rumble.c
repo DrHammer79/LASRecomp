@@ -25,7 +25,7 @@ static uint64_t input_buttons_now(void);
 static uint64_t ticks = 1000;
 static bool menu, focus = true, supported = true;
 static unsigned calls;
-static Uint16 low, high;
+static Uint16 low, high, coop_low;  // (coop_low: local co-op's player 2, pad 2)
 static Uint32 duration;
 Uint64 SDL_GetTicks(void) { return ticks; }
 SDL_Window *SDL_GetKeyboardFocus(void) { return focus ? (SDL_Window *)1 : NULL; }
@@ -36,6 +36,7 @@ void SDL_LockSpinlock(SDL_SpinLock *p) { (void)p; }
 void SDL_UnlockSpinlock(SDL_SpinLock *p) { (void)p; }
 const char *SDL_GetError(void) { return "test: unsupported controller"; }
 bool SDL_RumbleGamepad(SDL_Gamepad *p, Uint16 l, Uint16 h, Uint32 ms) {
+    if (p == (SDL_Gamepad *)2) { coop_low = l; return true; }
     assert(p == (SDL_Gamepad *)1); calls++; low = l; high = h; duration = ms;
     return supported;
 }
@@ -117,6 +118,20 @@ int main(void) {
     supported = false; single(handles[0], (RumbleValue){.low_amp=1});
     input_rumble_poll(); assert(rumble_warned); // graceful unsupported hardware
     input_rumble_reset(); assert(low == 0 && high == 0 && input_rumble_permitted());
-    puts("PASS: IPC, mapping, mixing, permission, renewal, stop, stall, focus/menu, reconnect, unsupported, reset");
+    // local co-op: npad 1 (player 2) rumbles his own controller, mounted while he has one; Player 1's is untouched
+    supported = true; rumble_frame_ms = ticks;
+    uint32_t p2 = 3u | 1u << 8;
+    assert(request(211, &p2, 4).data[0] == 0);
+    coop_pad[0] = (SDL_Gamepad *)2;
+    assert(request(211, &p2, 4).data[0] == 1);
+    info[1] = 9; cpu.x[0] = (uintptr_t)info; cpu.x[1] = (uintptr_t)&p2;
+    hid_vibration_info(&cpu); assert(info[1] == 1);
+    before = calls;
+    single(p2, (RumbleValue){.low_amp=.5f}); input_rumble_poll();
+    assert(coop_low == 32768 && calls == before);
+    single(p2, (RumbleValue){0}); input_rumble_poll(); assert(coop_low == 0);
+    coop_pad[0] = NULL;
+    puts("PASS: IPC, mapping, mixing, permission, renewal, stop, stall, focus/menu, reconnect, unsupported, reset, "
+         "co-op players' own controllers");
     return 0;
 }

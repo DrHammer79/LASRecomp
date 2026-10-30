@@ -817,6 +817,7 @@ extern "C" void launcher_play_seed(const char *seed) {
     g_play_seed_req = true;
 }
 static float g_menu_gap = 0.35f;  // space under each item, in line heights
+extern "C" void imgui_errors_logged(ImGuiContext *ctx);  // (runtime/ui/menu.mm: its recoverable errors logged)
 
 // The item just drawn, selected, takes A / Space / Enter while ImGui's nav cursor is hidden. ImGui activates the
 // selected item only with the cursor shown, and a selection made from code (SetKeyboardFocusHere,
@@ -858,8 +859,9 @@ static bool aspect_prompt(float s) {
         float bw = 300 * s, gap = 20 * s;
         ImGui::SetCursorPosX((ImGui::GetWindowWidth() - 2 * bw - gap) * 0.5f);
         int pick = -1;
-        ImGui::SetItemDefaultFocus();
-        if (ImGui::Button(L("Original 16:9"), ImVec2(bw, 44 * s)) || nav_activate_hidden()) pick = ASPECT_ORIGINAL;
+        bool original = ImGui::Button(L("Original 16:9"), ImVec2(bw, 44 * s));
+        ImGui::SetItemDefaultFocus();  // (the item just drawn: this button)
+        if (original || nav_activate_hidden()) pick = ASPECT_ORIGINAL;
         ImGui::SameLine(0, gap);
         if (ImGui::Button(L("Unlocked, fill the screen"), ImVec2(bw, 44 * s)) || nav_activate_hidden())
             pick = ASPECT_UNLOCKED;
@@ -901,8 +903,9 @@ static bool menu_tip(float s) {
         ImGui::PopTextWrapPos();
         ImGui::Dummy(ImVec2(0, 14 * s));
         ImGui::SetCursorPosX((ImGui::GetWindowWidth() - 180 * s) * 0.5f);
-        ImGui::SetItemDefaultFocus();
-        if (ImGui::Button(L("OK"), ImVec2(180 * s, 44 * s)) || ImGui::IsKeyPressed(ImGuiKey_Enter) ||
+        bool ok = ImGui::Button(L("OK"), ImVec2(180 * s, 44 * s));
+        ImGui::SetItemDefaultFocus();  // (the item just drawn: OK)
+        if (ok || ImGui::IsKeyPressed(ImGuiKey_Enter) ||
             ImGui::IsKeyPressed(ImGuiKey_GamepadFaceDown)) {
             g_settings.menu_tip_seen = true;
             settings_save();
@@ -1354,8 +1357,9 @@ static void data_folder_popup(float s) {
             if (ImGui::Button(L("Start fresh"), bw) || nav_activate_hidden() || g_df_auto_fresh)
                 g_df_auto_fresh = false, use_it();
             ImGui::SameLine();
-            ImGui::SetItemDefaultFocus();
-            close = ImGui::Button(L("Cancel"), bw) || nav_activate_hidden() || esc;
+            close = ImGui::Button(L("Cancel"), bw);
+            ImGui::SetItemDefaultFocus();  // (the item just drawn: Cancel, the choice that changes nothing)
+            close |= nav_activate_hidden() || esc;
         }
     } else if (g_df == DF_MOVING) {
         static const char *const steps[] = {LN("Copying..."), LN("Checking the copy..."), LN("Removing the old copy...")};
@@ -1429,9 +1433,9 @@ static void prelaunch_tab(float sc) {
             ImGui::CloseCurrentPopup();
         }
         ImGui::SameLine();
-        ImGui::SetItemDefaultFocus();
-        if (ImGui::Button(L("Cancel"), ImVec2(220 * sc, 0)) || nav_activate_hidden() ||
-            ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false) ||
+        bool cancel = ImGui::Button(L("Cancel"), ImVec2(220 * sc, 0));
+        ImGui::SetItemDefaultFocus();  // (the item just drawn: Cancel, not Delete)
+        if (cancel || nav_activate_hidden() || ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false) ||
             ImGui::IsKeyPressed(ImGuiKey_Escape, false))
             ImGui::CloseCurrentPopup();
         ImGui::EndPopup();
@@ -1526,6 +1530,7 @@ extern "C" void launcher_run(const char *root) {
     ImGuiContext *prev_ctx = ImGui::GetCurrentContext();  // the in-game menu's, when back here after a reboot
     ImGuiContext *ctx = ImGui::CreateContext();
     ImGui::SetCurrentContext(ctx);
+    imgui_errors_logged(ctx);
     ImGuiIO &io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_NavEnableGamepad;
     io.IniFilename = NULL;

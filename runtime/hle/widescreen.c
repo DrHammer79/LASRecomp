@@ -11,6 +11,13 @@
 
 #define BACKDROP_HASHES 0x71fe31bbf03c3515ull
 
+static bool backdrop_hash(uint64_t hash) {  // (one of BACKDROP_HASHES)
+    static const uint64_t known[] = {BACKDROP_HASHES};
+    for (unsigned i = 0; i < sizeof known / sizeof known[0]; i++)
+        if (known[i] && hash == known[i]) return true;
+    return false;
+}
+
 static float g_wide = 1.0f;  // output aspect divided by 16:9 (1 = normal)
 
 void widescreen_set_factor(float f) { g_wide = f; }
@@ -34,7 +41,7 @@ float widescreen_effect_stretch(uint64_t fs_hash, float *ky) {
     if (wide <= 1.0f && zoom <= 1.0f) return 1.0f;
     // the interior backdrop (behind houses' rooms: its glow showed as a hard circle zoomed out, "Indoor zoom"; interiors
     // stay 16:9 in a wide window, so only the zoom)
-    if (fs_hash == BACKDROP_HASHES) {
+    if (backdrop_hash(fs_hash)) {
         if (zoom <= 1.0f) return 1.0f;
         *ky = zoom;
         return zoom;
@@ -42,11 +49,11 @@ float widescreen_effect_stretch(uint64_t fs_hash, float *ky) {
     bool known = false;
     for (size_t i = 0; i < sizeof k / sizeof k[0]; i++) known |= k[i] == fs_hash;
     // dungeon darkness around the camera: a hard-edged dark oval once a room shows wider than 16:9 (boxed rooms
-    // keep the original vignette), or zoomed out
+    // keep the original vignette), or zoomed out - a boxed room by the zoom alone (its 16:9 centre is what shows)
     extern bool g_room_wide;
     if (fs_hash == 0xc42e882c08c5e5ebull) {
-        if (zoom > 1.0f) known = true;
-        else if (g_room_wide) return wide;
+        if (zoom > 1.0f) { *ky = zoom; return (g_room_wide ? wide : 1.0f) * zoom; }
+        if (g_room_wide) return wide;
     }
     if (!known) return 1.0f;
     // the camera moved back instead (outdoors): the woods' fog is a mesh around Player 1, not the camera, and from
@@ -169,9 +176,7 @@ void romfs_file_read_hook(const char *path) { (void)path; }
 static uint64_t g_backdrop_hash = 0;  // set below once known
 static uint64_t g_backdrop_frame = ~0ull;
 void widescreen_backdrop_seen(uint64_t hash) {
-    static const uint64_t known[] = {BACKDROP_HASHES};
-    for (unsigned i = 0; i < sizeof known / sizeof known[0]; i++)
-        if (known[i] && hash == known[i]) { extern uint64_t renderer_exec_frame(void); g_backdrop_frame = renderer_exec_frame(); }
+    if (backdrop_hash(hash)) { extern uint64_t renderer_exec_frame(void); g_backdrop_frame = renderer_exec_frame(); }
     (void)g_backdrop_hash;
 }
 // Interiors and dungeons only render their 16:9 centre. Besides the backdrop detection, the game's current level

@@ -82,7 +82,7 @@ typedef struct {
     float walk_speed;    // Link's walking speed multiplier (1 = normal; Gameplay tab, runtime/hle/qol.c)
     bool walk_speed_dungeons;  // walk speed also indoors: houses, caves, dungeons (Gameplay tab, under Walk speed)
     bool coop_collision; // co-op: the Links block each other (off: they walk through each other; spawns stack them anyway)
-    int coop_players;    // local co-op: 1 = off, 2..8 Links, one per controller (Controls tab; runtime/hle/coop.c, read at boot)
+    int coop_players;    // local co-op: 1 = off, 2..8 Links, one per controller (Controls tab; runtime/hle/coop.c, read again out of play)
     bool coop_targets;   // co-op: enemies go after the nearest player (held while fighting him); off: Player 1 only
     bool coop_host_exits;  // co-op: only Player 1 leads everyone through doors, loading zones, stairs (off: anyone)
     int coop_health;     // co-op: COOP_HEALTH_SHARED (the game's one set of hearts) or COOP_HEALTH_OWN (each player his own)

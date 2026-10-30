@@ -17,7 +17,6 @@ extern "C" {
 #include "../input_bind.h"
 #include "../settings.h"
 
-extern "C" int coop_players_setting(void);  // (runtime/hle/coop.c: 1 once the game is a version without co-op)
 extern "C" int coop_colours_state(void);    // (runtime/hle/coop.c: 0 the tunic colours are in, 1 after a restart, 2 no file)
 extern "C" const char *coop_colours_path(void);  // (... where that file goes)
 extern "C" bool coop_supported(void);       // (... false once the game is a version without co-op)

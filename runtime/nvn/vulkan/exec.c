@@ -6743,8 +6743,13 @@ static void draw_(CmdRec *r, bool indexed) {
         extern float widescreen_effect_stretch(uint64_t fs_hash, float *ky);
         float ky, k = widescreen_effect_stretch(g_cur_fs_hash, &ky);
         float vx = vp[0] * vp_sx + vp_ox, vw = vp[2] * vp_sx, vy = vp[1] * vp_sy + vp_oy, vh = vp[3] * vp_sy;
+        // (no wider than the device's viewports go - 16384 on many: a wide window zoomed far out passed it)
+        const VkPhysicalDeviceLimits *lim = &g_vk.props.limits;
+        if (k > 1.0f && vw * k > lim->maxViewportDimensions[0]) k = fmaxf(1.0f, lim->maxViewportDimensions[0] / vw);
+        if (ky > 1.0f && vh * ky > lim->maxViewportDimensions[1]) ky = fmaxf(1.0f, lim->maxViewportDimensions[1] / vh);
         if (k > 1.0f) { vx -= vw * (k - 1) / 2; vw *= k; }
         if (ky > 1.0f) { vy -= vh * (ky - 1) / 2; vh *= ky; }  // (the co-op zoom: both ways)
+        vx = fmaxf(vx, lim->viewportBoundsRange[0]), vy = fmaxf(vy, lim->viewportBoundsRange[0]);
         set_viewport(vx, vy, vw, vh, zn, zf);
         if (g_debug_frame) {
             VkRect2D sr = scissor_rect();

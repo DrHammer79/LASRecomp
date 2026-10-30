@@ -128,7 +128,7 @@ static void base_open(void) {
 // ------------------------------------------------------------------ RomFS file index (offset -> path)
 typedef struct { uint64_t start, size; char *path; bool warned; const uint8_t *mem; } Overlay;
 // in-image patches (copies of RomFS tables with changes): header, dir meta, file hash, file meta
-typedef struct { uint64_t off, size; uint8_t *data; } Patch;
+typedef struct { uint64_t off, size; uint8_t *data; int (*on)(void); } Patch;  // (on: applied while it says so)
 static Patch patches[8];
 static int npatches;
 static Overlay *ov;
@@ -406,9 +406,10 @@ static void rom_index(void) {
     // (in a copy) to point them at data appended past the end of the image; reads there go to host files.
     for (int i = 0; i < rom_nfiles; i++) {
         char host[1200];
+        // (local co-op's first: its Playerlink.bfres over an older seed's tunic one - its colours need its own)
         extern bool coop_romfs_override(const char *path, char *out, size_t cap);  // (runtime/hle/coop.c)
-        if (!rando_romfs_override(rom_files[i].path, host, sizeof host) &&
-            !coop_romfs_override(rom_files[i].path, host, sizeof host)) continue;
+        if (!coop_romfs_override(rom_files[i].path, host, sizeof host) &&
+            !rando_romfs_override(rom_files[i].path, host, sizeof host)) continue;
         struct stat sb;
         if (stat(host, &sb)) continue;
         if (!ov_meta) {
@@ -432,16 +433,17 @@ static void rom_index(void) {
     }
     if (ov_n) LOG("[fs] randomizer: %d romfs files replaced\n", ov_n);
     if (ov_meta) { patches[npatches++] = (Patch){ov_meta_off, ov_meta_size, ov_meta}; }
-    {   // a few bytes of the game's own files changed (local co-op only: runtime/hle/coop.c)
+    {   // a few bytes of the game's own files changed (local co-op only, while it's on: runtime/hle/coop.c)
         extern bool coop_romfs_patch(const char *path, uint64_t off, uint64_t size,
                                      ssize_t (*rd)(void *, uint64_t, uint64_t), uint64_t *at, uint32_t *val);
+        extern int rt_coop_on(void);
         for (int i = 0; i < rom_nfiles && npatches < (int)(sizeof patches / sizeof *patches) - 3; i++) {
             uint64_t at;
             uint32_t val;
             if (!coop_romfs_patch(rom_files[i].path, rom_files[i].off, rom_files[i].size, base_pread, &at, &val)) continue;
             uint8_t *d = malloc(4);
             memcpy(d, &val, 4);
-            patches[npatches++] = (Patch){at, 4, d};
+            patches[npatches++] = (Patch){at, 4, d, rt_coop_on};
         }
     }
     // The game's own files (before a seed's added files; the crash dialog checks them), their sizes summed, and the
@@ -524,7 +526,8 @@ static ssize_t romfs_read(uint8_t *dst, uint64_t size, uint64_t off) {
             for (int k = 0; k < npatches; k++) {
                 uint64_t a = o > patches[k].off ? o : patches[k].off;
                 uint64_t b = o + n < patches[k].off + patches[k].size ? o + n : patches[k].off + patches[k].size;
-                if (a < b) memcpy(dst + done + (a - o), patches[k].data + (a - patches[k].off), b - a);
+                if (a < b && (!patches[k].on || patches[k].on()))
+                    memcpy(dst + done + (a - o), patches[k].data + (a - patches[k].off), b - a);
             }
         }
         done += n;
