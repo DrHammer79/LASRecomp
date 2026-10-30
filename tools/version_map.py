@@ -16,6 +16,7 @@ How an address is mapped (anything else is an error, to be looked at by hand):
 - read-only data: kept when the bytes around it are identical in both builds and the segment starts at the same place.
 - data / bss: kept when both segments have the same place and size.
 - sdk addresses: kept when the sdk is byte-identical. Values outside the modules (limits, sizes) are copied.
+- 0 (not in the <from> version: local co-op is 1.0.1 only): the <to> table's own value is kept.
 Then check the result with test_game_addresses.py --game (patch asserts and hook words on the new build).
 """
 import argparse
@@ -151,12 +152,16 @@ class Mapper:
         return None, 'data/bss: the layout differs'
 
 
-def map_header(text, values, mapper, label):
+def map_header(text, values, mapper, label, keep=None):
+    """keep: the target table's values, for the names the source version doesn't have (0 there)."""
     lines, notes = [], []
     for line in text.splitlines():
         m = re.fullmatch(r'(GA_ADDR\(([A-Z][A-Z0-9_]*),\s+)(0x[0-9a-f]+)\)', line)
         if m:
-            new, how = mapper.map(values[m[2]])
+            if values[m[2]] == 0 and (keep or {}).get(m[2]):
+                new, how = keep[m[2]], 'not in the source version: kept'
+            else:
+                new, how = mapper.map(values[m[2]])
             if new is None:
                 raise SystemExit(f'GA_{m[2]} ({values[m[2]]:#x}) does not map: {how}. Find it by hand.')
             if new != values[m[2]]:
@@ -186,8 +191,9 @@ def main():
     stale = []
     for kind in ('patches', 'runtime'):
         src = TABLE_DIR / f'{kind}_{args.src}.h'
-        text, notes = map_header(src.read_text(encoding='utf-8'), load_table(src), mapper, VERSIONS[args.dst][0])
         dst = TABLE_DIR / f'{kind}_{args.dst}.h'
+        keep = load_table(dst) if dst.exists() else {}
+        text, notes = map_header(src.read_text(encoding='utf-8'), load_table(src), mapper, VERSIONS[args.dst][0], keep)
         print(f'{dst.name}: {len(load_table(src))} addresses, {len(notes)} moved')
         for n in notes:
             print(n)

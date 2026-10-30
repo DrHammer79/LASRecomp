@@ -10,8 +10,9 @@ Everything is in `runtime/hle/coop.c` (game logic), `runtime/ui/coop_hud.mm`
 `tools/patches.py` (`_COOP_HOOKS`). Co-op is off by default: with
 `coop_players = 1`, every hook returns 0 and runs its own instruction, so the
 game plays exactly as without the feature - unless "Zoom out" is set to
-Always, when the zoom's own hooks run alone (`zoom_hook`, under "Camera
-zoom").
+Always, when the zoom's own hooks run alone (`alone_hook`, under "Camera
+zoom"), or after a session with co-op this boot: the tunic file still in
+("Colours") and the Links left over from it ("Making the Links").
 
 ## How it works
 
@@ -34,7 +35,10 @@ added another set: copies of a player standing about, moving with his
 controller. Each Link the creator makes is remembered (`g_made`). A run takes
 back a live one that no player holds before making a new one. One that is left
 over anyway is put out of the way (under the map) and its update is skipped
-(`COOP_ACTOR_EXEC_SITE`).
+(`COOP_ACTOR_EXEC_SITE`). That goes on with co-op turned off too (`g_leftover`:
+the game keeps the Links through a Game Over's Continue and a return to the
+title, and they copied Player 1), and the pause menu's hold takes them in (see
+"The pause menu").
 
 **Spawns.** A placement at a spawn point (`COOP_PLACE_SITE`) is run for each
 player on the same spot, Player 1 last (`COOP_PLACE_PLAYER_SITE` picks the
@@ -52,6 +56,20 @@ pushed while his rests, on another pad makes it his), but never one that
 another player has: their pads' events go to their slots before that check,
 and neither a pad added nor the one left when his is unplugged becomes his if
 it's in a slot (`tools/test_active_pad.c`, with two players and three pads).
+- The slots follow the player count in effect (`coop_players_now`: the game's,
+  which changes out of play only). Changed mid-play, a pad let go took over
+  Player 1's Link at its next press while its own Link stood still.
+- A pad gets its own open before a slot takes it, also when the count changed
+  before its "added" event (set with the menu up): the slot's open was its only
+  one, and letting the slot go closed it until it was plugged in again.
+- A quick tap (pressed and released before the game polls) reaches players
+  2.. as it reaches Player 1 (`coop_event_press`, `note_press`).
+- `+` and `-` (the pause menu, the map) are Player 1's: the menu and a save take
+  their spot from his (the hold, below), so the other players' are not passed on.
+- Rumble: npads 1..7 rumble the other players' own controllers
+  (`rumble_slot`; IPC 211 reports theirs mounted while they have one).
+- On the start screen, before the game has taken the controllers, the Controls
+  tab names the ones connected in the order they'll be taken.
 
 The game reads which controllers are connected when the npad's "style set
 changed" event is signalled. A controller turned on after the game had read
@@ -69,7 +87,11 @@ indexed, as the game boots (again after Quit to Start Screen). The Controls tab
 says when it is missing, with the path it goes to (`coop_colours_path`), or
 when co-op was turned on after the game started and it comes with Quit to
 Start Screen (`coop_colours_state`). Before the game has started, nothing is
-shown: the colours come as it starts.
+shown: the colours come as it starts. Co-op turned off after it started, the
+file is still in: each Link's frame then picks the game's own tunic's set in
+it (green, red, blue), and the countdown's move (below) is no longer applied.
+Co-op's RomFS files go before a randomizer seed's (an older seed's tunic
+`Playerlink.bfres`: the colours need co-op's).
 Red is a deeper crimson (0x8b1a2b) than the game's heart red, so a red
 player's hearts don't read as the game's own.
 
@@ -101,7 +123,8 @@ jumping onto another stood on his head and stuck a second or two.
   reads as one with the bit set.
 - When a contact with a door ends, the door forgets its pending exit, whoever
   left (`main+0x76b20`). Another player's Link leaving doesn't make it forget
-  (`COOP_EXIT_LEAVE_*`).
+  (`COOP_EXIT_LEAVE_*`) - with `coop_host_exits` off his own touch is kept, so
+  then his leaving drops it, as Player 1's does.
 - **New rooms.** When Player 1's camera scrolls to a new camera area indoors,
   or he moves more than 10 units in one frame (stairs into a side-view room),
   the others follow him (`room_follow_tick`). That waits for Player 1 to stand
@@ -148,7 +171,10 @@ alone.
   "Link", Player 1. The Link whose A starts one waits in
   his "open" state for the event to move him on, which for another player
   never came. So another player's A on one starts the component's action
-  itself (`DOACTION_TRIGGER`) and his Link stays as he is. Items from chests go
+  itself (`DOACTION_TRIGGER`) and his Link stays as he is: on a press of A made
+  while he can act (`a_press_tick`), and as the game's own check allows it
+  (`doaction_can`: the component's flags, the countdown after an action). On A
+  held, the talk began again as it ended: his A had closed its last text. Items from chests go
   into the shared inventory, and Player 1 holds the item up in the item-get
   scene, whoever opened the chest.
 - **Talking.** A talk another player starts plays on Player 1 too, and only
@@ -172,7 +198,9 @@ cutscene, an item held up, a talk), the others get no input
 (`coop_input_blocked`, which also blocks the scripted test input). Link's
 state kind tells it: slot `+0x4ed`, states at `+0x1340`, kind at the state's
 `+0x28`. The event kinds are the ones the game's "can he go" check
-(`main+0xd58d70`) holds apart: 18, 19, 22, 23, 24 and 26. Before, the others
+(`main+0xd58d70`) holds apart by its mask `0x4ec0000`: 18, 19, 21, 22, 23 and
+26 (the check also looks past the kind for some others - 1, 3, 11 - which the
+copy doesn't). Before, the others
 walked about during Marin's talk with the walrus, and a door's slam played
 again for each player walking in.
 
@@ -248,11 +276,14 @@ stairs' rock, `ObjRock-4800A5005B88BEDC`, back as he stepped onto them).
   (`ObjRock`, `ObjGrass`, `ObjGrass2x2`, `ObjLawn`, `ObjSkullStone`; its hash
   worked out once per actor, `actor_class`). Destroyed: actor `+0x40` bit 30
   set by its own update (cut, or thrown and broken), or set before it with a
-  player within `GONE_TAKER` (4 units: lifted, cut by another player's sword).
-  The screens the game unloads as Player 1 moves on kill theirs between
-  updates, far from everyone: those come back whole. Counted as destroyed, the
-  tall grass around was kept gone at the zoom's wide views, bare earth in its
-  place.
+  player within `GONE_TAKER` (4 units: lifted, cut by another player's sword)
+  or in a screen at least one screen inside those the game keeps
+  (`gone_kept_screen`, 90 x 72 grown with the zoom: a boomerang's, an arrow's,
+  a bomb's from afar). The screens the game unloads as Player 1 moves on kill
+  theirs between updates, far from everyone and at the kept ones' edge: those
+  come back whole. Counted as destroyed, the tall grass around was kept gone at
+  the zoom's wide views, bare earth in its place. Nothing is counted for 2 s
+  after a level change (`LEVEL_GOING`): everything in the old level dies.
 - Only those destroyed take a slot (`GONE_SLOTS` 4096; when they're all taken
   the one destroyed longest ago makes way). The first version took one for
   every one seen: walking the Field filled the table, and from then on nothing
@@ -288,7 +319,9 @@ stairs' rock, `ObjRock-4800A5005B88BEDC`, back as he stepped onto them).
   1.6, height too: in a side view a player swimming above him had the prompt)
   for `coop_revive_s` seconds revives him with 30% of the maximum and 2 s
   of no damage (`REVIVE_SAFE`). An "(A) Revive" prompt shows under a player
-  who can revive someone (`coop_revive_prompt`); two on one spot are stacked,
+  who can revive someone (`coop_revive_prompt`), its button as the game's
+  prompts show Switch A (`confirm_glyph`: an Xbox pad's B, a PlayStation pad's
+  circle by default); two on one spot are stacked,
   each moved below the one it overlaps at most once (moved while it was
   within `h` of it, `y + h` could still test within it by a rounding: the HUD
   looped forever and the game locked up with two players by a knocked-out
@@ -331,7 +364,10 @@ stairs' rock, `ObjRock-4800A5005B88BEDC`, back as he stepped onto them).
   one seen at `COOP_CAMERA_SITE`), with the zoom's field of view. A player
   out of view has his bubble pinned to the screen's edge on his side, with a
   rim in his colour (`player_screen`). The revive bar is green on a dark
-  track, so it shows on the white player's bubble.
+  track, so it shows on the white player's bubble. The HUD (the UI thread)
+  projects with Player 1's Link and the view camera as the frame starts
+  (`g_hud_host`, `g_hud_cam`, set in `coop_tick`), not as the game thread has
+  them mid-update (an enemy's update points the player slot at its target).
 - **Hidden** on the pause menu's Items and Map pages.
 
 **Camera zoom** (`coop_zoom`, `coop_camera_fit`, `coop_zoom_fit`, `zoom_tick`).
@@ -345,12 +381,19 @@ with it (`coop_camera_reach()`).
 - **On with co-op, always, or off** ("Zoom out", `coop_zoom_mode`, `zoom_on`):
   With co-op (the default) zooms with 2 players or more, as before, so a game
   alone keeps the game's own camera. Always zooms playing alone too: of the
-  co-op hooks only the zoom's run then (`zoom_hook`: `COOP_CAMERA_SITE`, the
+  co-op hooks only the zoom's run then (`alone_hook`: `COOP_CAMERA_SITE`, the
   three boxes of screens, and on the Field the actors' updates for cut grass
   and thrown rocks only - zoomed out, the screen Link just left is still in
   view, so what he cut there is kept gone as with co-op). With no other player
   fit adds nothing (its rows show only with co-op). Off: 1 with co-op too. The
   section is shown without co-op ("Camera", under Players); hidden on 1.0.0.
+  Switched off in play the zoom goes to 1 at once (eased, the view widened for
+  seconds over screens no longer made), and `COOP_CAMERA_SITE` runs once more
+  alone to put the camera's own values back.
+- **Who counts:** players who are up, not one lost below the world (parked at
+  y −1000 he took the zoom and the boxes of screens to their largest), and not
+  during the pause menu's hold (everyone is on Player 1's spot then: the zoom
+  stays as it was).
 
 **On the Field the camera is moved back** (`camera_back`, at
 `COOP_CAMERA_SITE`, right after the camera's view matrix is set). The view
@@ -369,6 +412,11 @@ own value plus the move, the game's own again at 1):
 - the tilt-shift's focus (`qol.c` `rt_tilt_focus_add`: the post-process
   object's `+0x40` and `+0x80`, 26.5): Player 1 was blurred and the band shown
   sharp sat near the screen's bottom.
+
+These are kept for the camera they're in (`g_back_cam`): when the view camera
+changes, the last one gets its own values back first (`camera_back_put`), and
+so does the camera as play ends. Read again from moved values, the move added
+up each time it was the view again.
 
 The first version widened the field of view instead (`rt_fovy` multiplies its
 tangent by `coop_camera_zoom()`, the culling pass's too), which is still what
@@ -415,7 +463,9 @@ through the ground and was taken off the map. With co-op on the Field:
   loaded from Angler's Tunnel, four players).
 - **The first two boxes grow with the zoom** (`g_box`, 1 to `BOX_MAX` 2 in
   0.25 steps, `box_tick`): the smallest that covers the zoom wanted, grown at
-  once, shrunk after 5 s of wanting less.
+  once, shrunk after 5 s of wanting less. Without a camera or Player 1 yet (a
+  file loading) they stay as they are: "no room" read as "too small", and the
+  load made 13 x 13 screens.
 - **The zoom stays inside the screens made** (`zoom_room`): points along their
   edge (the screens the first box meets, less 2 for a tall grass patch's
   reach), on the ground at Player 1's height, are put through the view, and the
@@ -490,7 +540,10 @@ popping up). While he falls he's below the ground; as the game stands him up
 where he fell from, he's parked out of sight (y −1000, his update not running)
 until it's time, then put on Player 1 standing, which a teleport needs.
 Teleports (`ride_on_host`) also set the Link's safe spot (`Link+0x1b40`, where
-the game puts him back after a fall).
+the game puts him back after a fall). Only on the Field: elsewhere the ground
+is all there, and swimming down or a long ladder in a side-view room dropped a
+player 8 too. Not during the pause menu's hold (his position is Player 1's
+then), and forgotten at a spawn and as play ends (`lost_forget`).
 
 Where the ground is solid (the active screens) was found later the same day:
 see "The screens around Player 1". It explains what was seen before: on Ukuku
@@ -512,12 +565,23 @@ updates skipped meanwhile, and put back once Player 1's update runs again after
 the pause (or 8 frames on, if no menu came). Checked with `build/savetest.sh`:
 saved with Player 2 9 units away, the file holds Player 1's spot, and after the
 menu closes Player 2 is back on his own spot, walking.
+- The Links left over (parked below the map, co-op off too) are held as well:
+  the first one made can be one of them.
+- While held, nothing reads their positions as theirs: no revives (A held in
+  the menu revived a player lying far away), no zoom fit, no lost players,
+  bring-back or room follow, no L3+R3.
+- Play ending from the menu (Save and Quit, a Game Over) forgets the hold
+  without writing anything back (`hold_forget`): its components may be gone, and
+  the next file's Links were moved to the old level's spots. A level change (a
+  warp from the overlay while paused) lets them go first.
+- `+` or `-` that closes the menu doesn't hold them again.
 
 **The game's countdown** (Dampé's timed chamber challenges, `Dg_TimeCount`)
 sits in the bottom left, where the hearts go. With co-op on, its pane
 `N_Time_00` moves to the bottom centre. That is 4 bytes of
 `region_common/ui/Game.arc`, found by name (`coop_romfs_patch`) and laid over
-the game's reads of it by the RomFS index's patch list.
+the game's reads of it by the RomFS index's patch list, while co-op is on
+(the patch's `on`).
 
 ## Hook sites (v1_0_1)
 
@@ -587,14 +651,19 @@ only with "Zoom out" Always). On, four headings:
 | | Enemies target the nearest player | coop_targets | 1 | enemies go after the nearest player |
 | | Players block each other | coop_collision | 0 | the Links block each other |
 
-The tunic colours and the countdown move are fixed when the game boots (the
-RomFS index): after turning co-op on or off, Quit to Start Screen and play
-again (checked: the colours load).
+The tunic colours are fixed when the game boots (the RomFS index): after
+turning co-op on, Quit to Start Screen and play again (checked: the colours
+load). Turned off, every Link wears the game's own tunic from the file until
+then, and the countdown is back in its corner.
 
 ## Tests
 
 Address tables: `python tools/test_game_addresses.py`, and with game files
-`--game v1_0_1=<extracted>` checks every hook's instruction word.
+`--game v1_0_1=<extracted>` checks every hook's instruction word. It also checks
+that a version with co-op has every `COOP_*` address (one left at 0 drops its
+hook), and `tools/version_map.py` keeps the 1.0.1 tables' own values for what
+1.0.0 doesn't have (0 there). The `build/*.sh` scripts named below are local
+(`build/` isn't in the repository); they come with the co-op developer package.
 
 Test switches (environment):
 
@@ -659,8 +728,13 @@ What was checked on 1.0.1, mostly with the test inputs above and
 
 **ImGui checks.** `IM_ASSERT` (`third_party/imgui/imconfig.h`) calls
 `imgui_check_failed` (`runtime/ui/menu.mm`), which logs the failed check and a
-backtrace once per place instead of stopping the game with a dialog. One was
-seen in play with co-op on and its cause isn't known yet: the log line names it.
+backtrace once per place and goes on, as a release ImGui (built without them)
+does, instead of stopping the game with a dialog. ImGui's recoverable errors (a
+Begin without its End, a Push without its Pop) don't go through it: ImGui puts
+them right at the frame's end, and they're logged (`imgui_errors_logged`, for
+both contexts). One check was seen with co-op on, in the Controls tab:
+`IsNamedKey(key)` in `GetKeyData` (a key code that isn't one); every key the
+runtime gives the menus was checked and is valid, so its cause isn't known yet.
 - **A-button actions** (`build/interact_check.sh`): Player 2 lifting and
   throwing a rock and a pot, opening a chest (the seashell at Field 07M),
   reading a sign (Field 04P),
@@ -723,7 +797,10 @@ seen in play with co-op on and its cause isn't known yet: the log line names it.
   likely came from the build before the evening round's fix.
 - **Upstream's controller tests** (`tools/test_active_pad.c`,
   `tools/test_rumble.c`: both include `runtime/hle/input.c`): build and pass at
-  each of the commits, the first with co-op cases (two players, three pads).
+  each of the commits, with co-op cases: two players and three pads, pads
+  plugged in after the count changed (each with its own open: let go, it stays
+  open), a quick tap on Player 2's pad, and player 2's rumble on his own pad
+  (mounted only while he has one).
 - **The evening round** (user playtest 2026-10-28):
   - Revive prompts (`build/hud_pair.sh`): 4 players on one spot, Player 2
     knocked out, the others stepping round him, at the user's 3840x2071 window:
@@ -731,9 +808,9 @@ seen in play with co-op on and its cause isn't known yet: the log line names it.
     shown in a test program - at 3840x2071 it trips for about 7% of prompt
     positions below y 1024 - not landed on in a scripted run.) Over the warp
     hole's "Where to?" map neither bubble nor prompt shows.
-  - Command memory: every buffer without a handler capped to 4 KB of the
-    game's memory (a temporary test switch), 70 s at 3x: four buffers (64 KB to
-    4 MB) went on in host memory, no error, the picture as before, 60 fps.
+  - Command memory: with a test build capping every buffer without a handler
+    to 4 KB of the game's memory, 70 s at 3x: four buffers (64 KB to 4 MB) went
+    on in host memory, no error, the picture as before, 60 fps.
   - Warp hole objects: Players 3 and 4 stepping onto the Martha's Bay warp
     hole: "only Player 1 jumps in", Player 1 not in an event; Player 1 stepping
     on it: the jump and "Where to?".
@@ -744,7 +821,7 @@ seen in play with co-op on and its cause isn't known yet: the log line names it.
     `ZolGreen:` / `Ghini:` / `Armos:` / `AnaMonea:EnemyReactionCom` among those
     that go by the target, their owners the enemies.
   - Yarna Desert (Field_13P) at Out 50% and 3: no circle, no ghosting.
-  - The zoom logged every frame (a temporary switch), players spread at Ukuku
+  - The zoom logged every frame (a test build), players spread at Ukuku
     Prairie (to 2.5) and at Martha's Bay, the map's edge (to 3): no snap in
     play, only as a level loads.
   - A copy of the user's File 3 loaded with 4 players: all stand, no
@@ -807,3 +884,19 @@ seen in play with co-op on and its cause isn't known yet: the log line names it.
   challenge.
 - **Not played with extras:** minigames (the Trendy Game's crane, the Rapids
   Ride, fishing) and cutscenes.
+- **Left as they are (2026-10-29 audit):**
+  - A walk-in (kind 16) is told from a talk's only by `g_talking` (an A that
+    started an event, or 60 frames): a talk an NPC starts would put the others
+    on Player 1 each frame of its walk, and a door within 60 frames of an A that
+    started nothing leaves them at the door (the room follow brings them).
+  - Player 1 put back at a room's entry after a pit counts as "moved more than
+    10 units": the others are put on him there, bring-back on or off.
+  - Host command memory (an out-of-memory buffer with no handler) is freed 8
+    frames after the buffer gets the game's memory again: a list recorded there
+    and kept to be called or sent again later would read freed memory. The
+    game's own memory is reused the same way, so none is expected.
+  - The co-op `Game.arc` patch and `Playerlink.bfres` are chosen as the RomFS is
+    indexed (boot, Quit to Start Screen); the countdown's patch follows co-op
+    on and off after that only where the game reads the file again.
+  - `COOP_SCROLL_SITE` is placed and does nothing (removing it renumbers the
+    sites after it).
