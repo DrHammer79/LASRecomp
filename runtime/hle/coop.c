@@ -1452,9 +1452,18 @@ static void room_follow_tick(void) {
     static bool have;
     float h[3], p[3];
     if (!player_pos(host_player(), h)) return;
-    // (Player 1 moved far in one frame - stairs into a side-view room, a room swapped in place - is a new room too)
+    // (Player 1 moved far in one frame as the view turned side-on or back - stairs into a side-view room, out of one -
+    // is a new room too. Not a jump alone: put back at a room's entry after a pit, everyone was put on him there.)
+    extern bool game_side_view(void);  // runtime/hle/widescreen.c
+    static bool side;
+    static uint64_t jumped_at, turned_at;
+    uint64_t f = renderer_present_count();
     float dx = h[0] - last[0], dy = h[1] - last[1], dz = h[2] - last[2];
-    if (have && dx * dx + dy * dy + dz * dz > 10.0f * 10.0f && !g_room_frame) g_room_frame = renderer_present_count();
+    if (have && dx * dx + dy * dy + dz * dz > 10.0f * 10.0f) jumped_at = f;
+    if (game_side_view() != side) side = !side, turned_at = f;
+    if (jumped_at && turned_at && (jumped_at > turned_at ? jumped_at - turned_at : turned_at - jumped_at) <= 30 &&
+        !g_room_frame)
+        g_room_frame = f, jumped_at = turned_at = 0;
     memcpy(last, h, sizeof last), have = true;
     // (and once he stands in it - put on him while stairs still carry him up, they'd be in the floor - and each one
     // on his own feet: one falling, the game puts back where he fell from when it's done, over a move made meanwhile)
