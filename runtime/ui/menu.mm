@@ -85,16 +85,37 @@ struct QEvent {
     char text[32];
 };
 // ImGui's failed checks (third_party/imgui/imconfig.h IM_ASSERT): logged with the host backtrace the first time at
-// each place, then ImGui goes on as it would past an ignored assert.
+// each place, then ImGui goes on as it would past an ignored assert (as a release ImGui, built without them, does).
+// Past the places it remembers, each is logged once more at most - not a backtrace every frame.
 extern "C" void plat_print_backtrace(void);
 extern "C" void imgui_check_failed(const char *expr, const char *file, int line) {
     static const char *seen_file[32];
-    static int seen_line[32], nseen;
+    static int seen_line[32], nseen, past;
     for (int i = 0; i < nseen; i++)
         if (seen_line[i] == line && seen_file[i] == file) return;
     if (nseen < 32) seen_file[nseen] = file, seen_line[nseen++] = line;
+    else if (past++ >= 32) return;
     LOG("[imgui] check failed: %s (%s:%d)\n", expr, file, line);
     plat_print_backtrace();
+}
+
+// Its recoverable errors (a Begin without its End, a Push without its Pop...: IM_ASSERT_USER_ERROR) aren't checks
+// that fail: ImGui puts them right itself at the frame's end. Logged here, once each - not through IM_ASSERT, and not
+// as a tooltip on screen. For each context (this menu's, the start screen's: launcher.mm).
+static void user_error(ImGuiContext *, void *, const char *msg) {
+    static const char *seen[32];
+    static int nseen;
+    for (int i = 0; i < nseen; i++)
+        if (seen[i] == msg) return;
+    if (nseen < 32) seen[nseen++] = msg;
+    LOG("[imgui] error, recovered: %s\n", msg);
+}
+extern "C" void imgui_errors_logged(ImGuiContext *ctx) {
+    ctx->IO.ConfigErrorRecovery = true;
+    ctx->IO.ConfigErrorRecoveryEnableAssert = false;
+    ctx->IO.ConfigErrorRecoveryEnableTooltip = false;
+    ctx->IO.ConfigErrorRecoveryEnableDebugLog = false;
+    ctx->ErrorCallback = user_error;
 }
 
 static pthread_mutex_t q_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -612,6 +633,7 @@ static void init(void) {
     IMGUI_CHECKVERSION();
     g_ctx = ImGui::CreateContext();
     ImGui::SetCurrentContext(g_ctx);
+    imgui_errors_logged(g_ctx);
     ImGuiIO &io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_NavEnableGamepad;
     io.BackendFlags |= ImGuiBackendFlags_HasGamepad;
