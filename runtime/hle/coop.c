@@ -1964,6 +1964,27 @@ static void active_box(Cpu *c) {
     set_s(c, 3, hx), set_s(c, 4, (z1 - z0) / 2), set_s(c, 5, (z0 + z1) / 2);
 }
 
+// The shadow map's light box (COOP_SHADOW_BOX_SITE): the game fits its one 2048 x 2048 shadow map to a world box around
+// Player 1 (the view's +0x200 min, +0x210 max: about 34 x 16 x 33 on the Field, set again each frame). Zoomed out the
+// view reached past it: the shadows at its edge ran on as dark diagonal stripes across the far ground (user 2026-10-29,
+// past 2.3 in a wide window), and past it nothing cast one. Grown across and deep by the zoom, as much as the view
+// grows, the map's texels cover as much of the screen as at 1. It costs nothing measurable: the game draws every
+// caster into the map anyway (draws the same, GPU time within 0.2 ms either way at 2.0, 2.6 and 3.0).
+// (what we left in it: a second fit in the same frame, the game not having set it since, doesn't grow it again)
+static uint64_t g_shadow_view;
+static float g_shadow_grown[8];
+static void shadow_box(uint64_t view) {
+    if (g_zoom <= 1.0f || !heap_ptr(view)) return;
+    float *b = (float *)(uintptr_t)(view + 0x200);  // (min x y z, max x y z: each 4 floats)
+    if (view == g_shadow_view && !memcmp(b, g_shadow_grown, sizeof g_shadow_grown)) return;
+    for (int i = 0; i < 3; i += 2) {  // (across and deep: its height as it is)
+        float mid = (b[i] + b[4 + i]) * 0.5f, half = (b[4 + i] - b[i]) * 0.5f * g_zoom;
+        b[i] = mid - half, b[4 + i] = mid + half;
+    }
+    g_shadow_view = view;
+    memcpy(g_shadow_grown, b, sizeof g_shadow_grown);
+}
+
 // LARECOMP_TRACK_RESPAWN=1 (diagnostic): a rock or grass actor made again under the same name - one that came back -
 // logged as "[respawn]", with where it is and whether a player is near it or it's in view (gone_watched): one made
 // again in view, destroyed or not, pops (cut grass and lifted rocks came back beside Player 1 in play, 2026-10-28).
@@ -1994,10 +2015,10 @@ static void respawn_track(uint64_t actor) {
 }
 
 // Alone (no co-op) only these run: the zoom's, with the zoom on - the camera (and once more as it goes off: the camera's
-// own values back), the Field's boxes of screens, and on the Field the actors' updates for the cut grass and thrown
-// rocks kept gone in view (zoomed out, the screen Player 1 just left is still in view); this boot's co-op tunic file's
-// (the game's own tunic frames in it: COOP_COLOR_SITE); and the actors' updates while Links made for other players are
-// left over (parked, as with fewer players: they copied Player 1).
+// own values back), the Field's boxes of screens, the shadow map's box, and on the Field the actors' updates for the
+// cut grass and thrown rocks kept gone in view (zoomed out, the screen Player 1 just left is still in view); this
+// boot's co-op tunic file's (the game's own tunic frames in it: COOP_COLOR_SITE); and the actors' updates while Links
+// made for other players are left over (parked, as with fewer players: they copied Player 1).
 bool coop_colours(void);
 static bool alone_hook(int which) {
     switch (which) {
@@ -2005,6 +2026,7 @@ static bool alone_hook(int which) {
     case 15: case 16: return g_back_on || g_leftover;
     case 17: return zoom_on() || g_back != 0;
     case 33: case 34: case 35: return g_back_on;
+    case 38: return g_zoom > 1.0f;
     }
     return false;
 }
@@ -2183,6 +2205,10 @@ int rt_coop_hook(Cpu *c, int which) {
         return warp_hole(c, true);
     case 37:  // COOP_WARP_OBJ_LEAVE_SITE - ldrb w8, [x8, #0x43]: ... stepped out of it
         return warp_hole(c, false);
+    case 38:  // COOP_SHADOW_BOX_SITE - cbnz w1: the shadow map's light box (cascade w1: only 0 is fitted) fitted to the
+              // view x2's world box around Player 1 - grown with the zoom
+        if (!(uint32_t)c->x[1]) shadow_box(c->x[2]);
+        return 0;
     }
     return 0;
 }
