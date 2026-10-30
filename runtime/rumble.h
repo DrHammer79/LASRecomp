@@ -34,6 +34,7 @@ static inline void rumble_mix(const RumbleValue v[2], uint16_t *lo, uint16_t *hi
 
 void input_rumble_send(uint32_t handle, const RumbleValue *value);
 RumbleValue input_rumble_get(uint32_t handle);
+bool input_rumble_mounted(uint32_t handle);  // (IPC 211; local co-op's players 2.. while they have a controller)
 void input_rumble_permit(bool permitted);
 bool input_rumble_permitted(void);
 void input_rumble_poll(void);  // UI thread, same owner as pad open/close

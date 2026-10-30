@@ -35,6 +35,7 @@ int bind_pad_host(int slot) { return g_bind_pad[slot]; }  // (by position: "Butt
 pthread_mutex_t g_klock = PTHREAD_MUTEX_INITIALIZER;
 static int players = 1;  // (local co-op's player count: runtime/hle/coop.c)
 int coop_players_setting(void) { return players; }
+int coop_players_now(void) { return players; }
 int rt_coop_players(void) { return players; }
 
 static SDL_JoystickID attach(const char *name) {
@@ -150,8 +151,30 @@ int main(void) {
     assert(SDL_DetachVirtualJoystick(c2));
     pump();
     assert(input_active_pad() == 0);
+
+    // two players again before the pads come (set with the menu up: nothing reached input.c), then plugged in: the
+    // first is Player 1's, the second Player 2's - with an open of its own, so let go it stays open
+    players = 2;
+    SDL_JoystickID d1 = attach("late 1 (virtual)"), d2 = attach("late 2 (virtual)");
+    pump();
+    assert(input_active_pad() == d1 && coop_slot_of(d2) == 0);
+    // a quick tap on Player 2's pad - pressed and released before the events are read - still reaches him
+    SDL_Joystick *j2 = SDL_GetJoystickFromID(d2);
+    assert(SDL_SetJoystickVirtualButton(j2, SDL_GAMEPAD_BUTTON_SOUTH, true));
+    SDL_UpdateJoysticks();
+    assert(SDL_SetJoystickVirtualButton(j2, SDL_GAMEPAD_BUTTON_SOUTH, false));
+    pump();
+    assert(!(coop_btn[0] & 1ull << BIND_A) && (coop_tap[0] & 1ull << BIND_A));
+    players = 1;
+    input_handle_event(&none);
+    assert(coop_slot_of(d2) < 0 && SDL_GetGamepadFromID(d2));
+    button(d2, SDL_GAMEPAD_BUTTON_SOUTH, true);
+    assert(input_active_pad() == d2);
+    button(d2, SDL_GAMEPAD_BUTTON_SOUTH, false);
+    assert(SDL_DetachVirtualJoystick(d1) && SDL_DetachVirtualJoystick(d2));
+    pump();
     SDL_Quit();
     puts("PASS: press / stick on port 2 takes the game's pad and holds stay held; drift and in-use guard; unplug fallback;"
-         " co-op: another player's pad never the game's");
+         " co-op: another player's pad never the game's, pads plugged in after the count changed, quick taps");
     return 0;
 }

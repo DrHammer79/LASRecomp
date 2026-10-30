@@ -374,7 +374,7 @@ void settings_load(void) {
         else if (!strcmp(key, "coop_hud")) g_settings.coop_hud = atoi(val) < 0 || atoi(val) > 2 ? 0 : atoi(val);
         else if (!strcmp(key, "coop_zoom_mode"))
             g_settings.coop_zoom_mode = atoi(val) < 0 || atoi(val) > COOP_ZOOM_OFF ? COOP_ZOOM_WITH_COOP : atoi(val);
-        else if (!strcmp(key, "coop_zoom"))  // (coop_camera before: other steps - left to the default)
+        else if (!strcmp(key, "coop_zoom"))
             g_settings.coop_zoom = atoi(val) < 0 ? 0 : atoi(val) > COOP_ZOOM_MAX ? COOP_ZOOM_MAX : atoi(val);
         else if (!strcmp(key, "coop_zoom_fit"))
             g_settings.coop_zoom_fit = atoi(val) < 1 ? 1 : atoi(val) > COOP_ZOOM_FIT_MAX ? COOP_ZOOM_FIT_MAX : atoi(val);
