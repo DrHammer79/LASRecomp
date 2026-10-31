@@ -8,6 +8,9 @@ static int input_pad_family(void);
 static void input_handle_event(const SDL_Event *e);
 static void input_frame(uint64_t frame);
 static uint64_t input_buttons_now(void);
+static void input_assign_begin(int player);
+static int input_assign_waiting(void);
+static bool input_assign_event(const SDL_Event *e);
 #include "../runtime/hle.h"
 #include "../runtime/ipc.h"
 #undef HLE_FUNC
