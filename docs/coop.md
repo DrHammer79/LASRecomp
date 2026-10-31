@@ -287,7 +287,10 @@ nearest player (`nearest_player`), not the one the enemy stays on - another
 player's hit knocked a turtle back from where its target stood, up onto a
 ledge (Angler's Tunnel). A Gel (`EnemyMiniZol`) goes for the nearest player
 throughout: one that jumped at its target and landed on another player clung
-to him, then went over to its target. The rules:
+to him, then went over to its target. So do the Zols (`EnemyZolRed`,
+`EnemyZolGreen`), which cling too: a red one hopping after Player 1 latched on
+Player 2 on the way and was on Player 1 the next moment (user 2026-10-30). The
+rules:
 - An enemy targets the nearest player who is up.
 - Within `TARGET_ENGAGE` (6 units, about 4 tiles) it keeps him until he is
   knocked out, so an attack, a wind-up or a boss pattern plays out on one

@@ -1206,7 +1206,9 @@ static bool on_game_thread(void) {  // (per call of the actor hooks: pthread_sel
 // these see its target as "Link" too (AC_ENEMY_PART). Not the others (collision, animation...): Player 1's sword hits it
 // whoever it targets.
 // A Gel (EnemyMiniZol) goes for the nearest player, not one it stays on (AC_ENEMY_NEAREST): one that jumped at its
-// target and landed on another player clung to him, then went over to its target (user 2026-10-28).
+// target and landed on another player clung to him, then went over to its target (user 2026-10-28). So do the Zols,
+// red and green, which cling as well: one hopping after Player 1 landed on Player 2 on the way, latched on, and was
+// on Player 1 the next moment (user 2026-10-30, red ones: "latches to p2 and then teleports to p1").
 // A floor that crumbles under Link (AC_FLOOR: the collapse tiles, the rattling floor...) looks for "Link" on it: only
 // Player 1 set one off (user 2026-10-30, the Southern Face Shrine). Another player standing on it is its "Link" for
 // its update, while Player 1 isn't.
@@ -1253,7 +1255,9 @@ static ActorClass *actor_class(uint64_t actor) {
     e->what = strstr(name, "React") || strstr(name, "PlayerComp") ? AC_ENEMY_PART
               : floor_name(name)                                     ? AC_FLOOR
               : strstr(name, "Comp") || strncmp(name, "Enemy", 5) ? AC_OTHER
-              : !strncmp(name, "EnemyMiniZol", 12) ? AC_ENEMY_NEAREST : AC_ENEMY;
+              : !strncmp(name, "EnemyMiniZol", 12) || !strncmp(name, "EnemyZolRed", 11) || !strncmp(name, "EnemyZolGreen", 13)
+                  ? AC_ENEMY_NEAREST
+                  : AC_ENEMY;
     // (each kind of an enemy's parts once: which ones go by "Link" - and the others, which don't: a Like Like caught
     // the player it went for by Player 1's "Link", user 2026-10-30)
     uint64_t owner = strchr(name, ':') && ENV("LARECOMP_COOP_LOG") ? LD64(actor + 0x48) : 0;
