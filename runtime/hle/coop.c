@@ -146,13 +146,22 @@ static int g_hp[COOP_MAX];       // players 2..: their hearts (quarter hearts; -
 static bool g_down[COOP_MAX];    // knocked out
 static uint64_t g_safe_until[COOP_MAX];  // revived: unhurt until this frame
 static float g_revive[COOP_MAX];  // a revive in progress (0..1)
-static bool g_can_revive[COOP_MAX];  // players who are up beside a knocked-out one: holding A revives him
+// A knocked-out player's "(A) Revive" prompt is on him (below him), while a player who is up is beside him and nobody
+// holds A there - not on the one who can revive him, where it went along as he walked about (user 2026-10-31).
+static bool g_can_revive[COOP_MAX];  // knocked-out players with a player who is up beside them, not holding A
+// A player holding A beside a knocked-out one stands still (coop_reviving: runtime/hle/input.c). A hit on him stops
+// the revive: the knocked-out ones he held A beside lose their progress, and his A revives again only once he has let
+// go of it (revive_hit; user 2026-10-31).
+static uint32_t g_reviving[COOP_MAX];  // (whom he holds A beside: a bit per player)
+static bool g_revive_hit[COOP_MAX];    // (hit while reviving, A not let go since)
 static int g_game_hp = -1;       // the game's hearts last frame (for what it gained)
 static int g_max_hp;             // the maximum (main+0xdf8260, every half second and whenever the hearts change)
 static int g_heal_pending;       // hearts healed this frame before the game's maximum capped them (COOP_HEAL_SITE_*)
 
 static void hearts_forget(void) {  // (a new boot / back at the title: everyone starts the next file at full hearts)
     for (int i = 0; i < COOP_MAX; i++) g_hp[i] = -1, g_down[i] = false, g_revive[i] = 0, g_safe_until[i] = 0;
+    memset(g_reviving, 0, sizeof g_reviving);
+    memset(g_revive_hit, 0, sizeof g_revive_hit);
     g_game_hp = -1;
     g_max_hp = 0;
     g_heal_pending = 0;
@@ -269,20 +278,33 @@ static int running_player(Cpu *c) {
     return 0;
 }
 
+static void revive_hit(int j) {
+    if (!g_reviving[j]) return;
+    for (int i = 1; i < COOP_MAX; i++)
+        if (g_reviving[j] >> i & 1 && g_revive[i] > 0) {
+            CLOG("[coop] player %d hit while reviving player %d: the revive stops (%.0f%% lost)\n", j + 1, i + 1,
+                 g_revive[i] * 100);
+            g_revive[i] = 0;
+        }
+    g_reviving[j] = 0, g_revive_hit[j] = true;
+}
+
 // A hit of `dmg` quarter hearts (after the difficulty setting) about to come off the game's hearts.
 int32_t rt_coop_damage(Cpu *c, int32_t dmg) {
     if (!own_hearts() || dmg <= 0) return dmg;
     int i = running_player(c);
-    if (!i) return dmg;
     if (g_down[i]) {
+        CLOG("[coop] player %d hit for %d: knocked out, unhurt\n", i + 1, dmg);
         down_hit(i);
         return 0;
     }
-    if (g_settings.cheat_hearts) return 0;
-    if (renderer_present_count() < g_safe_until[i]) {
+    if (i && renderer_present_count() < g_safe_until[i]) {
         CLOG("[coop] player %d hit for %d: just revived, unhurt\n", i + 1, dmg);
         return 0;
     }
+    revive_hit(i);  // (with infinite hearts too: the hit still lands)
+    if (!i) return dmg;
+    if (g_settings.cheat_hearts) return 0;
     if (g_hp[i] < 0) g_hp[i] = g_max_hp > 0 ? g_max_hp : 12;
     g_hp[i] -= dmg;
     CLOG("[coop] player %d hit for %d (%d left)\n", i + 1, dmg, g_hp[i]);
@@ -465,10 +487,13 @@ static void hearts_tick(Cpu *c) {
     extern uint64_t input_buttons_now(void);
     float step = 1.0f / (60.0f * (float)(g_settings.coop_revive_s > 0 ? g_settings.coop_revive_s : 4));
     memset(g_can_revive, 0, sizeof g_can_revive);
+    memset(g_reviving, 0, sizeof g_reviving);
+    for (int j = 0; j < g_n; j++)
+        if (g_revive_hit[j] && !((j ? input_coop_buttons(j) : input_buttons_now()) & 1)) g_revive_hit[j] = false;
     for (int i = 1; i < g_n && !g_held_at; i++) {
         if (!g_down[i]) continue;
         float pi[3];
-        bool helped = false;
+        bool helped = false, near = false;
         if (player_pos(g_extra[i], pi))
             for (int j = 0; j < g_n; j++) {
                 float pj[3];
@@ -477,10 +502,13 @@ static void hearts_tick(Cpu *c) {
                 // 2026-10-28)
                 float dx = pj[0] - pi[0], dy = pj[1] - pi[1], dz = pj[2] - pi[2];
                 if (dx * dx + dy * dy + dz * dz >= 1.6f * 1.6f) continue;
-                g_can_revive[j] = true;  // (his "A Revive" prompt: runtime/ui/coop_hud.mm)
+                near = true;
                 uint64_t b = j ? input_coop_buttons(j) : input_buttons_now();
-                helped |= (b & 1) != 0;  // (bit 0: A)
+                if (!(b & 1) || g_revive_hit[j]) continue;  // (bit 0: A)
+                helped = true;
+                g_reviving[j] |= 1u << i;
             }
+        g_can_revive[i] = near && !helped;  // (his prompt: runtime/ui/coop_hud.mm)
         g_revive[i] = helped ? g_revive[i] + step : g_revive[i] > step ? g_revive[i] - step : 0;
         if (g_revive[i] >= 1) revive(i, "by another player");
     }
@@ -1053,12 +1081,15 @@ bool coop_player_screen(int i, float w, float h, float *sx, float *sy, bool *edg
     return i >= 1 && !g_p1_event && player_screen(i, 1.0f, w, h, sx, sy, edge);
 }
 
-// Where to show player i's "A Revive" prompt (below him), when he is up beside a knocked-out player.
+// Where to show knocked-out player i's "A Revive" prompt (below him), when a player who is up is beside him.
 bool coop_revive_prompt(int i, float w, float h, float *sx, float *sy) {
     bool edge;
-    return i >= 0 && i < COOP_MAX && g_can_revive[i] && !g_p1_event && player_screen(i, -0.3f, w, h, sx, sy, &edge) &&
-           !edge;
+    return i > 0 && i < COOP_MAX && g_can_revive[i] && g_down[i] && !g_p1_event &&
+           player_screen(i, -0.3f, w, h, sx, sy, &edge) && !edge;
 }
+
+// Player i (0: Player 1) holds A beside a knocked-out player: his stick and d-pad don't move him.
+int coop_reviving(int i) { return own_hearts() && i >= 0 && i < COOP_MAX && g_reviving[i] != 0; }
 
 // The HUD (runtime/ui/coop_hud.mm): each player's hearts, maximum, knocked out / revive progress and colour.
 typedef struct { int hp, max, down; float revive; uint32_t rgb; } CoopHudRow;
@@ -1141,21 +1172,10 @@ static int nearest_player(uint64_t enemy) {  // (who is nearest it, within TARGE
     return best;
 }
 
-static int enemy_target(uint64_t enemy) {
-    float e[3], p[3];
-    if (!actor_pos(enemy, e)) return 0;
-    float d[COOP_MAX], bd = 1e30f;
-    int best = -1;
-    for (int i = 0; i < g_n; i++) {
-        d[i] = 1e30f;
-        if ((i && g_down[i]) || !player_pos(coop_player(i), p) || p[1] < -500.0f) continue;
-        d[i] = (p[0] - e[0]) * (p[0] - e[0]) + (p[2] - e[2]) * (p[2] - e[2]);
-        if (d[i] < bd) bd = d[i], best = i;
-    }
-    if (best < 0 || bd > TARGET_FAR * TARGET_FAR) return 0;  // (far from everyone: off screen, nothing to keep)
-    // its slot: the top bits of a multiplicative hash (actors sit on 4 KB boundaries), a short probe; when that is
-    // full, the entry seen longest ago goes
-    uint64_t frame = renderer_present_count();
+// An enemy's slot: the top bits of a multiplicative hash (actors sit on 4 KB boundaries), a short probe; when that is
+// full, the entry seen longest ago goes. *cur: the target it keeps (-1: none - an entry not seen for a while is an
+// earlier enemy's: the game reuses actors' memory).
+static uint32_t target_slot(uint64_t enemy, uint64_t frame, int *cur) {
     uint32_t h = (uint32_t)(((enemy >> 12) * 0x9E3779B97F4A7C15ull) >> 56) % TARGET_SLOTS, old = h;
     for (int k = 0; k < 8; k++) {
         uint32_t s = (h + k) % TARGET_SLOTS;
@@ -1163,11 +1183,35 @@ static int enemy_target(uint64_t enemy) {
         if (g_target[s].seen < g_target[old].seen) old = s;
     }
     h = old;
-    // (an entry not seen for a while is an earlier enemy's: the game reuses actors' memory)
-    bool known = g_target[h].actor == enemy && frame - g_target[h].seen < 30;
-    int cur = known ? g_target[h].who : -1;
-    float cd = cur >= 0 && cur < g_n ? d[cur] : 1e30f, engage = TARGET_ENGAGE * TARGET_ENGAGE;
+    *cur = g_target[h].actor == enemy && frame - g_target[h].seen < 30 ? g_target[h].who : -1;
     g_target[h].actor = enemy, g_target[h].seen = frame;
+    return h;
+}
+
+// Each player's distance from an enemy across (squared; 1e30: knocked out, or away from the map); the nearest one.
+static int player_dists(const float e[3], float d[COOP_MAX], float *bd) {
+    float p[3];
+    int best = -1;
+    *bd = 1e30f;
+    for (int i = 0; i < g_n; i++) {
+        d[i] = 1e30f;
+        if ((i && g_down[i]) || !player_pos(coop_player(i), p) || p[1] < -500.0f) continue;
+        d[i] = (p[0] - e[0]) * (p[0] - e[0]) + (p[2] - e[2]) * (p[2] - e[2]);
+        if (d[i] < *bd) *bd = d[i], best = i;
+    }
+    return best;
+}
+
+static int enemy_target(uint64_t enemy) {
+    float e[3];
+    if (!actor_pos(enemy, e)) return 0;
+    float d[COOP_MAX], bd;
+    int best = player_dists(e, d, &bd);
+    if (best < 0 || bd > TARGET_FAR * TARGET_FAR) return 0;  // (far from everyone: off screen, nothing to keep)
+    uint64_t frame = renderer_present_count();
+    int cur;
+    uint32_t h = target_slot(enemy, frame, &cur);
+    float cd = cur >= 0 && cur < g_n ? d[cur] : 1e30f, engage = TARGET_ENGAGE * TARGET_ENGAGE;
     if (cur >= 0 && cd < 1e30f) {  // (its target is up)
         bool clearly = cd > bd * 2.25f;
         if (cd <= engage && !(clearly && bd <= TARGET_MELEE * TARGET_MELEE && frame >= g_target[h].since + TARGET_LOCK)) {
@@ -1182,6 +1226,34 @@ static int enemy_target(uint64_t enemy) {
              cd < 1e30f ? sqrtf(cd) : -1.0f, best + 1, sqrtf(bd));
     g_target[h].who = best, g_target[h].until = frame + TARGET_LOCK, g_target[h].since = frame;
     return best;
+}
+
+// A Zol or a Gel (AC_ENEMY_NEAREST) hops a set length at its target: hopping from right on him it lands past him, by a
+// player beside him - the nearest by then, so it went for him (user 2026-10-31: on Player 2, "they still teleport to
+// player 1"; build/zol.sh). It goes for the player it is on: one it lands on (within CLING_REACH across, on the ground
+// with him) is its target, kept while he's up and within TARGET_ENGAGE of it; then one clearly nearer.
+#define CLING_REACH 0.5f
+static int clinger_target(uint64_t enemy) {
+    float e[3], p[3];
+    if (!actor_pos(enemy, e)) return 0;
+    float d[COOP_MAX], bd, on = CLING_REACH * CLING_REACH;
+    int best = player_dists(e, d, &bd), t = -1;
+    if (best < 0 || bd > TARGET_FAR * TARGET_FAR) return 0;
+    for (int i = 0; i < g_n; i++)
+        if (d[i] < on && player_pos(coop_player(i), p) && fabsf(p[1] - e[1]) < 0.3f) on = d[i], t = i;
+    uint64_t frame = renderer_present_count();
+    int cur;
+    uint32_t h = target_slot(enemy, frame, &cur);
+    bool landed = t >= 0;  // (further off, another player has to be clearly nearer: 1.5x, as enemy_target)
+    if (!landed)
+        t = cur >= 0 && cur < g_n && d[cur] < 1e30f && (d[cur] <= TARGET_ENGAGE * TARGET_ENGAGE || d[cur] <= bd * 2.25f)
+                ? cur
+                : best;
+    if (t != cur && cur >= 0)
+        CLOG("[coop] %.32s: P%d -> P%d (%s)\n", (const char *)(uintptr_t)(enemy + 0x18), cur + 1, t + 1,
+             landed ? "landed on him" : "the nearest");
+    g_target[h].who = t;
+    return t;
 }
 
 static uint64_t g_updating;  // the actor whose update is running (COOP_ACTOR_EXEC_*), on the game thread
@@ -1205,10 +1277,10 @@ static bool on_game_thread(void) {  // (per call of the actor hooks: pthread_sel
 // a zombie walked to Player 1 whoever it targeted (tested 2026-10-28) - and its player follower (TailorPlayerComp):
 // these see its target as "Link" too (AC_ENEMY_PART). Not the others (collision, animation...): Player 1's sword hits it
 // whoever it targets.
-// A Gel (EnemyMiniZol) goes for the nearest player, not one it stays on (AC_ENEMY_NEAREST): one that jumped at its
-// target and landed on another player clung to him, then went over to its target (user 2026-10-28). So do the Zols,
-// red and green, which cling as well: one hopping after Player 1 landed on Player 2 on the way, latched on, and was
-// on Player 1 the next moment (user 2026-10-30, red ones: "latches to p2 and then teleports to p1").
+// A Gel (EnemyMiniZol) goes for the player it is on, not one it was after (AC_ENEMY_NEAREST: clinger_target): one that
+// jumped at its target and landed on another player clung to him, then went over to its target (user 2026-10-28). So
+// do the Zols, red and green, which cling as well: one hopping after Player 1 landed on Player 2 on the way, latched
+// on, and was on Player 1 the next moment (user 2026-10-30, red ones: "latches to p2 and then teleports to p1").
 // A floor that crumbles under Link (AC_FLOOR: the collapse tiles, the rattling floor...) looks for "Link" on it: only
 // Player 1 set one off (user 2026-10-30, the Southern Face Shrine). Another player standing on it is its "Link" for
 // its update, while Player 1 isn't.
@@ -1276,10 +1348,13 @@ static ActorClass *actor_class(uint64_t actor) {
     return e;
 }
 
-// LARECOMP_COOP_TRACE=<name prefix> (test): each such actor's position every half second, and the player it goes for.
+// LARECOMP_COOP_TRACE=<name prefix> (test): each such actor's position every half second (LARECOMP_COOP_TRACE_EVERY:
+// every that many frames), and the player it goes for whenever that changes (actor_exec_begin).
 static void trace_actor(uint64_t actor) {
-    const char *pre = ENV("LARECOMP_COOP_TRACE");
-    if (!pre || renderer_present_count() % 30 || strncmp((const char *)(uintptr_t)(actor + 0x18), pre, strlen(pre))) return;
+    const char *pre = ENV("LARECOMP_COOP_TRACE"), *every = ENV("LARECOMP_COOP_TRACE_EVERY");
+    if (!pre || renderer_present_count() % (every && atoi(every) > 0 ? atoi(every) : 30) ||
+        strncmp((const char *)(uintptr_t)(actor + 0x18), pre, strlen(pre)))
+        return;
     float p[3];
     if (actor_pos(actor, p))
         LOG("[trace] frame %llu %.40s (%.2f %.2f %.2f)\n", (unsigned long long)renderer_present_count(),
@@ -1336,10 +1411,24 @@ static void actor_exec_begin(Cpu *c) {
     } else if (what == AC_ENEMY)
         t = enemy_target(actor);
     else if (what == AC_ENEMY_NEAREST)
-        t = nearest_player(actor);
+        t = clinger_target(actor);
     else
         return;
     uint64_t gm = LD64(GA(GAME_MGR)), own = gm ? LD64(gm + 0x4b8) : 0;
+    const char *pre = ENV("LARECOMP_COOP_TRACE");
+    if (pre && !strncmp((const char *)(uintptr_t)(actor + 0x18), pre, strlen(pre))) {  // (trace_actor: whom it goes for)
+        static uint64_t who[16][2];
+        int k = 0;
+        while (k < 15 && who[k][0] && who[k][0] != actor) k++;
+        int now = t && own && collision_of(g_extra[t]) ? t : 0;
+        if (who[k][0] != actor || who[k][1] != (uint64_t)now + 1) {
+            float e[3] = {0};
+            actor_pos(actor, e);
+            LOG("[trace] frame %llu %.40s goes for P%d (at %.2f %.2f %.2f)\n", (unsigned long long)renderer_present_count(),
+                (const char *)(uintptr_t)(actor + 0x18), now + 1, e[0], e[1], e[2]);
+        }
+        who[k][0] = actor, who[k][1] = (uint64_t)now + 1;
+    }
     if (!t || !own || !collision_of(g_extra[t])) return;
     g_swap_on = true, g_swapped = own;
     ST64(gm + 0x4b8, g_extra[t]);
