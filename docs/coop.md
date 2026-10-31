@@ -70,6 +70,12 @@ it's in a slot (`tools/test_active_pad.c`, with two players and three pads).
   (`rumble_slot`; IPC 211 reports theirs mounted while they have one).
 - On the start screen, before the game has taken the controllers, the Controls
   tab names the ones connected in the order they'll be taken.
+- Windows: SDL reads Xbox-type controllers through XInput, 4 at most (its
+  RawInput and WGI drivers are off by default). A fifth isn't seen: an 8BitDo
+  SN30 Pro in X-input mode over Bluetooth, with four Xbox 360 pads in, didn't
+  even start in Windows (Device Manager: code 10). In its Switch or D-input
+  mode it isn't an XInput device. The colour rows of players 5.. without a
+  controller say so.
 
 The game reads which controllers are connected when the npad's "style set
 changed" event is signalled. A controller turned on after the game had read
@@ -221,7 +227,12 @@ into Lanmola's pit played his start again. In a fight room, another player a ste
 ahead of Player 1 shut the doors while Player 1 was still in the doorway. The
 closing shutter put Player 1 back on the doorway's far side, and the camera and
 everyone followed him into the room before, every time (Angler's Tunnel, 08E up
-into 07E). Only Player 1's contact fires a box (`COOP_EVENT_BOX_SITE`).
+into 07E). Only Player 1's contact fires a box (`COOP_EVENT_BOX_SITE`), or
+that of a player standing on his spot (put there by an event's walk or a
+door's, not moved since). A box keeps one contact (`+0x370`), the last one
+begun, and fires with it the next frame (`main+0x6a980`). Five Links stacked on
+Player 1 at the ghost's grave began theirs with the owl's box at once: another
+player's was kept and Player 1's was gone, so the box never fired.
 
 **Warp holes.** An `AreaWarpHoleEventBox` keeps a player actor whose `+0x43`
 bit 6 is clear, then plays the jump and the "Where to?" menu for Player 1,
@@ -410,7 +421,8 @@ again as the next frame starts (`camera_back_undo`, from `coop_tick`, before
 the camera's update): a camera that goes on from where its eye is (the walk in
 through Angler's Tunnel's door glides it) went further back every frame, to
 120 away, the walk-in dragged on and the others stood stuck above the door. With it, by the same distance (each the game's
-own value plus the move, the game's own again at 1):
+own value plus the move, the game's own again at 1, and put back to the game's
+own as the next frame starts too):
 - the far plane (`+0x56c`): at 3x the far ground was cut off, black;
 - the shadows' reach (`+0x560`, `+0x350`, `+0x734`, 24 each): past it a wedge
   of the ground was all in shadow;
@@ -421,7 +433,13 @@ own value plus the move, the game's own again at 1):
 These are kept for the camera they're in (`g_back_cam`): when the view camera
 changes, the last one gets its own values back first (`camera_back_put`), and
 so does the camera as play ends. Read again from moved values, the move added
-up each time it was the view again.
+up each time it was the view again. They are put back as each frame starts
+(`camera_back_undo`) as well: the camera eases some of them itself, and from
+the moved values it settled short of where it eased them to every frame. An
+event waiting for the camera to get there waited for ever: at the ghost's
+grave the owl flew off, the camera came back to Player 1 and he stayed in the
+event (user 2026-10-30; replayed from the user's save, `build/grave.sh`:
+stuck at zoom 1.5 every time, finished at 1 and with this).
 
 **The shadow map's box** (`COOP_SHADOW_BOX_SITE`, `shadow_box`). The game
 draws one 2048 x 2048 shadow map a frame (a depth-only pass), and a
@@ -663,7 +681,7 @@ only with "Zoom out" Always). On, four headings:
 |---|---|---|---|---|
 | Co-op | Players | coop_players | 1 | 1 = off, 2..8 Links (from the next file loaded); greyed out on 1.0.0 |
 | | Tunic colors | | | shown only when the file is missing or comes with Quit to Start Screen |
-| | Player N color | coop_colours | 0,1,2,... | each player's colour set (Green, Red, Blue, Yellow, Purple, Pink, Black, White); its description names his controller; red when he has none or shares the colour |
+| | Player N color | coop_colours | 0,1,2,... | each player's colour set (Green, Red, Blue, Yellow, Purple, Pink, Black, White); its description names his controller; red when he has none or shares the colour, with a note after the label saying which ("no controller", "same as Player 2") |
 | Co-op hearts | Hearts | coop_health | 1 | 0 shared, 1 each player's own |
 | | Out of hearts | coop_knockout | 0 | 0 knocked out until revived, 1 game over for all (own hearts) |
 | | Revive time | coop_revive_s | 4 | seconds of holding A to revive (knocked out) |
