@@ -25,6 +25,8 @@ extern "C" int coop_colours_state(void);    // (runtime/hle/coop.c: 0 the tunic 
 extern "C" const char *coop_colours_path(void);  // (... where that file goes)
 extern "C" bool coop_supported(void);       // (... false once the game is a version without co-op)
 extern "C" const char *input_player_pad_name(int player);  // (runtime/hle/input.c: a player's controller, or NULL)
+extern "C" void input_assign_begin(int player);  // (runtime/hle/input.c: the next button pressed gives its controller)
+extern "C" int input_assign_waiting(void);       // (... the player waiting for one, or -1)
 int input_pad_family(void);              // runtime/hle/input.c
 SDL_JoystickID input_active_pad(void);   // runtime/hle/input.c: the controller the game reads (0: none yet)
 #if PLAT_TOUCH
@@ -407,6 +409,23 @@ static void coop_options(void) {
         if (same) snprintf(note + strlen(note), sizeof note - strlen(note), "%ssame as Player %d", *note ? ", " : "", same);
         if (*note) opt_warn_next(), opt_note_next(note);
         opt_choice(label, &g_settings.coop_colour[i], colours, COOP_COLOURS, i, descs[i], true);
+    }
+    // whose controller is whose (runtime/hle/input.c input_assign_*): the row, then a button on the controller wanted -
+    // swapped with whoever had it, and remembered (user 2026-10-30: "we need a way to assign controllers to a player")
+    int waiting = input_assign_waiting();
+    static char pdesc[8][300];
+    for (int i = 0; i < g_settings.coop_players && i < 8; i++) {
+        const char *pad = input_player_pad_name(i);
+        char label[32];
+        snprintf(label, sizeof label, "Player %d controller", i + 1);
+        snprintf(pdesc[i], sizeof pdesc[i],
+                 "Choose this, then press any button on the controller Player %d should use. If another player had it, "
+                 "they get Player %d's in its place. Remembered for next time. Escape cancels.%s", i + 1, i + 1,
+                 i ? "" : " Player 1 keeps the keyboard too.");
+        if (waiting == i) opt_mark_next();
+        if (opt_action(label, waiting == i ? "Press a button..." : pad ? pad : i ? "None" : "Keyboard only", pdesc[i],
+                       true, false))
+            input_assign_begin(i);
     }
     opt_indent(-1);
 

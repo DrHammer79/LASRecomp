@@ -69,9 +69,14 @@ float widescreen_effect_stretch(uint64_t fs_hash, float *ky) {
 // Player 1 that covers the 16:9 view, and from further back its edge showed as a hard circle on the sand (user
 // 2026-10-28). It refracts the picture behind it, so stretched (as the woods' fog) it ghosted a copy of the rocks
 // over the water beside the desert; without it the sand is as the rest of the Field. Found by skipping shaders.
+// The Mysterious Woods' fog seen from outside them (a box of fog over their edge, 18 vertices, reading the depth;
+// not drawn inside, where the ring, haze and shafts above are): sized for the game's view from beside the woods,
+// from further back its sides showed - a flat blue band with hard edges over the woods from Mabe Village (user
+// 2026-10-30). Found by its pass (LARECOMP_DEBUG_FRAME): the one draw between the scene and its lighting.
 bool widescreen_effect_hidden(uint64_t fs_hash) {
     extern float coop_camera_zoom(void), coop_camera_reach(void);  // runtime/hle/coop.c
-    return fs_hash == 0x16c48ff5e6bcfea3ull && coop_camera_zoom() == 1.0f && coop_camera_reach() > 1.05f;
+    return (fs_hash == 0x16c48ff5e6bcfea3ull || fs_hash == 0x39ae199ddc1701dcull) && coop_camera_zoom() == 1.0f &&
+           coop_camera_reach() > 1.05f;
 }
 
 // Untextured quads drawn with a full-screen viewport are taken for fades and flashes and fill the window
