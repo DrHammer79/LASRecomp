@@ -582,7 +582,14 @@ at 2 and 3: no edge. Yarna Desert's warm haze is a disc around Player 1 too
 edge showed as a hard circle on the sand. It refracts the picture behind it, so
 stretched it ghosted a copy of the rocks over the water beside the desert; moved
 back past 1.05 it isn't drawn (`widescreen_effect_hidden`, both renderers).
-Checked at Out 50% and 3: no circle, no ghosting.
+Checked at Out 50% and 3: no circle, no ghosting. Nor is the woods' fog seen
+from outside them (`39ae199ddc1701dc`: a box of fog over their edge, 18
+vertices reading the depth, not drawn inside, where the ring, haze and shafts
+are): sized for the game's view from beside the woods, moved back its sides
+showed - a flat blue band with hard edges over the woods from Mabe Village
+(user 2026-10-30; found as the one draw of the pass between the scene and its
+lighting, `LARECOMP_DEBUG_FRAME`). Checked at (55, 107) at 2.6: the woods
+clear, no band.
 
 **Indoors** (any level but the Field: houses, caves, dungeons) the zoom is
 "Indoor zoom" (`coop_zoom_indoor`, Normal by default), without fit. The game
