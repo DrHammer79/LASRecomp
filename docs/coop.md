@@ -285,12 +285,17 @@ Zol west of it with Player 1 17 units away: each goes for the player it
 targets. The reaction component also reacts to hits by "Link": it sees the
 nearest player (`nearest_player`), not the one the enemy stays on - another
 player's hit knocked a turtle back from where its target stood, up onto a
-ledge (Angler's Tunnel). A Gel (`EnemyMiniZol`) goes for the nearest player
-throughout: one that jumped at its target and landed on another player clung
-to him, then went over to its target. So do the Zols (`EnemyZolRed`,
+ledge (Angler's Tunnel). A Gel (`EnemyMiniZol`) goes for the player it is on
+(`clinger_target`): one that jumped at its target and landed on another player
+clung to him, then went over to its target. So do the Zols (`EnemyZolRed`,
 `EnemyZolGreen`), which cling too: a red one hopping after Player 1 latched on
-Player 2 on the way and was on Player 1 the next moment (user 2026-10-30). The
-rules:
+Player 2 on the way and was on Player 1 the next moment (user 2026-10-30).
+Going for the nearest wasn't enough: a Zol hops a set length, so hopping from
+right on Player 2 it landed past him, by Player 1 beside him, who was the
+nearest by then (user 2026-10-31; `build/zol.sh` with Player 2 held 3 units
+off). A player it lands on (within `CLING_REACH`, 0.5, on the ground with it)
+is its target, kept while he is up and within `TARGET_ENGAGE`; past that,
+another player has to be clearly nearer (1.5x). The rules for other enemies:
 - An enemy targets the nearest player who is up.
 - Within `TARGET_ENGAGE` (6 units, about 4 tiles) it keeps him until he is
   knocked out, so an attack, a wind-up or a boss pattern plays out on one
@@ -367,8 +372,13 @@ stairs' rock, `ObjRock-4800A5005B88BEDC`, back as he stepped onto them).
   breathing "Zzz" bubble over him. Another player holding A beside him (within
   1.6, height too: in a side view a player swimming above him had the prompt)
   for `coop_revive_s` seconds revives him with 30% of the maximum and 2 s
-  of no damage (`REVIVE_SAFE`). An "(A) Revive" prompt shows under a player
-  who can revive someone (`coop_revive_prompt`), its button as the game's
+  of no damage (`REVIVE_SAFE`). A player holding A there stands still (his
+  stick and d-pad read 0: `coop_reviving`). A hit on him stops it
+  (`revive_hit`): the progress is lost, and his A counts again only once he
+  lets go of it. An "(A) Revive" prompt shows under the knocked-out player
+  while someone who is up is beside him and nobody holds A
+  (`coop_revive_prompt`; under the one who could revive him, it went along
+  as he walked about), its button as the game's
   prompts show Switch A (`confirm_glyph`: an Xbox pad's B, a PlayStation pad's
   circle by default); two on one spot are stacked,
   each moved below the one it overlaps at most once (moved while it was
@@ -411,7 +421,9 @@ stairs' rock, `ObjRock-4800A5005B88BEDC`, back as he stepped onto them).
 - **Corners:**
   - Up to 3 rows go in the chosen bottom corner, the rest in the other one,
     from its bottom up (Player 5 in the corner, 6 above him), in the corner
-    itself (over the game's "Now saving." note while it shows).
+    itself. While the game's "Now saving." note shows - for 2 s after a save
+    (`g_save_frame`, set by `fs.c`'s commit; a warp's autosave showed it from
+    20 to 70 frames after) - they move above it.
   - Top right is a single column below the X/Y items, the rupee count and the
     compass.
   - Bottom right moves up above the "Now saving" note and the run timer.
