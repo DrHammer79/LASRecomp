@@ -596,16 +596,13 @@ static bool zoom_on(void) {
 //   1 was blurred, the sharp band nearer the screen's bottom).
 // The eye's move is taken off again as the next frame starts (camera_back_undo, from coop_tick, as the game reads the
 // controllers - before the camera's update): a camera that goes on from where its eye is - the walk in through a
-// dungeon's door glides it - went further back each frame, to 120 away (user 2026-10-28, Angler's Tunnel).
+// dungeon's door glides it - went further back each frame, to 120 away (user 2026-10-28, Angler's Tunnel). So are the
+// values kept by the distance: the camera eases some of them itself, and from ours each frame it stopped short of
+// where it eases them to - an event waiting for it to get there waited for ever (the ghost's grave: the owl flew off,
+// the camera came back to Player 1, and he stayed in the event; user 2026-10-30, three times).
 static float g_back, g_back_d0 = 24.8f;  // (the distance moved back; Player 1's distance from the eye before it)
 static uint64_t g_eye_node;              // (the node whose eye was moved, 0: none)
 static float g_eye_wrote[3], g_eye_moved[3];
-static void camera_back_undo(void) {
-    float *eye = g_eye_node && heap_ptr(g_eye_node) ? (float *)(uintptr_t)(g_eye_node + 0xb0) : NULL;
-    if (eye && !memcmp(eye, g_eye_wrote, sizeof g_eye_wrote))  // (as we left it: the camera hasn't been updated since)
-        for (int k = 0; k < 3; k++) eye[k] -= g_eye_moved[k];
-    g_eye_node = 0;
-}
 // The values kept by the distance (camera_back): the camera they're in (g_back_cam), its own, ours.
 static const int k_back_keep[] = {0x560, 0x56c, 0x350, 0x734};
 static float g_back_orig[4], g_back_wrote[4];
@@ -615,6 +612,13 @@ static void camera_back_put(void) {  // (the camera's own values back in it, whe
         float *f = (float *)(uintptr_t)(g_back_cam + k_back_keep[k]);
         if (*f == g_back_wrote[k]) *f = g_back_orig[k];
     }
+}
+static void camera_back_undo(void) {
+    float *eye = g_eye_node && heap_ptr(g_eye_node) ? (float *)(uintptr_t)(g_eye_node + 0xb0) : NULL;
+    if (eye && !memcmp(eye, g_eye_wrote, sizeof g_eye_wrote))  // (as we left it: the camera hasn't been updated since)
+        for (int k = 0; k < 3; k++) eye[k] -= g_eye_moved[k];
+    g_eye_node = 0;
+    camera_back_put();
 }
 static void camera_back(Cpu *c) {
     uint64_t cam = c->x[23], node = LD64(cam + 0x510);
@@ -1729,17 +1733,27 @@ static int doaction_get(Cpu *c) {
 // again. In a fight room another player a step ahead of Player 1 set the room's switch while Player 1 was still in the
 // doorway, in his walk-in: the shutter closing on him put him back on the doorway's far side, in the room before, and
 // the camera and everyone followed (Angler's Tunnel, 08E up into 07E, every time). Only Player 1's contact fires a box
-// (the contact as at the doors' end of contact: contact_link).
+// (the contact as at the doors' end of contact: contact_link) - or one of a player on his spot: the box keeps one
+// contact (+0x370), the last begun, and fires with it the next frame (main+0x6a980). Five Links stacked on Player 1
+// by the ghost's walk to his grave began theirs with the owl's box at once: Player 3's was kept, Player 1's gone, the
+// box never fired and the event waited for ever, Player 1 still in it (user 2026-10-30, twice).
+static bool on_host_spot(int i) {  // (put on him - an event's walk, a door's - and not moved since: as capsule_of)
+    float p[3], h[3];
+    if (!player_pos(coop_player(i), p) || !player_pos(host_player(), h)) return false;
+    float dx = p[0] - h[0], dz = p[2] - h[2];
+    return dx * dx + dz * dz < 0.04f && fabsf(p[1] - h[1]) < 0.5f;
+}
 static int event_box(Cpu *c) {
     int i = contact_link(c->x[1]);
     if (i <= 0) return 0;
     static uint64_t logged_frame;
     uint64_t frame = renderer_present_count();
+    bool fire = on_host_spot(i);
     if (frame > logged_frame + 30)
-        CLOG("[coop] player %d in an event box (%.48s): only Player 1 sets it off\n", i + 1,
-             (const char *)(uintptr_t)(c->x[0] + 0x18));
+        CLOG("[coop] player %d in an event box (%.48s): %s\n", i + 1, (const char *)(uintptr_t)(c->x[0] + 0x18),
+             fire ? "on Player 1's spot, sets it off" : "only Player 1 sets it off");
     logged_frame = frame;
-    return 2;  // (to its ret)
+    return fire ? 0 : 2;  // (2: to its ret)
 }
 
 // ---- Warp holes (AreaWarpHoleEventBox: main+0x8c560 stepped in - Player 1 jumps in, the "Where to?" menu -,
