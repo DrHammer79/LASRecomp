@@ -68,6 +68,15 @@ it's in a slot (`tools/test_active_pad.c`, with two players and three pads).
   their spot from his (the hold, below), so the other players' are not passed on.
 - Rumble: npads 1..7 rumble the other players' own controllers
   (`rumble_slot`; IPC 211 reports theirs mounted while they have one).
+- Whose controller is whose: the Controls tab's "Player N controller" rows.
+  Chosen, the row waits for a button (`input_assign_begin`); the next press,
+  on any controller, gives that one to the player, taken from whoever had it
+  (they get the player's own). The press is taken before the menus see it
+  (`input_assign_event`, first in the event loops); Escape or 10 s gives up.
+  Each player's is remembered by SDL's device path (`coop_pad_path_N` in the
+  ini; for an Xbox-type pad its XInput slot): as they connect, one with a
+  player's path goes to him, a slot whose player's controller is connected is
+  kept for it, and Player 1's isn't taken over by a press on a spare one.
 - On the start screen, before the game has taken the controllers, the Controls
   tab names the ones connected in the order they'll be taken.
 - Windows: SDL reads Xbox-type controllers through XInput, 4 at most (its
@@ -282,7 +291,15 @@ to him, then went over to its target. The rules:
 - An enemy targets the nearest player who is up.
 - Within `TARGET_ENGAGE` (6 units, about 4 tiles) it keeps him until he is
   knocked out, so an attack, a wind-up or a boss pattern plays out on one
-  player.
+  player - unless, after `TARGET_LOCK`, another player is right at it
+  (`TARGET_MELEE`, 2.5 units) and clearly nearer (1.5x). The Armos Knight's
+  room is smaller than 6 units across: he kept the player he picked first, in
+  the doorway he can't step into, hopping on the floor's edge while the
+  players hitting him went ignored (`build/armos.sh`, `build/armos_fight.sh`;
+  `LARECOMP_COOP_TRACE=EnemyDeguArmos` logs where he goes). Alone he follows
+  Link, stops 1 to 1.5 units off him and slams every 10 s or so.
+- A player away from the map for a moment (y below -500: fallen through it,
+  being moved) isn't targeted.
 - Otherwise it keeps him `TARGET_LOCK` (6 s), plus `TARGET_GRACE` (2 s) after
   a fight. After that it changes only to a clearly nearer player (1.5x).
 - Enemies more than 30 units from everyone are left alone.
@@ -702,6 +719,7 @@ only with "Zoom out" Always). On, four headings:
 | Co-op | Players | coop_players | 1 | 1 = off, 2..8 Links (from the next file loaded); greyed out on 1.0.0 |
 | | Tunic colors | | | shown only when the file is missing or comes with Quit to Start Screen |
 | | Player N color | coop_colours | 0,1,2,... | each player's colour set (Green, Red, Blue, Yellow, Purple, Pink, Black, White); its description names his controller; red when he has none or shares the colour, with a note after the label saying which ("no controller", "same as Player 2") |
+| | Player N controller | coop_pad_path_N | (none) | choose, then press a button on the controller for that player; swapped with whoever had it, remembered by device path |
 | Co-op hearts | Hearts | coop_health | 1 | 0 shared, 1 each player's own |
 | | Out of hearts | coop_knockout | 0 | 0 knocked out until revived, 1 game over for all (own hearts) |
 | | Revive time | coop_revive_s | 4 | seconds of holding A to revive (knocked out) |

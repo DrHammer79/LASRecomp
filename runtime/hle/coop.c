@@ -1084,12 +1084,18 @@ bool coop_heart_rgb(uint32_t *rgb) {
 // on him until he is knocked out - a charge, a wind-up, a boss's pattern plays out on one player. Otherwise it keeps
 // a target TARGET_LOCK frames (and TARGET_GRACE after a fight: a charge carries it past him), then takes another only
 // when he is clearly nearer (1.5x); before that only when its target is far off and another player is at it.
+// Fighting one, it still turns to another player right at it (TARGET_MELEE) and clearly nearer, once it has kept
+// its target TARGET_LOCK frames: in a room smaller than TARGET_ENGAGE (the Armos Knight's) everyone was always "close",
+// and the knight kept the player he picked first - in the doorway he can't step into, hopping on the floor's edge,
+// while the three players hitting him went ignored (user 2026-10-30; build/armos_fight.sh). A player away from the
+// map for a moment (below it, y -1000: fallen through it, being moved) isn't one to go for.
 #define TARGET_SLOTS 256
 #define TARGET_LOCK 360       // (6 s)
 #define TARGET_GRACE 120      // (2 s)
 #define TARGET_ENGAGE 6.0f    // (about 4 tiles: a Moblin throws its spear from there)
+#define TARGET_MELEE 2.5f     // (right at it: a sword's reach)
 #define TARGET_FAR 30.0f      // (about two screens)
-static struct { uint64_t actor, until, seen; int who; } g_target[TARGET_SLOTS];
+static struct { uint64_t actor, until, seen, since; int who; } g_target[TARGET_SLOTS];
 
 static void targets_forget(void) {
     memset(g_target, 0, sizeof g_target);
@@ -1109,7 +1115,7 @@ static int nearest_player(uint64_t enemy) {  // (who is nearest it, within TARGE
     int best = 0;
     if (!actor_pos(enemy, e)) return 0;
     for (int i = 0; i < g_n; i++) {
-        if ((i && g_down[i]) || !player_pos(coop_player(i), p)) continue;
+        if ((i && g_down[i]) || !player_pos(coop_player(i), p) || p[1] < -500.0f) continue;
         float d = (p[0] - e[0]) * (p[0] - e[0]) + (p[2] - e[2]) * (p[2] - e[2]);
         if (d < bd) bd = d, best = i;
     }
@@ -1123,7 +1129,7 @@ static int enemy_target(uint64_t enemy) {
     int best = -1;
     for (int i = 0; i < g_n; i++) {
         d[i] = 1e30f;
-        if ((i && g_down[i]) || !player_pos(coop_player(i), p)) continue;
+        if ((i && g_down[i]) || !player_pos(coop_player(i), p) || p[1] < -500.0f) continue;
         d[i] = (p[0] - e[0]) * (p[0] - e[0]) + (p[2] - e[2]) * (p[2] - e[2]);
         if (d[i] < bd) bd = d[i], best = i;
     }
@@ -1144,17 +1150,18 @@ static int enemy_target(uint64_t enemy) {
     float cd = cur >= 0 && cur < g_n ? d[cur] : 1e30f, engage = TARGET_ENGAGE * TARGET_ENGAGE;
     g_target[h].actor = enemy, g_target[h].seen = frame;
     if (cur >= 0 && cd < 1e30f) {  // (its target is up)
-        if (cd <= engage) {  // fighting him
-            if (g_target[h].until < frame + TARGET_GRACE) g_target[h].until = frame + TARGET_GRACE;
+        bool clearly = cd > bd * 2.25f;
+        if (cd <= engage && !(clearly && bd <= TARGET_MELEE * TARGET_MELEE && frame >= g_target[h].since + TARGET_LOCK)) {
+            if (g_target[h].until < frame + TARGET_GRACE) g_target[h].until = frame + TARGET_GRACE;  // fighting him
             return cur;
         }
-        bool clearly = cd > bd * 2.25f;
-        if (frame < g_target[h].until ? !(clearly && bd <= engage && cd > 4 * engage) : !clearly) return cur;
+        if (cd > engage && (frame < g_target[h].until ? !(clearly && bd <= engage && cd > 4 * engage) : !clearly))
+            return cur;
     }
     if (best != cur && cur >= 0)
         CLOG("[coop] %.32s: P%d (%.1f away) -> P%d (%.1f)\n", (const char *)(uintptr_t)(enemy + 0x18), cur + 1,
              cd < 1e30f ? sqrtf(cd) : -1.0f, best + 1, sqrtf(bd));
-    g_target[h].who = best, g_target[h].until = frame + TARGET_LOCK;
+    g_target[h].who = best, g_target[h].until = frame + TARGET_LOCK, g_target[h].since = frame;
     return best;
 }
 
@@ -1244,6 +1251,16 @@ static ActorClass *actor_class(uint64_t actor) {
         }
     }
     return e;
+}
+
+// LARECOMP_COOP_TRACE=<name prefix> (test): each such actor's position every half second, and the player it goes for.
+static void trace_actor(uint64_t actor) {
+    const char *pre = ENV("LARECOMP_COOP_TRACE");
+    if (!pre || renderer_present_count() % 30 || strncmp((const char *)(uintptr_t)(actor + 0x18), pre, strlen(pre))) return;
+    float p[3];
+    if (actor_pos(actor, p))
+        LOG("[trace] frame %llu %.40s (%.2f %.2f %.2f)\n", (unsigned long long)renderer_present_count(),
+            (const char *)(uintptr_t)(actor + 0x18), p[0], p[1], p[2]);
 }
 
 static void down_enemy_note(uint64_t actor) {  // (an enemy updating: the knocked-out players near it - down_hit)
@@ -2125,7 +2142,7 @@ bool coop_colours(void);
 static bool alone_hook(int which) {
     switch (which) {
     case 7: return coop_colours();
-    case 15: case 16: return g_back_on || g_leftover;
+    case 15: case 16: return g_back_on || g_leftover || ENV("LARECOMP_COOP_TRACE");  // (trace_actor: alone too)
     case 17: return zoom_on() || g_back != 0;
     case 33: case 34: case 35: return g_back_on;
     case 38: return g_zoom > 1.0f;
@@ -2228,13 +2245,14 @@ int rt_coop_hook(Cpu *c, int which) {
             }
         }
         if (!rt_coop_on()) {  // (alone, zoomed out: grass and rocks kept gone - alone_hook)
+            if (heap_ptr(g_updating)) trace_actor(g_updating);
             if (!g_back_on) return 0;
             respawn_track(g_updating);
             return heap_ptr(g_updating) && gone_check(c, g_updating) ? skip_update(c) : 0;
         }
         respawn_track(g_updating);
         if (heap_ptr(g_updating) && gone_check(c, g_updating)) return skip_update(c);
-        if (heap_ptr(g_updating)) down_enemy_note(g_updating);
+        if (heap_ptr(g_updating)) down_enemy_note(g_updating), trace_actor(g_updating);
         actor_exec_begin(c);
         act_update_begin(g_updating);
         return 0;
