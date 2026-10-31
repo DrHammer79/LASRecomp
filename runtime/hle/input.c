@@ -1177,6 +1177,8 @@ static void coop_fill(uint8_t *s, int i) {
         int32_t m = dx && dy ? 23170 : 32767;
         if (dx || dy) lx = dx * m, ly = dy * m;
     }
+    extern int coop_reviving(int player);  // (holding A beside a knocked-out player: he stands still)
+    if (coop_reviving(i + 1)) lx = ly = 0, b &= ~(0xfull << 12);
     if (lx < -16000) b |= 1ull << 16;
     if (ly > 16000) b |= 1ull << 17;
     if (lx > 16000) b |= 1ull << 18;
@@ -1299,7 +1301,8 @@ static void fill_state(Cpu *c) {
         g_stick_lx = lx, g_stick_ly = ly;
         extern uint64_t g_stick_freeze_until;
         extern uint64_t renderer_present_count(void);
-        if (renderer_present_count() < g_stick_freeze_until) {
+        extern int coop_reviving(int player);  // (local co-op: holding A beside a knocked-out player stands still too)
+        if (renderer_present_count() < g_stick_freeze_until || coop_reviving(0)) {
             lx = ly = 0;
             b &= ~(0xfull << 12);
         }
