@@ -626,10 +626,30 @@ static void camera_back_undo(void) {
     g_eye_node = 0;
     camera_back_put();
 }
+// The view matrix as moved (its +14 and the renderer's copy's): one the game hasn't set again since isn't moved again.
+// While the pause menu is up the game leaves it as it was, and moved again each frame it went 12 units further back a
+// frame - thousands away by the time a file was loaded from the menu, and the game hung (user 2026-10-30, File 3; as old
+// as camera_back): then only what the frame's start took off is put back.
+static float g_m14_wrote, g_copy14_wrote;
 static void camera_back(Cpu *c) {
     uint64_t cam = c->x[23], node = LD64(cam + 0x510);
     float p[3], v[3];
     if (cam != view_camera() || !heap_ptr(node)) return;
+    float *m = (float *)(uintptr_t)(cam + 0x580), *copy = (float *)(uintptr_t)(c->x[24] + 0x20);
+    float *eye = (float *)(uintptr_t)(node + 0xb0);
+    if (cam == g_back_cam && g_back != 0 && m[14] == g_m14_wrote && copy[14] == g_copy14_wrote) {
+        bool undone = !g_eye_node;  // (the frame's start took the eye's move off, and the kept values)
+        for (int k = 0; undone && k < 3; k++) undone = eye[k] == g_eye_wrote[k] - g_eye_moved[k];
+        if (undone) {
+            for (int k = 0; k < 3; k++) eye[k] = g_eye_wrote[k];
+            g_eye_node = node;
+        }
+        for (int k = 0; k < 4; k++) {
+            float *f = (float *)(uintptr_t)(cam + k_back_keep[k]);
+            if (*f == g_back_orig[k]) *f = g_back_wrote[k];
+        }
+        return;
+    }
     float back = 0;
     if (g_back_on && g_zoom > 1.0f && player_pos(host_player(), p) && cam_view(cam, p, v))  // (a camera not on him: 24.8)
         g_back_d0 = -v[2] > 5.0f && -v[2] < 60.0f ? -v[2] : 24.8f, back = (g_zoom - 1.0f) * g_back_d0;
@@ -644,8 +664,6 @@ static void camera_back(Cpu *c) {
     extern void rt_tilt_focus_add(float);  // runtime/hle/qol.c
     rt_tilt_focus_add(back);
     g_back = back;
-    float *m = (float *)(uintptr_t)(cam + 0x580), *copy = (float *)(uintptr_t)(c->x[24] + 0x20);
-    float *eye = (float *)(uintptr_t)(node + 0xb0);
     if (g_eye_node == node) camera_back_undo();  // (not taken off yet - two camera updates in a frame: now)
     for (int k = 0; k < 3; k++)  // (row 2: its back axis)
         g_eye_moved[k] = back * m[2 + 4 * k], eye[k] += g_eye_moved[k];
@@ -653,6 +671,7 @@ static void camera_back(Cpu *c) {
     g_eye_node = back != 0 ? node : 0;
     g_back_cam = cam;
     m[14] -= back, copy[14] -= back;
+    g_m14_wrote = m[14], g_copy14_wrote = copy[14];
 }
 
 // The zoom at which a point is inside frac of the view, the camera moved back (1: in it now, or nearer). From the
