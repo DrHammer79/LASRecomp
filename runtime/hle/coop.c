@@ -1348,15 +1348,29 @@ static ActorClass *actor_class(uint64_t actor) {
     return e;
 }
 
-// LARECOMP_COOP_TRACE=<name prefix> (test): each such actor's position every half second (LARECOMP_COOP_TRACE_EVERY:
-// every that many frames), and the player it goes for whenever that changes (actor_exec_begin).
+// LARECOMP_COOP_TRACE=<name prefix>[,<another>...] (test): each such actor's position every half second
+// (LARECOMP_COOP_TRACE_EVERY: every that many frames), and the player it goes for whenever that changes
+// (actor_exec_begin). An enemy and its parts: "EnemyZolRed,ZolRed:".
+static bool traced(uint64_t actor) {
+    const char *pre = ENV("LARECOMP_COOP_TRACE"), *nm = (const char *)(uintptr_t)(actor + 0x18);
+    while (pre && *pre) {
+        size_t n = strcspn(pre, ",");
+        if (n && !strncmp(nm, pre, n)) return true;
+        pre += n + (pre[n] == ',');
+    }
+    return false;
+}
+static bool trace_pos(uint64_t actor, float out[3]) {  // (a part's: its owner's, +0x48)
+    uint64_t owner = strchr((const char *)(uintptr_t)(actor + 0x18), ':') ? LD64(actor + 0x48) : actor;
+    return heap_ptr(owner) && actor_pos(owner, out);
+}
 static void trace_actor(uint64_t actor) {
-    const char *pre = ENV("LARECOMP_COOP_TRACE"), *every = ENV("LARECOMP_COOP_TRACE_EVERY");
-    if (!pre || renderer_present_count() % (every && atoi(every) > 0 ? atoi(every) : 30) ||
-        strncmp((const char *)(uintptr_t)(actor + 0x18), pre, strlen(pre)))
+    const char *every = ENV("LARECOMP_COOP_TRACE_EVERY");
+    if (!ENV("LARECOMP_COOP_TRACE") || renderer_present_count() % (every && atoi(every) > 0 ? atoi(every) : 30) ||
+        !traced(actor))
         return;
     float p[3];
-    if (actor_pos(actor, p))
+    if (trace_pos(actor, p))
         LOG("[trace] frame %llu %.40s (%.2f %.2f %.2f)\n", (unsigned long long)renderer_present_count(),
             (const char *)(uintptr_t)(actor + 0x18), p[0], p[1], p[2]);
 }
@@ -1403,11 +1417,13 @@ static void actor_exec_begin(Cpu *c) {
     else if (what == AC_ENEMY_PART) {
         // (its reaction to a hit goes by "Link" too: the target kept for the chase is the nearest player now, not the
         // one it stays on - another player's hit knocked it back from where its target stood, up onto a ledge: user
-        // 2026-10-28, a turtle in Angler's Tunnel)
+        // 2026-10-28, a turtle in Angler's Tunnel). A Zol's or a Gel's goes by the one it keeps (clinger_target): its
+        // reaction part steers its hops, and after each hit on Player 2 knocked him back, Player 1 beside him was the
+        // nearest - it went for Player 1 (user 2026-10-31, "always going on p1 when hitting p2"; build/zolhit.sh).
         uint64_t owner = LD64(actor + 0x48);
         uint8_t of = heap_ptr(owner) ? actor_class(owner)->what : AC_OTHER;
         if (of != AC_ENEMY && of != AC_ENEMY_NEAREST) return;
-        t = nearest_player(owner);
+        t = of == AC_ENEMY_NEAREST ? clinger_target(owner) : nearest_player(owner);
     } else if (what == AC_ENEMY)
         t = enemy_target(actor);
     else if (what == AC_ENEMY_NEAREST)
@@ -1415,15 +1431,14 @@ static void actor_exec_begin(Cpu *c) {
     else
         return;
     uint64_t gm = LD64(GA(GAME_MGR)), own = gm ? LD64(gm + 0x4b8) : 0;
-    const char *pre = ENV("LARECOMP_COOP_TRACE");
-    if (pre && !strncmp((const char *)(uintptr_t)(actor + 0x18), pre, strlen(pre))) {  // (trace_actor: whom it goes for)
-        static uint64_t who[16][2];
+    if (ENV("LARECOMP_COOP_TRACE") && traced(actor)) {  // (trace_actor: whom it goes for)
+        static uint64_t who[32][2];
         int k = 0;
-        while (k < 15 && who[k][0] && who[k][0] != actor) k++;
+        while (k < 31 && who[k][0] && who[k][0] != actor) k++;
         int now = t && own && collision_of(g_extra[t]) ? t : 0;
         if (who[k][0] != actor || who[k][1] != (uint64_t)now + 1) {
             float e[3] = {0};
-            actor_pos(actor, e);
+            trace_pos(actor, e);
             LOG("[trace] frame %llu %.40s goes for P%d (at %.2f %.2f %.2f)\n", (unsigned long long)renderer_present_count(),
                 (const char *)(uintptr_t)(actor + 0x18), now + 1, e[0], e[1], e[2]);
         }
