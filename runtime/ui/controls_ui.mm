@@ -345,6 +345,9 @@ static void coop_options(void) {
     // whose controller is whose (runtime/hle/input.c input_assign_*): the row, then a button on the controller wanted -
     // swapped with whoever had it, and remembered (user 2026-10-30: "we need a way to assign controllers to a player")
     int waiting = input_assign_waiting();
+    static int was_waiting = -1;  // (it stopped waiting: assigned - each player's controller kept - or given up)
+    if (was_waiting >= 0 && waiting < 0) settings_save();
+    was_waiting = waiting;
     static char pdesc[8][300];
     for (int i = 0; i < g_settings.coop_players && i < 8; i++) {
         const char *pad = input_player_pad_name(i);
