@@ -309,23 +309,35 @@ static void coop_options(void) {
     }
     static const char *const colours[COOP_COLOURS] = {"Green", "Red", "Blue", "Yellow", "Purple", "Pink", "Black",
                                                       "White"};
-    static char descs[8][200];
+    static char descs[8][360];
+#ifdef _WIN32
+    // (Windows: Xbox-type controllers come through XInput, 4 at most - SDL's RawInput / WGI drivers are off by
+    // default. An 8BitDo SN30 Pro in X-input mode, the fifth with four Xbox 360 pads in, didn't even start in Windows
+    // (code 10, user 2026-10-30); in Switch or D-input mode it isn't one)
+    const char *xinput = " On Windows the game takes 4 Xbox-type controllers at most: start a fifth in another mode "
+                         "(an 8BitDo's Switch mode, say).";
+#else
+    const char *xinput = "";
+#endif
     for (int i = 0; i < g_settings.coop_players && i < 8; i++) {
         // (whose controller is whose: a Link that doesn't move is the likeliest first problem; a color two players
-        // share, or no controller, shows in red)
+        // share, or no controller, shows in red - with a note saying which: the red alone was taken for a color clash)
         const char *pad = input_player_pad_name(i);
-        bool same = false;
-        for (int j = 0; j < g_settings.coop_players && j < 8; j++)
-            same |= j != i && g_settings.coop_colour[j] == g_settings.coop_colour[i];
-        char label[32];
+        int same = 0;  // (the first other player with this color, from 1)
+        for (int j = 0; j < g_settings.coop_players && j < 8 && !same; j++)
+            if (j != i && g_settings.coop_colour[j] == g_settings.coop_colour[i]) same = j + 1;
+        char label[32], note[48] = "", also[48] = "";
         snprintf(label, sizeof label, "Player %d color", i + 1);
+        if (same) snprintf(also, sizeof also, " Player %d has this color too.", same);
         if (i == 0)
-            snprintf(descs[i], sizeof descs[i], "Player 1's tunic and hearts. Controller: keyboard%s%s.",
-                     pad ? " and " : "", pad ? pad : "");
+            snprintf(descs[i], sizeof descs[i], "Player 1's tunic and hearts. Controller: keyboard%s%s.%s",
+                     pad ? " and " : "", pad ? pad : "", also);
         else
-            snprintf(descs[i], sizeof descs[i], "Player %d's tunic and hearts. Controller: %s.%s", i + 1,
-                     pad ? pad : "none connected", same ? " Another player has this color too." : "");
-        if ((i > 0 && !pad) || same) opt_warn_next();
+            snprintf(descs[i], sizeof descs[i], "Player %d's tunic and hearts. Controller: %s.%s%s", i + 1,
+                     pad ? pad : "none connected - this Link stands still", !pad && i >= 4 ? xinput : "", also);
+        if (i > 0 && !pad) snprintf(note, sizeof note, "no controller");
+        if (same) snprintf(note + strlen(note), sizeof note - strlen(note), "%ssame as Player %d", *note ? ", " : "", same);
+        if (*note) opt_warn_next(), opt_note_next(note);
         opt_choice(label, &g_settings.coop_colour[i], colours, COOP_COLOURS, i, descs[i], true);
     }
     opt_indent(-1);

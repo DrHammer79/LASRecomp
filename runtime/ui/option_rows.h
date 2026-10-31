@@ -50,6 +50,8 @@ void opt_disable_next(void);
 void opt_mark_next(void);
 // the next row's value in red (a problem: e.g. the same button bound twice)
 void opt_warn_next(void);
+// the next row has a short note after its label, smaller (why it's red: e.g. "no controller")
+void opt_note_next(const char *note);
 void opt_button_next(void);  // the next row (one with a value too, or a text row) as a button
 void opt_own_next(void);  // the next row is the player's own setting, not part of a seed: the summary leaves it out
 // the next row's label and value are already in the menus' language (i18n.h: put together with L_line, or the

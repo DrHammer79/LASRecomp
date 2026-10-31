@@ -42,6 +42,8 @@ void opt_disable_next(void) { g_next_disabled = true; }
 static bool g_next_mark, g_next_warn;
 void opt_mark_next(void) { g_next_mark = true; }
 void opt_warn_next(void) { g_next_warn = true; }
+static std::string g_next_note;
+void opt_note_next(const char *note) { g_next_note = note ? note : ""; }
 void opt_button_next(void) { g_row_button = true; }
 static bool g_next_own;
 void opt_own_next(void) { g_next_own = true; }
@@ -133,6 +135,7 @@ static int row(const char *label, const std::string &value_en, bool changed, con
     if (g_collect) {
         if (!g_next_disabled && !g_next_own && !value.empty()) g_collect->push_back({label_shown, value, changed, g_indent});
         g_next_disabled = g_next_mark = g_next_warn = g_row_button = g_next_own = false;
+        g_next_note.clear();
         g_half = 0;
         return 0;
     }
@@ -172,6 +175,8 @@ static int row(const char *label, const std::string &value_en, bool changed, con
     g_rows.push_back(dup ? std::string(label) + " #" + std::to_string(dup + 1) : std::string(label));
     g_row_pane.push_back(g_pane);
     bool mark = g_next_mark, warn = g_next_warn;
+    std::string note;
+    note.swap(g_next_note);
     g_next_disabled = g_next_mark = g_next_warn = g_next_own = false;
     bool hov = ImGui::IsItemHovered(), foc = ImGui::IsItemFocused() && ImGui::GetCurrentContext()->NavCursorVisible;
     int step = clicked && !off ? 2 : 0;
@@ -245,11 +250,13 @@ static int row(const char *label, const std::string &value_en, bool changed, con
         dl->AddText(ImVec2(vx, ty), vc, value.c_str());
         right = vx;
     }
+    float label_end;  // (where the label ends: a note follows it)
     {   // the label, clear of the value: a long one (German, French) a little smaller, then cut short with "..."
         float room = right - (p.x + lpad) - fs * (value.empty() && !chevron && !arrows ? 0.2f : 0.7f);
         float lw = ImGui::CalcTextSize(t.c_str()).x, lfs = fs;
         if (lw > room && room > 0) lfs = fmaxf(fs * 0.78f, fs * room / lw);
         float lty = ty + (fs - lfs) * 0.55f;
+        label_end = p.x + lpad + (lw * lfs / fs <= room || room <= 0 ? lw * lfs / fs : room);
         if (lw * lfs / fs <= room || room <= 0) {
             dl->AddText(ImGui::GetFont(), lfs, ImVec2(p.x + lpad, lty), label_col, t.c_str());
         } else {
@@ -264,6 +271,12 @@ static int row(const char *label, const std::string &value_en, bool changed, con
             if (!logged && getenv("LARECOMP_I18N_MISSING")) logged = true, fprintf(stderr, "[i18n] cut: \"%s\"\n", t.c_str());
             dl->AddText(ImGui::GetFont(), lfs, ImVec2(p.x + lpad, lty), label_col, cut.c_str());
         }
+    }
+    if (!note.empty()) {  // (opt_note_next: after the label, smaller, cut short of the value)
+        float nfs = fs * 0.8f, nx = label_end + fs * 0.6f;
+        dl->PushClipRect(ImVec2(nx, p.y), ImVec2(right - fs * 0.6f, p.y + h), true);
+        dl->AddText(ImGui::GetFont(), nfs, ImVec2(nx, ty + (fs - nfs) * 0.6f), label_col, note.c_str());
+        dl->PopClipRect();
     }
     if (dup) ImGui::PopID();
     ImGui::PopID();
