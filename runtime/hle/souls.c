@@ -121,6 +121,8 @@ uint64_t rt_actor_create_fn(uint64_t fn, uint32_t type, uint64_t info) {
     if (rt_apple_skip(type, info)) return 0;
     extern bool rt_no_buff_actor(uint32_t type);  // no-buff-drops (qol.c): no Piece of Power / Guardian Acorn at all
     if (rt_no_buff_actor(type)) return 0;
+    extern bool coop_spawn_skip(uint64_t info);  // local co-op (coop.c): grass and rocks kept gone, where they're seen
+    if (coop_spawn_skip(info)) return 0;
     if (g_nsouls < 0) load();
     if (ENV("LARECOMP_LOG_SPAWN")) {  // (debug: every actor the factory makes; spawn info words)
         LOG("[spawn] type %#x:", type);
