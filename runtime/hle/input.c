@@ -673,8 +673,7 @@ static void assign_pad(int player, SDL_JoystickID id) {
         SDL_Gamepad *h = p == 0 ? pad : p <= COOP_PADS ? coop_pad[p - 1] : NULL;
         const char *path = h ? SDL_GetGamepadPath(h) : NULL;
         snprintf(g_settings.coop_pad_path[p], sizeof g_settings.coop_pad_path[p], "%s", path ? path : "");
-    }
-    settings_save();
+    }  // (saved by the menu, as the row stops waiting)
 }
 bool input_assign_event(const SDL_Event *e) {
     if (input_assign_waiting() < 0) return false;
