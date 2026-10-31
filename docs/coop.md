@@ -419,7 +419,8 @@ stairs' rock, `ObjRock-4800A5005B88BEDC`, back as he stepped onto them).
   colours (`coop_heart_colours`, which tints Player 1's game hearts too:
   `texpatch.c`).
 - **Corners:**
-  - Up to 3 rows go in the chosen bottom corner, the rest in the other one,
+  - 3 rows (4 with 7 other players) go in the chosen bottom corner, the rest
+    in the other one,
     from its bottom up (Player 5 in the corner, 6 above him), in the corner
     itself. While the game's "Now saving." note shows - for 2 s after a save
     (`g_save_frame`, set by `fs.c`'s commit; a warp's autosave showed it from
@@ -724,7 +725,7 @@ the game's reads of it by the RomFS index's patch list, while co-op is on
 | COOP_DOACTION_SITE | 0x70000ea240 | sub sp, sp, #0x60 | a DoAction component checked for each player (26) |
 | COOP_DOACTION_FRAME_SITE | 0x70000e8be0 | stp x20, x19, [sp, #-0x20]! | each player's current DoAction (27) |
 | COOP_DOACTION_GET_SITE | 0x70000e8d90 | stp x20, x19, [sp, #-0x20]! | one taker per object (28) |
-| COOP_EVENT_BOX_SITE | 0x7000067210 | str x19, [sp, #-0x20]! | an event box fires for Player 1 only (29) |
+| COOP_EVENT_BOX_SITE | 0x7000067210 | str x19, [sp, #-0x20]! | an event box fires for Player 1 only - or a player on his spot (29) |
 | COOP_WARP_HOLE_TOUCH / LEAVE_SITE | 0x700008c5ac / c410 | ldrb w8, [x8, #0x43] | warp holes (30, 31) |
 | COOP_DEAD_STATE_SITE | 0x7000d34660 | sub sp, sp, #0x30 | another player's death is a knock-out (32) |
 | COOP_LOAD_BOX_SITE | 0x700085c430 | adrp x23 | the box whose screens are made, grown with the zoom (33) |
@@ -795,6 +796,8 @@ Test switches (environment):
 | `LARECOMP_INPUT_P2..P8=<frame>:<button>:<frames>,...` | scripted input for players 2..8, as `LARECOMP_INPUT` |
 | `LARECOMP_COOP_MOVE=<frame>:<p>:<x>:<y>:<z>[:hold]` | player p put there at that frame (left far away); `:hold` keeps him there |
 | `LARECOMP_COOP_ZOOM=<factor>` | the camera zoom forced (`build/zoom_audit.sh`) |
+| `LARECOMP_COOP_TRACE=<name prefix>` | `[trace]` lines: each actor so named, its position every 30 frames, and the player it goes for whenever that changes (alone too) |
+| `LARECOMP_COOP_TRACE_EVERY=<n>` | with `LARECOMP_COOP_TRACE`: every n frames instead |
 | `LARECOMP_NO_ZOOM_STRETCH=1` | camera-attached effects not stretched by the zoom (to see what it fixes) |
 | `LARECOMP_TRACK_RESPAWN=1` | `[respawn]` lines: a rock or grass actor made again under its name (came back), where, Player 1's distance and SEEN when near a player or in view; with co-op, or alone with "Zoom out" Always |
 
@@ -826,6 +829,11 @@ What was checked on 1.0.1, mostly with the test inputs above and
     revived and back after 30 s.
   - Stairs into a side-view room: the others arrive on Player 1, on the floor.
   - Each zoom setting, and the bubble pinned to the screen's edge.
+  - Run again on commit 44 (2026-10-31): the same, but for the spear Moblins'
+    random knock-outs at the seed's start and the hits on knocked-out players
+    now logged ("knocked out, unhurt"); a knocked-out player hit with an
+    enemy near stays where he is (no longer "put on Player 1"). The revive
+    prompt is under the knocked-out player.
 - **Saves and lost players** (2026-10-28):
   - `build/savetest.sh` saves through the pause menu in a scratch save folder
     (`LARECOMP_SAVE_DIR`): with Player 2 away, the file holds Player 1's spot,
@@ -994,7 +1002,18 @@ runtime gives the menus was checked and is valid, so its cause isn't known yet.
   play logged frame by frame).
 - **Enemy kinds** besides zombies, Moblins and Zols weren't checked. One
   whose chasing is in a component not named `...React...` or `...PlayerComp`
-  would still go to Player 1. Bosses weren't checked.
+  would still go to Player 1. Bosses other than the Armos Knight weren't
+  checked, and the Armos Knight only in scripted fights
+  (`build/armos_fight.sh`). A Like Like's grab wasn't seen: only its parts are
+  logged (`LARECOMP_COOP_LOG`).
+- **Crumbling floors** (`AC_FLOOR`) weren't checked in the game: no script
+  stands another player on one.
+- **Controller rows** (`coop_pad_path_N`) have no test: whether a real pad's
+  SDL path stays the same across restarts and reconnects wasn't checked.
+- **Zols on a knocked-out player:** one that lands on him stays and hits him
+  (nothing comes off); it isn't moved off.
+- **The top of the map zoomed out:** the user saw "slight texture glitching"
+  there (2026-10-31); not reproduced at Field_01K_a up to 3x, panning.
 - **Holding A to revive** also does the game's A action (beside a rock, the
   rock is lifted). The revive goes on.
 - **Shared hearts:** stacked Links hit by one attack each cost hearts.
