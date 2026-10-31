@@ -478,6 +478,16 @@ grave the owl flew off, the camera came back to Player 1 and he stayed in the
 event (user 2026-10-30; replayed from the user's save, `build/grave.sh`:
 stuck at zoom 1.5 every time, finished at 1 and with this).
 
+A view matrix the game hasn't set again since it was moved isn't moved again
+(`g_m14_wrote`): only what the frame's start took off (the eye, the kept
+values) is put back. While the pause menu is up the game leaves the matrix as
+it was, and moved again each frame it went (zoom - 1) x 24.8 further back a
+frame - 12 units at 1.5, thousands by the time a file was loaded from the
+menu, and the game hung (user 2026-10-30, File 3). Unseen until then: the menu
+covers the view, and closing it sets the matrix again. As old as the camera
+moved back (the build before the grave's fix did the same: `build/ic.sh` with
+"2400:PLUS:8", the `[coop] frame` lines' view depth).
+
 **The shadow map's box** (`COOP_SHADOW_BOX_SITE`, `shadow_box`). The game
 draws one 2048 x 2048 shadow map a frame (a depth-only pass), and a
 screen-space pass (704 x 396) looks each pixel up in it through a matrix in
