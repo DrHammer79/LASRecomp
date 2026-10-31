@@ -196,10 +196,16 @@ static int g_down_hits[COOP_MAX];
 static bool g_down_move[COOP_MAX];
 static uint64_t g_down_moved_until[COOP_MAX];  // (just put on Player 1: hits don't count - the spikes' last contact
                                                // came after him, and he was put on Player 1 again and again)
+// Nor do hits with an enemy near him (down_enemy_note): its blows, which do him nothing (no hearts, no knockback).
+// Put on Player 1, he was put by the enemy Player 1 was fighting, hit again - the Armos Knight's knocked-out players
+// went back and forth every few seconds (user 2026-10-30).
+#define DOWN_ENEMY_NEAR 8.0f
+#define DOWN_ENEMY_FRAMES 30
+static uint64_t g_down_enemy_at[COOP_MAX];
 
 static void down_hit(int i) {
     uint64_t now = renderer_present_count();
-    if (now < g_down_moved_until[i]) return;
+    if (now < g_down_moved_until[i] || now < g_down_enemy_at[i] + DOWN_ENEMY_FRAMES) return;
     g_down_hits[i] = now - g_down_hit_at[i] < DOWN_HIT_FRAMES ? g_down_hits[i] + 1 : 1;
     g_down_hit_at[i] = now;
     if (g_down_hits[i] < DOWN_HITS || g_down_move[i]) return;
@@ -850,7 +856,8 @@ static void lost_tick(void) {
             if (!g_lost_parked[i] && now < g_lost_until[i] + 600) continue;  // (still falling: 10 s at most)
             g_lost_until[i] = 0, g_lost_parked[i] = false;
             ride_on_host(i);
-            LOG("[coop] player %d back on Player 1 (fell through the world)\n", i + 1);
+            LOG("[coop] player %d back on Player 1 (%s)\n", i + 1,
+                g_down[i] ? "knocked out, away from what hit him" : "fell through the world");
             if (player_pos(g_extra[i], p)) stood[i] = p[1];
             continue;
         }
@@ -1174,9 +1181,19 @@ static bool on_game_thread(void) {  // (per call of the actor hooks: pthread_sel
 // whoever it targets.
 // A Gel (EnemyMiniZol) goes for the nearest player, not one it stays on (AC_ENEMY_NEAREST): one that jumped at its
 // target and landed on another player clung to him, then went over to its target (user 2026-10-28).
+// A floor that crumbles under Link (AC_FLOOR: the collapse tiles, the rattling floor...) looks for "Link" on it: only
+// Player 1 set one off (user 2026-10-30, the Southern Face Shrine). Another player standing on it is its "Link" for
+// its update, while Player 1 isn't.
 #define AC_SETS 16384
 #define AC_WAYS 4  // (an actor's set of four: the one seen longest ago makes way)
-enum { AC_OTHER, AC_ENEMY, AC_ENEMY_NEAREST, AC_ENEMY_PART };
+enum { AC_OTHER, AC_ENEMY, AC_ENEMY_NEAREST, AC_ENEMY_PART, AC_FLOOR };
+static bool floor_name(const char *name) {
+    static const char *const kinds[] = {"ObjDungeonCollapseTile", "ObjHouseCollapseTile", "ObjKataKataFloor",
+                                        "ObjMatFaceFallFloor", "ObjBrokenFloor"};
+    for (size_t i = 0; i < sizeof kinds / sizeof *kinds && !strncmp(name, "Obj", 3); i++)
+        if (!strncmp(name, kinds[i], strlen(kinds[i]))) return true;
+    return false;
+}
 enum { GONE_NEW, GONE_LIVE, GONE_NOTED };  // (grass and rocks: not looked at yet; looked at; its death seen)
 typedef struct {
     uint64_t actor, name;  // (its name's first 24 bytes, folded)
@@ -1208,30 +1225,67 @@ static ActorClass *actor_class(uint64_t actor) {
     // (the reaction part is "...ReactionComp" or, for 28 kinds - Zols, Armos, Pokey, Togezo... - "...ReactionCom": red
     // Zols hopped at Player 1 whoever they targeted, user 2026-10-28)
     e->what = strstr(name, "React") || strstr(name, "PlayerComp") ? AC_ENEMY_PART
+              : floor_name(name)                                     ? AC_FLOOR
               : strstr(name, "Comp") || strncmp(name, "Enemy", 5) ? AC_OTHER
               : !strncmp(name, "EnemyMiniZol", 12) ? AC_ENEMY_NEAREST : AC_ENEMY;
-    if (e->what == AC_ENEMY_PART && ENV("LARECOMP_COOP_LOG")) {  // (each kind of part once: which ones go by "Link")
-        static uint64_t said[64];
+    // (each kind of an enemy's parts once: which ones go by "Link" - and the others, which don't: a Like Like caught
+    // the player it went for by Player 1's "Link", user 2026-10-30)
+    uint64_t owner = strchr(name, ':') && ENV("LARECOMP_COOP_LOG") ? LD64(actor + 0x48) : 0;
+    const char *of = heap_ptr(owner) ? (const char *)(uintptr_t)(owner + 0x18) : NULL;
+    if (of && !strncmp(of, "Enemy", 5) && (e->what == AC_ENEMY_PART || e->what == AC_OTHER)) {
+        static uint64_t said[256];
         static int nsaid;
         bool known = false;
         for (int k = 0; k < nsaid && !known; k++) known = said[k] == tag;
-        uint64_t owner = LD64(actor + 0x48);
-        if (!known && nsaid < 64) {
+        if (!known && nsaid < 256) {
             said[nsaid++] = tag;
-            LOG("[coop] %.40s: an enemy part that goes by \"Link\" (its owner %.40s)\n", name,
-                heap_ptr(owner) ? (const char *)(uintptr_t)(owner + 0x18) : "-");
+            LOG("[coop] %.40s: an enemy part%s (its owner %.40s)\n", name,
+                e->what == AC_ENEMY_PART ? " that goes by \"Link\"" : "", of);
         }
     }
     return e;
 }
 
+static void down_enemy_note(uint64_t actor) {  // (an enemy updating: the knocked-out players near it - down_hit)
+    bool any = false;
+    for (int i = 1; i < g_n && !any; i++) any = g_down[i];
+    float e[3], p[3];
+    if (!any) return;
+    uint8_t what = actor_class(actor)->what;
+    if ((what != AC_ENEMY && what != AC_ENEMY_NEAREST) || !actor_pos(actor, e)) return;
+    for (int i = 1; i < g_n; i++)
+        if (g_down[i] && player_pos(g_extra[i], p) &&
+            (p[0] - e[0]) * (p[0] - e[0]) + (p[2] - e[2]) * (p[2] - e[2]) < DOWN_ENEMY_NEAR * DOWN_ENEMY_NEAR)
+            g_down_enemy_at[i] = renderer_present_count();
+}
+
+// The player standing on a floor that crumbles (AC_FLOOR; within FLOOR_REACH of its middle across, a step up or down);
+// 0: Player 1 is (or nobody).
+#define FLOOR_REACH 1.0f
+static int floor_player(uint64_t floor) {
+    float f[3], p[3];
+    if (!actor_pos(floor, f)) return 0;
+    for (int i = 0; i < g_n; i++)
+        if (player_pos(coop_player(i), p) && fabsf(p[0] - f[0]) < FLOOR_REACH && fabsf(p[2] - f[2]) < FLOOR_REACH &&
+            fabsf(p[1] - f[1]) < 1.0f)
+            return i;
+    return 0;
+}
+
 static void actor_exec_begin(Cpu *c) {
-    if (!g_settings.coop_targets || g_swap_on) return;
+    if (g_swap_on) return;
     uint64_t actor = g_updating;
     if (!actor) return;
     uint8_t what = actor_class(actor)->what;
     int t;
-    if (what == AC_ENEMY_PART) {
+    if (what == AC_FLOOR) {
+        static uint64_t said;  // (once a floor: which one, whose)
+        if ((t = floor_player(actor)) && said != actor)
+            CLOG("[coop] player %d on %.40s: its \"Link\"\n", t + 1, (const char *)(uintptr_t)(actor + 0x18));
+        if (t) said = actor;
+    } else if (!g_settings.coop_targets)
+        return;
+    else if (what == AC_ENEMY_PART) {
         // (its reaction to a hit goes by "Link" too: the target kept for the chase is the nearest player now, not the
         // one it stays on - another player's hit knocked it back from where its target stood, up onto a ledge: user
         // 2026-10-28, a turtle in Angler's Tunnel)
@@ -1837,29 +1891,38 @@ static void gone_forget(void) {
 }
 RT_ON_RESET(coop_gone_reset) { gone_forget(), g_level_changed = 0; }
 
-// A grass's or rock's key: the FNV-1a of its name, its level object's id (0: not one of them).
+// A grass's or rock's key: its level object's id, the hex after its kind in its name ("ObjRock-61025C005BA1C308") -
+// the actor factory's spawn info has it at +0 (coop_spawn_skip) - or 0: not one of them.
 static uint64_t gone_key(const char *name) {
     static const char *const kinds[] = {"ObjRock-", "ObjGrass-", "ObjGrass2x2-", "ObjLawn-", "ObjSkullStone-"};
-    bool one = false;
-    for (size_t i = 0; i < sizeof kinds / sizeof *kinds && !one && !strncmp(name, "Obj", 3); i++)
-        one = !strncmp(name, kinds[i], strlen(kinds[i]));
-    if (!one) return 0;
-    uint64_t key = 1469598103934665603ull;
-    for (int k = 0; k < 48 && name[k]; k++) key = (key ^ (uint8_t)name[k]) * 1099511628211ull;
+    size_t at = 0;
+    for (size_t i = 0; i < sizeof kinds / sizeof *kinds && !at && !strncmp(name, "Obj", 3); i++)
+        if (!strncmp(name, kinds[i], strlen(kinds[i]))) at = strlen(kinds[i]);
+    if (!at) return 0;
+    uint64_t key = 0;
+    for (int k = 0; k < 16; k++) {
+        char ch = name[at + k];
+        int d = ch >= '0' && ch <= '9' ? ch - '0' : ch >= 'A' && ch <= 'F' ? ch - 'A' + 10 : ch >= 'a' && ch <= 'f' ? ch - 'a' + 10 : -1;
+        if (d < 0) break;
+        key = key << 4 | (uint64_t)d;
+    }
     return key ? key : 1;
 }
 
+// (a key's first slot: a multiplicative hash's top bits - the ids of one room file's objects share their low 32 bits)
+static int gone_slot(uint64_t key, int p) { return (int)(((key * 0x9E3779B97F4A7C15ull) >> 52) + p) % GONE_SLOTS; }
+
 static int gone_find(uint64_t key) {  // its slot, or -1: not destroyed
     for (int p = 0; p < GONE_PROBES; p++)
-        if (g_gone[(key + p) % GONE_SLOTS].key == key) return (int)((key + p) % GONE_SLOTS);
+        if (g_gone[gone_slot(key, p)].key == key) return gone_slot(key, p);
     return -1;
 }
 
 static void gone_keep(uint64_t key, const float at[3]) {
     if (gone_find(key) >= 0) return;
-    int k = (int)(key % GONE_SLOTS);
+    int k = gone_slot(key, 0);
     for (int p = 0; p < GONE_PROBES; p++) {
-        int s = (int)((key + p) % GONE_SLOTS);
+        int s = gone_slot(key, p);
         if (!g_gone[s].key) { k = s; break; }
         if (g_gone[s].at_frame < g_gone[k].at_frame) k = s;
     }
@@ -1883,6 +1946,31 @@ static bool gone_watched(const float at[3]) {  // a player near it, or in view
     extern float widescreen_factor(void);
     return view_point(view_camera(), at, 16.0f / 9.0f * widescreen_factor(), &nx, &ny, &front) && front && fabsf(nx) < 1.15f &&
            fabsf(ny) < 1.15f;
+}
+
+// The actor factory's spawn (runtime/hle/souls.c rt_actor_create_fn: its spawn info's key +0, position +0x180): one
+// of these kept gone, made again where it's seen, isn't made at all - the factory's own "no such actor" path. Killed
+// on its first update instead (gone_check, still there for one made another way), it had been made, loaded and drawn
+// a frame: a screen's broken rocks flashed back with a hitch each time Player 1 stepped into it again, standing on its
+// edge - three times in a few seconds (user 2026-10-30).
+bool coop_spawn_skip(uint64_t info) {
+    if (!info || !g_gone_used || !LD64(info) || !(rt_coop_on() || g_back_on) || !on_field()) return false;
+    int k = gone_find(LD64(info));  // (key 0: made by the game as it goes, not a level object - and an empty slot's)
+    if (k < 0) return false;
+    const float *at = (const float *)(uintptr_t)(info + 0x180);
+    if (!gone_watched(at)) {
+        CLOG("[coop] %016llX back where nobody sees it (%.2f %.2f %.2f)\n", (unsigned long long)LD64(info), at[0], at[1],
+             at[2]);
+        g_gone[k].key = 0;
+        return false;
+    }
+    static uint64_t logged_frame;
+    uint64_t frame = renderer_present_count();
+    if (frame != logged_frame)  // (one line a batch)
+        CLOG("[coop] %016llX not made again, in view at (%.2f %.2f %.2f): kept gone (and the rest of its batch)\n",
+             (unsigned long long)LD64(info), at[0], at[1], at[2]);
+    logged_frame = frame;
+    return true;
 }
 
 // Before an actor's update: true when it was one of these made again where it's seen, now killed. (Looked at once,
@@ -2146,6 +2234,7 @@ int rt_coop_hook(Cpu *c, int which) {
         }
         respawn_track(g_updating);
         if (heap_ptr(g_updating) && gone_check(c, g_updating)) return skip_update(c);
+        if (heap_ptr(g_updating)) down_enemy_note(g_updating);
         actor_exec_begin(c);
         act_update_begin(g_updating);
         return 0;

@@ -234,6 +234,14 @@ begun, and fires with it the next frame (`main+0x6a980`). Five Links stacked on
 Player 1 at the ghost's grave began theirs with the owl's box at once: another
 player's was kept and Player 1's was gone, so the box never fired.
 
+**Floors that crumble** (`AC_FLOOR`: `ObjDungeonCollapseTile...`,
+`ObjHouseCollapseTile`, `ObjKataKataFloor`, `ObjMatFaceFallFloor`,
+`ObjBrokenFloor...`) crumbled under Player 1 only (user 2026-10-30, the
+Southern Face Shrine). While one updates with another player on it (within 1
+unit of its middle across, a step up or down) and Player 1 not, the game
+manager's player is that player (`floor_player`, the enemies' swap), logged
+once a floor. Not checked in the game yet.
+
 **Warp holes.** An `AreaWarpHoleEventBox` keeps a player actor whose `+0x43`
 bit 6 is clear, then plays the jump and the "Where to?" menu for Player 1,
 whoever stepped in. Another player's Link reads as one with the bit set
@@ -304,8 +312,14 @@ stairs' rock, `ObjRock-4800A5005B88BEDC`, back as he stepped onto them).
   every one seen: walking the Field filled the table, and from then on nothing
   was kept (the user's session: 2 kept, cut grass and a thrown boulder back).
 - One made again while a player is within `GONE_NEAR` (10 units) of it or
-  it's in view is killed before its first update (`ACTOR_KILL`, as its own
-  break does): it isn't drawn and stays gone.
+  it's in view isn't made at all (`coop_spawn_skip`, from the actor factory's
+  `rt_actor_create_fn`: its spawn info's key at +0 is the hex in the name,
+  its position at +0x180; the factory's own "no such actor" path). Killed on
+  its first update instead (`ACTOR_KILL`, still there for one made another
+  way), it had been made and drawn a frame: standing on a screen's edge beside
+  rocks the players had broken, a batch of 16 to 21 flashed back with a hitch
+  at each step across (user 2026-10-30). The table's slots go by a hash of the
+  key: one room file's objects share its low 32 bits.
 - One made again away from everyone is left: it grew back unseen, as alone.
 - A level change forgets them all (through a door, everything is back, as
   alone). Not indoors: a room comes back whole as Player 1 walks in, with
@@ -356,6 +370,10 @@ stairs' rock, `ObjRock-4800A5005B88BEDC`, back as he stepped onto them).
   already on Player 1's spot isn't moved. Checked in Angler's Tunnel's spike
   room (06B): Player 2 knocked out in the spikes is put on Player 1 once and
   lies there; the build before kept him bouncing in them (kinds 11 and 3).
+  Hits with an enemy within 8 units of him in the last half second don't
+  count either (`down_enemy_note`, as enemies update): they do him nothing,
+  and put on Player 1 he was put by the enemy Player 1 fought - the Armos
+  Knight's knocked-out players went back and forth every few seconds.
 - **Getting up:** a hit that knocks a player out leaves him in the knocked-back
   state (kind 11), which never ended under the lying pose, so a revived player
   couldn't move until a door reset him. The pose waits for his state to be
@@ -371,7 +389,9 @@ stairs' rock, `ObjRock-4800A5005B88BEDC`, back as he stepped onto them).
   colours (`coop_heart_colours`, which tints Player 1's game hearts too:
   `texpatch.c`).
 - **Corners:**
-  - Up to 3 rows go in the chosen bottom corner, the rest in the other one.
+  - Up to 3 rows go in the chosen bottom corner, the rest in the other one,
+    from its bottom up (Player 5 in the corner, 6 above him), in the corner
+    itself (over the game's "Now saving." note while it shows).
   - Top right is a single column below the X/Y items, the rupee count and the
     compass.
   - Bottom right moves up above the "Now saving" note and the run timer.
