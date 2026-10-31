@@ -295,7 +295,13 @@ right on Player 2 it landed past him, by Player 1 beside him, who was the
 nearest by then (user 2026-10-31; `build/zol.sh` with Player 2 held 3 units
 off). A player it lands on (within `CLING_REACH`, 0.5, on the ground with it)
 is its target, kept while he is up and within `TARGET_ENGAGE`; past that,
-another player has to be clearly nearer (1.5x). The rules for other enemies:
+another player has to be clearly nearer (1.5x). A Zol's or a Gel's reaction
+component goes by that target too, not the nearest: it steers the hops, and
+each hit on Player 2 knocked him back past Player 1, the nearest then - the
+Zol went for Player 1 (user 2026-10-31, "always going on p1 when hitting p2";
+`build/zolhit.sh`: real hits - `build/zol.sh` has infinite hearts, so none of
+the Zols' hits landed). So a hit from another player knocks it back as from its
+target's side. The rules for other enemies:
 - An enemy targets the nearest player who is up.
 - Within `TARGET_ENGAGE` (6 units, about 4 tiles) it keeps him until he is
   knocked out, so an attack, a wind-up or a boss pattern plays out on one
@@ -796,7 +802,7 @@ Test switches (environment):
 | `LARECOMP_INPUT_P2..P8=<frame>:<button>:<frames>,...` | scripted input for players 2..8, as `LARECOMP_INPUT` |
 | `LARECOMP_COOP_MOVE=<frame>:<p>:<x>:<y>:<z>[:hold]` | player p put there at that frame (left far away); `:hold` keeps him there |
 | `LARECOMP_COOP_ZOOM=<factor>` | the camera zoom forced (`build/zoom_audit.sh`) |
-| `LARECOMP_COOP_TRACE=<name prefix>` | `[trace]` lines: each actor so named, its position every 30 frames, and the player it goes for whenever that changes (alone too) |
+| `LARECOMP_COOP_TRACE=<name prefix>[,<another>...]` | `[trace]` lines: each actor so named, its position every 30 frames (a part's: its owner's), and the player it goes for whenever that changes (alone too); an enemy and its parts: `EnemyZolRed,ZolRed:` |
 | `LARECOMP_COOP_TRACE_EVERY=<n>` | with `LARECOMP_COOP_TRACE`: every n frames instead |
 | `LARECOMP_NO_ZOOM_STRETCH=1` | camera-attached effects not stretched by the zoom (to see what it fixes) |
 | `LARECOMP_TRACK_RESPAWN=1` | `[respawn]` lines: a rock or grass actor made again under its name (came back), where, Player 1's distance and SEEN when near a player or in view; with co-op, or alone with "Zoom out" Always |
