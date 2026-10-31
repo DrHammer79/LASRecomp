@@ -289,20 +289,48 @@ static void coop_recompute(int i) {
     coop_axis[i][3] = -SDL_GetGamepadAxis(g, SDL_GAMEPAD_AXIS_RIGHTY);
 }
 
-// A controller that isn't Player 1's: the first free co-op slot, while co-op is on (UI thread).
+// The player a controller was assigned to (settings coop_pad_path_N: SDL's device path - for an Xbox-type pad its XInput
+// slot, the quadrant its ring lights), or -1. (input_assign_begin, below)
+static int pad_saved_player(SDL_JoystickID id) {
+    const char *path = SDL_GetGamepadPathForID(id);
+    for (int k = 0; path && *path && k < 8; k++)
+        if (!strcmp(path, g_settings.coop_pad_path[k])) return k;
+    return -1;
+}
+// (a slot whose player's assigned controller is connected: kept for it)
+static bool slot_kept(int slot) {
+    const char *want = slot + 1 < 8 ? g_settings.coop_pad_path[slot + 1] : "";
+    int n = 0;
+    bool kept = false;
+    SDL_JoystickID *ids = *want ? SDL_GetGamepads(&n) : NULL;
+    for (int i = 0; ids && i < n && !kept; i++) {
+        const char *p = SDL_GetGamepadPathForID(ids[i]);
+        kept = p && !strcmp(p, want);
+    }
+    SDL_free(ids);
+    return kept;
+}
+
+// A controller that isn't Player 1's: its player's slot when it was assigned one, else the first free slot not kept for
+// another's, while co-op is on (UI thread).
 static void coop_pad_open(SDL_JoystickID id) {
     extern int coop_players_now(void);  // (coop.c: the count in effect - the setting before the game boots)
     int n = coop_players_now() - 1;
     if (n < 1 || (pad && SDL_GetGamepadID(pad) == id) || coop_slot_of(id) >= 0) return;
-    for (int i = 0; i < n && i < COOP_PADS; i++)
-        if (!coop_pad[i]) {
-            coop_pad[i] = SDL_OpenGamepad(id);
-            if (!coop_pad[i]) return;
-            SDL_SetGamepadPlayerIndex(coop_pad[i], i + 1);  // (the controller's own player light, where it has one)
-            LOG("[input] co-op player %d: %s\n", i + 2, SDL_GetGamepadName(coop_pad[i]));
-            coop_recompute(i);
-            return;
-        }
+    int i = pad_saved_player(id) - 1;
+    if (i < 0 || i >= n || i >= COOP_PADS || coop_pad[i]) {
+        i = -1;
+        for (int pass = 0; pass < 2 && i < 0; pass++)
+            for (int k = 0; k < n && k < COOP_PADS && i < 0; k++)
+                if (!coop_pad[k] && (pass || !slot_kept(k))) i = k;
+    }
+    if (i < 0) return;
+    coop_pad[i] = SDL_OpenGamepad(id);
+    if (!coop_pad[i]) return;
+    SDL_SetGamepadPlayerIndex(coop_pad[i], i + 1);  // (the controller's own player light, where it has one)
+    LOG("[input] co-op player %d: %s (%s)\n", i + 2, SDL_GetGamepadName(coop_pad[i]),
+        SDL_GetGamepadPath(coop_pad[i]) ? SDL_GetGamepadPath(coop_pad[i]) : "no path");
+    coop_recompute(i);
 }
 
 static void coop_pad_close(SDL_JoystickID id) {
@@ -552,13 +580,80 @@ static void use_pad(SDL_JoystickID id, const char *why) {
         rumble_last_lo = rumble_last_hi = 0, rumble_warned = false;  // (the next poll starts it on the new one)
     }
     pad = g;
-    LOG("[input] gamepad: %s%s\n", SDL_GetGamepadName(pad), why);
+    LOG("[input] gamepad: %s%s (%s)\n", SDL_GetGamepadName(pad), why,
+        SDL_GetGamepadPath(pad) ? SDL_GetGamepadPath(pad) : "no path");
     note_family();
     recompute_pad();
 }
 static void open_pad(SDL_JoystickID id) {
     if (!SDL_GetGamepadFromID(id)) SDL_OpenGamepad(id);
-    if (!pad) use_pad(id, "");
+    // (the first is Player 1's - or the one assigned to him, as it connects)
+    if (!pad || (pad_saved_player(id) == 0 && pad_saved_player(SDL_GetGamepadID(pad)) != 0)) use_pad(id, "");
+}
+// (Player 1 has the controller assigned to him: a press on a spare one doesn't take it over)
+static bool pad_pinned(void) { return pad && pad_saved_player(SDL_GetGamepadID(pad)) == 0; }
+
+// ---- Whose controller is whose (the Controls tab's "Player N controller", runtime/ui/controls_ui.mm). The row waits
+// for a button (input_assign_begin): the next press, on any controller, gives that controller to the player - taken
+// from whoever had it, who gets the player's own (a swap). Each player's is remembered by its device path (settings
+// coop_pad_path_N, saved): as they connect, one with a player's path goes to that player (open_pad, coop_pad_open). The
+// press is taken before the menus see it (input_assign_event, from the event loops), so it doesn't also act on them;
+// Escape, or 10 s, gives up. UI thread.
+static int assign_player = -1;
+static uint64_t assign_until;
+void input_assign_begin(int player) { assign_player = player, assign_until = SDL_GetTicks() + 10000; }
+int input_assign_waiting(void) {
+    if (assign_player >= 0 && SDL_GetTicks() > assign_until) assign_player = -1;
+    return assign_player;
+}
+static void slot_set(int k, SDL_Gamepad *g) {
+    if (coop_pad[k] && coop_pad[k] != g) SDL_RumbleGamepad(coop_pad[k], 0, 0, 0);
+    coop_pad[k] = g;
+    coop_rumble_last[k][0] = coop_rumble_last[k][1] = 0;
+    if (g) SDL_SetGamepadPlayerIndex(g, k + 1);
+    coop_recompute(k);
+}
+static void assign_pad(int player, SDL_JoystickID id) {
+    extern int coop_players_now(void);
+    SDL_Gamepad *g = SDL_GetGamepadFromID(id);
+    if (!g) g = SDL_OpenGamepad(id);
+    int from = coop_slot_of(id), k = player - 1;
+    if (!g || (player > 0 && (k >= coop_players_now() - 1 || k >= COOP_PADS)) || (player ? from == k : g == pad)) return;
+    if (!player) {
+        SDL_Gamepad *old = pad;
+        use_pad(id, " (assigned)");
+        if (from >= 0) slot_set(from, old);
+    } else {
+        SDL_Gamepad *cur = coop_pad[k];
+        if (from >= 0) slot_set(from, cur);
+        else if (g == pad && cur) use_pad(SDL_GetGamepadID(cur), " (Player 1's, swapped)");
+        else if (g == pad) {
+            SDL_RumbleGamepad(pad, 0, 0, 0);
+            led_restore("controller assigned");
+            pad = NULL;
+            recompute_pad();
+        }
+        slot_set(k, g);
+    }
+    LOG("[input] Player %d's controller: %s\n", player + 1, SDL_GetGamepadName(g));
+    for (int p = 0; p < 8; p++) {
+        SDL_Gamepad *h = p == 0 ? pad : p <= COOP_PADS ? coop_pad[p - 1] : NULL;
+        const char *path = h ? SDL_GetGamepadPath(h) : NULL;
+        snprintf(g_settings.coop_pad_path[p], sizeof g_settings.coop_pad_path[p], "%s", path ? path : "");
+    }
+    settings_save();
+}
+bool input_assign_event(const SDL_Event *e) {
+    if (input_assign_waiting() < 0) return false;
+    if (e->type == SDL_EVENT_KEY_DOWN && e->key.scancode == SDL_SCANCODE_ESCAPE) {
+        assign_player = -1;
+        return true;
+    }
+    if (e->type != SDL_EVENT_GAMEPAD_BUTTON_DOWN || e->gbutton.which == TEST_DEVICE) return false;
+    int player = assign_player;
+    assign_player = -1;
+    assign_pad(player, e->gbutton.which);
+    return true;
 }
 
 void input_handle_event(const SDL_Event *e) {
@@ -635,7 +730,8 @@ void input_handle_event(const SDL_Event *e) {
         break;
     }
     case SDL_EVENT_GAMEPAD_BUTTON_DOWN: case SDL_EVENT_GAMEPAD_BUTTON_UP:
-        if (e->gbutton.down && e->gbutton.which != TEST_DEVICE && !host_test) use_pad(e->gbutton.which, " (switched)");
+        if (e->gbutton.down && e->gbutton.which != TEST_DEVICE && !host_test && !pad_pinned())
+            use_pad(e->gbutton.which, " (switched)");
         if (pad && e->gbutton.which != TEST_DEVICE && e->gbutton.which != SDL_GetGamepadID(pad)) break;  // (another pad)
         if (!host_test || e->gbutton.which == TEST_DEVICE) {  // (the press as the event has it, before reading the pad)
             uint64_t b = pad_bits(e->gbutton.button);
@@ -644,7 +740,7 @@ void input_handle_event(const SDL_Event *e) {
         recompute_pad();
         break;
     case SDL_EVENT_GAMEPAD_AXIS_MOTION:
-        if (!host_test && abs(e->gaxis.value) > 24000 && pad_at_rest()) use_pad(e->gaxis.which, " (switched)");
+        if (!host_test && abs(e->gaxis.value) > 24000 && pad_at_rest() && !pad_pinned()) use_pad(e->gaxis.which, " (switched)");
         if (pad && e->gaxis.which != SDL_GetGamepadID(pad)) break;  // (another pad's stick: not the game's)
         if ((e->gaxis.axis == SDL_GAMEPAD_AXIS_LEFT_TRIGGER || e->gaxis.axis == SDL_GAMEPAD_AXIS_RIGHT_TRIGGER) &&
             !host_test) {  // (the triggers as buttons: past half way)

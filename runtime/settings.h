@@ -97,6 +97,7 @@ typedef struct {
     int coop_zoom_indoor;  // co-op: indoors (houses, caves, dungeons) the camera zoomed out this many steps, no fit
     bool coop_leash;     // co-op: a player out of the camera's view for 3 s is put back on Player 1
     int coop_colour[8];  // co-op: each player's colour (0..COOP_COLOURS-1: the co-op Playerlink.bfres colour sets)
+    char coop_pad_path[8][160];  // co-op: each player's controller, by SDL's device path, as assigned (empty: none)
     bool diff_ohko;      // any hit kills
     bool diff_hero;      // Hero Mode flag forced on in the loaded save (2x damage, no recovery hearts)
     // cosmetics (Cosmetics tab, runtime/ui/menu.mm), live, never part of a seed: colour rows of the shared palette

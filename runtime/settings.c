@@ -304,7 +304,8 @@ void settings_load(void) {
                 if (!p) break;
                 p++;
             }
-        }
+        } else if (!strncmp(key, "coop_pad_path_", 14) && key[14] >= '1' && key[14] <= '8' && !key[15])
+            strlcpy(g_settings.coop_pad_path[key[14] - '1'], val, sizeof g_settings.coop_pad_path[0]);
         else if (!strcmp(key, "diff_ohko")) g_settings.diff_ohko = atoi(val) != 0;
         else if (!strcmp(key, "diff_hero")) g_settings.diff_hero = atoi(val) != 0;
         else if (!strcmp(key, "timer")) g_settings.timer = atoi(val) != 0;
@@ -403,6 +404,8 @@ void settings_save(void) {
     fprintf(f, "coop_colours = %d,%d,%d,%d,%d,%d,%d,%d\n", g_settings.coop_colour[0], g_settings.coop_colour[1],
             g_settings.coop_colour[2], g_settings.coop_colour[3], g_settings.coop_colour[4], g_settings.coop_colour[5],
             g_settings.coop_colour[6], g_settings.coop_colour[7]);
+    for (int i = 0; i < 8; i++)
+        if (g_settings.coop_pad_path[i][0]) fprintf(f, "coop_pad_path_%d = %s\n", i + 1, g_settings.coop_pad_path[i]);
     fprintf(f, "timer_position = %s\n", g_settings.timer_pos == TIMER_POS_RIGHT ? "right" : "left");
     fprintf(f, "timer = %d\nlivesplit = %d\nlivesplit_host = %s\n", g_settings.timer, g_settings.livesplit,
             g_settings.livesplit_host);

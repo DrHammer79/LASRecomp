@@ -1646,6 +1646,8 @@ int ui_run(void) {
             if (e.type == SDL_EVENT_QUIT) { input_rumble_stop(); input_led_stop(); LOG("window closed\n"); backend_quit(); exit(0); }
             if (input_user_blocked(&e)) continue;  // scripted test runs: the real keyboard / mouse / pads do nothing
             input_cursor_event(&e);
+            extern bool input_assign_event(const SDL_Event *e);  // (a controller being given to a player: its press)
+            if (input_assign_event(&e)) continue;
             if (menu_handle_event(&e)) continue;
             input_handle_event(&e);
         }
