@@ -2162,6 +2162,8 @@ int ui_run(void) {
             extern bool input_user_blocked(const SDL_Event *e);
             if (input_user_blocked(&e)) continue;  // scripted test runs: the real keyboard / mouse / pads do nothing (as metal.m)
             input_cursor_event(&e);
+            extern bool input_assign_event(const SDL_Event *e);  // (a controller being given to a player: its press)
+            if (input_assign_event(&e)) continue;
             if (menu_handle_event(&e)) continue;
             input_handle_event(&e);
         }
