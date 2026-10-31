@@ -15,7 +15,7 @@ extern "C" {
 typedef struct { int hp, max, down; float revive; uint32_t rgb; } CoopHudRow;
 int coop_hud_rows(CoopHudRow *rows, int cap);
 bool coop_player_screen(int player, float w, float h, float *sx, float *sy, bool *edge);  // (his head; off screen: the edge)
-bool coop_revive_prompt(int player, float w, float h, float *sx, float *sy);  // (below him, beside a knocked-out one)
+bool coop_revive_prompt(int player, float w, float h, float *sx, float *sy);  // (below a knocked-out one, someone beside)
 bool inventory_items_page_shown(void);  // inventory_overlay.mm
 bool tracker_map_page_shown(void);      // tracker_overlay.mm
 }
@@ -56,7 +56,7 @@ static void zzz_bubble(ImDrawList *dl, ImFont *font, float scale, float hx, floa
     }
 }
 
-// "(A) Revive" under a player who is up beside a knocked-out one, as the game's own "(A) Lift" by a rock: the button
+// "(A) Revive" under a knocked-out player someone who is up is beside, as the game's own "(A) Lift" by a rock: the button
 // in a light disc and the word, in a dark rounded box. The button as the game's prompts show it: Switch A wherever it
 // is bound, with the controller's own letter or symbol (an Xbox pad's B, a PlayStation pad's circle by default).
 void confirm_glyph(ImDrawList *dl, ImFont *font, ImVec2 c, float r);  // inventory_overlay.mm
@@ -130,8 +130,12 @@ static void hud_box(ImVec2 display, float *bx, float *by, float *bw, float *bh) 
 // box's height). Bottom right: above its "Now saving." note (about 0.79-1.0 of the box's width, 0.86-0.94 of its
 // height) and the run timer's panel when it's in that corner (runtime/ui/race_overlay.mm), as the timer does.
 // up (the rest, in the other bottom corner): from the corner itself up - the first of them at the bottom, the next one
-// above him (Player 5 sat up above the note's place, and 6, 7 and 8 would have come below him; user 2026-10-30) - over
-// the note while it shows.
+// above him (Player 5 sat up above the note's place, and 6, 7 and 8 would have come below him; user 2026-10-30) - and
+// above the note while it shows: for SAVE_NOTE_FRAMES after a save (runtime/services/fs.c g_save_frame; the note
+// showed from 20 to 70 frames after it, a warp's save).
+#define SAVE_NOTE_FRAMES 120
+extern "C" uint64_t g_save_frame;
+extern "C" uint64_t renderer_present_count(void);
 static void rows_panel(ImDrawList *dl, ImFont *font, float scale, ImVec2 display, int a, int b, int corner, bool up) {
     float tag = 30 * scale, s = 30 * scale, gap = 4 * scale, pad = 10 * scale, rowh = s + 14 * scale;
     int nh = 3, lines = 0;  // (hearts per line: the most any of these players can have, 10 a line as the game's)
@@ -149,7 +153,8 @@ static void rows_panel(ImDrawList *dl, ImFont *font, float scale, ImVec2 display
     float x0 = right ? display.x - 30 * scale - pw : 30 * scale;
     float y0 = top ? by + 0.34f * bh : display.y - 30 * scale - ph;
     if (!top && g_settings.timer && right == (g_settings.timer_pos == TIMER_POS_RIGHT)) y0 -= 100 * scale;
-    if (!top && right && !up) {
+    bool saving = g_save_frame && renderer_present_count() - g_save_frame < SAVE_NOTE_FRAMES;
+    if (!top && right && (!up || saving)) {
         float sx0 = bx + 0.79f * bw, sy0 = by + 0.86f * bh;
         if (x0 + pw > sx0 && y0 + ph > sy0) y0 = sy0 - 10 * scale - ph;
     }
@@ -191,7 +196,7 @@ extern "C" void coop_hud_draw(ImVec2 display, ImFont *font, float scale) {
         if (g_rows[i].down && coop_player_screen(i, display.x, display.y, &hx, &hy, &edge))
             zzz_bubble(dl, font, scale, hx, hy, edge, g_rows[i]);
     }
-    float placed[8][2];  // "(A) Revive" under each player who can revive one (two players on one spot: one under the other)
+    float placed[8][2];  // "(A) Revive" under each knocked-out one who can be revived (two on one spot: one under the other)
     int np = 0;
     for (int i = 0; i < g_nrows; i++) {
         float px, py, w = 130 * scale, h = 38 * scale;
