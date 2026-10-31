@@ -129,7 +129,10 @@ static void hud_box(ImVec2 display, float *bx, float *by, float *bw, float *bh) 
 // him). Top right: below the game's X/Y items, its rupee count and its compass / seashell sensor (to 0.32 of the HUD
 // box's height). Bottom right: above its "Now saving." note (about 0.79-1.0 of the box's width, 0.86-0.94 of its
 // height) and the run timer's panel when it's in that corner (runtime/ui/race_overlay.mm), as the timer does.
-static void rows_panel(ImDrawList *dl, ImFont *font, float scale, ImVec2 display, int a, int b, int corner) {
+// up (the rest, in the other bottom corner): from the corner itself up - the first of them at the bottom, the next one
+// above him (Player 5 sat up above the note's place, and 6, 7 and 8 would have come below him; user 2026-10-30) - over
+// the note while it shows.
+static void rows_panel(ImDrawList *dl, ImFont *font, float scale, ImVec2 display, int a, int b, int corner, bool up) {
     float tag = 30 * scale, s = 30 * scale, gap = 4 * scale, pad = 10 * scale, rowh = s + 14 * scale;
     int nh = 3, lines = 0;  // (hearts per line: the most any of these players can have, 10 a line as the game's)
     for (int i = a; i < b; i++) {
@@ -146,12 +149,13 @@ static void rows_panel(ImDrawList *dl, ImFont *font, float scale, ImVec2 display
     float x0 = right ? display.x - 30 * scale - pw : 30 * scale;
     float y0 = top ? by + 0.34f * bh : display.y - 30 * scale - ph;
     if (!top && g_settings.timer && right == (g_settings.timer_pos == TIMER_POS_RIGHT)) y0 -= 100 * scale;
-    if (!top && right) {
+    if (!top && right && !up) {
         float sx0 = bx + 0.79f * bw, sy0 = by + 0.86f * bh;
         if (x0 + pw > sx0 && y0 + ph > sy0) y0 = sy0 - 10 * scale - ph;
     }
     float y = y0 + pad;
-    for (int i = a; i < b; i++) {  // (no panel behind them: as the game's own hearts; outlined tags and hearts)
+    for (int k = a; k < b; k++) {  // (no panel behind them: as the game's own hearts; outlined tags and hearts)
+        int i = up ? a + b - 1 - k : k;
         const CoopHudRow &r = g_rows[i];
         float hx = x0 + pad + lw + 10 * scale;
         char t[4];
@@ -204,11 +208,12 @@ extern "C" void coop_hud_draw(ImVec2 display, ImFont *font, float scale) {
         revive_prompt(dl, font, scale, px, py);
         if (np < 8) placed[np][0] = px, placed[np][1] = py, np++;
     }
-    // the other players' rows: in the chosen corner, up to 3 in a bottom one - the rest in the other bottom corner
+    // the other players' rows: in the chosen corner, up to 3 in a bottom one - the rest in the other bottom corner, from
+    // its bottom up
     int n = g_nrows - 1, corner = g_settings.coop_hud;
     int first = corner == COOP_HUD_TOP_RIGHT ? n : n <= 3 ? n : (n + 1) / 2 > 3 ? (n + 1) / 2 : 3;
-    rows_panel(dl, font, scale, display, 1, 1 + first, corner);
+    rows_panel(dl, font, scale, display, 1, 1 + first, corner, false);
     if (first < n)
         rows_panel(dl, font, scale, display, 1 + first, g_nrows,
-                   corner == COOP_HUD_BOTTOM_LEFT ? COOP_HUD_BOTTOM_RIGHT : COOP_HUD_BOTTOM_LEFT);
+                   corner == COOP_HUD_BOTTOM_LEFT ? COOP_HUD_BOTTOM_RIGHT : COOP_HUD_BOTTOM_LEFT, true);
 }
