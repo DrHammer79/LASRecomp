@@ -1202,6 +1202,16 @@ static int player_dists(const float e[3], float d[COOP_MAX], float *bd) {
     return best;
 }
 
+static int kept_target(uint64_t enemy) {  // (the target enemy_target keeps for it, read only; -1: none)
+    uint32_t h = (uint32_t)(((enemy >> 12) * 0x9E3779B97F4A7C15ull) >> 56) % TARGET_SLOTS;
+    for (int k = 0; k < 8; k++) {
+        uint32_t s = (h + k) % TARGET_SLOTS;
+        if (g_target[s].actor == enemy) return renderer_present_count() - g_target[s].seen < 30 ? g_target[s].who : -1;
+        if (!g_target[s].actor) break;
+    }
+    return -1;
+}
+
 static int enemy_target(uint64_t enemy) {
     float e[3];
     if (!actor_pos(enemy, e)) return 0;
@@ -1401,6 +1411,23 @@ static int floor_player(uint64_t floor) {
             fabsf(p[1] - f[1]) < 1.0f)
             return i;
     return 0;
+}
+
+// A Like Like reads "Link" in its state handlers (main+0x4a64c0...0x4ab1d0, x19 the Like Like), and those run
+// outside its update, where "Link" is its target: one that went for Player 2 hit him and then, at the catch
+// (main+0x4a9810), flew in a straight line onto Player 1, 18 units off; Player 2 wasn't caught
+// (user 2026-10-30; build/likelike.sh). Each of its nine reads (COOP_LIKELIKE_SITE_0..8: the register it loads, the
+// one it loads from) gets the player it goes for (kept_target), with enemy targets on.
+static const uint8_t k_likelike_reads[][2] = {{22, 21}, {21, 20}, {9, 20}, {21, 20}, {21, 20},
+                                              {8, 20},  {8, 20},  {8, 21}, {21, 20}};
+static int likelike_player(Cpu *c, int k) {
+    uint64_t own = LD64(c->x[k_likelike_reads[k][1]] + 0x4b8), ll = c->x[19];
+    int t = g_n > 1 && g_settings.coop_targets && heap_ptr(ll) &&
+                    !strncmp((const char *)(uintptr_t)(ll + 0x18), "EnemyLikeLike", 13)
+                ? kept_target(ll)
+                : -1;
+    c->x[k_likelike_reads[k][0]] = t > 0 && t < g_n && collision_of(g_extra[t]) ? g_extra[t] : own;
+    return 1;
 }
 
 // A dungeon's collapse tile ("ObjDungeonCo-...": ObjDungeonCollapseTile, ...Lv05, ...Cave...) drops when the game
@@ -2484,6 +2511,8 @@ int rt_coop_hook(Cpu *c, int which) {
     case 39:  // COOP_TILE_PLAYER_SITE - ldr x8, [x20, #0x4b8]: the Link a collapse tile (x19) measures
         c->x[8] = tile_player(c->x[19], LD64(c->x[20] + 0x4b8));
         return 1;
+    case 40: case 41: case 42: case 43: case 44: case 45: case 46: case 47: case 48:  // COOP_LIKELIKE_SITE_0..8
+        return likelike_player(c, which - 40);  // (ldr: "Link" for a Like Like, x19)
     }
     return 0;
 }

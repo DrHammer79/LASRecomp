@@ -1119,5 +1119,17 @@ _COOP_HOOKS = {
     # of its middle, checked in a job of its own (main+0xb01a40, x19 the tile; not an actor update, where "Link" is
     # swapped for enemies): only Player 1 set one off (user 2026-10-30). The Link it measures is the one nearest it.
     A.COOP_TILE_PLAYER_SITE: (0xf9425e88, (), 'ldr x8, [x20, #0x4b8]: the Link a collapse tile measures'),
+    # A Like Like's state handlers (main+0x4a64c0...0x4ab1d0, x19 the Like Like) run outside its update, where "Link"
+    # is the player it goes for: one that went for Player 2 caught him by flying onto Player 1 (user 2026-10-30). Its
+    # nine reads of the game manager's player get the player it goes for.
+    A.COOP_LIKELIKE_SITE_0: (0xf9425eb6, (), 'ldr x22, [x21, #0x4b8]: "Link" for a Like Like (x19)'),
+    A.COOP_LIKELIKE_SITE_1: (0xf9425e95, (), 'ldr x21, [x20, #0x4b8]: "Link" for a Like Like (x19)'),
+    A.COOP_LIKELIKE_SITE_2: (0xf9425e89, (), 'ldr x9, [x20, #0x4b8]: "Link" for a Like Like (x19)'),
+    A.COOP_LIKELIKE_SITE_3: (0xf9425e95, (), 'ldr x21, [x20, #0x4b8]: "Link" for a Like Like (x19)'),
+    A.COOP_LIKELIKE_SITE_4: (0xf9425e95, (), 'ldr x21, [x20, #0x4b8]: "Link" for a Like Like (x19)'),
+    A.COOP_LIKELIKE_SITE_5: (0xf9425e88, (), 'ldr x8, [x20, #0x4b8]: "Link" for a Like Like (x19)'),
+    A.COOP_LIKELIKE_SITE_6: (0xf9425e88, (), 'ldr x8, [x20, #0x4b8]: "Link" for a Like Like (x19)'),
+    A.COOP_LIKELIKE_SITE_7: (0xf9425ea8, (), 'ldr x8, [x21, #0x4b8]: "Link" for a Like Like (x19)'),
+    A.COOP_LIKELIKE_SITE_8: (0xf9425e95, (), 'ldr x21, [x20, #0x4b8]: "Link" for a Like Like (x19)'),
 }
 HOOKS.update({a: h for a, h in _COOP_HOOKS.items() if a})
