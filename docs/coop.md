@@ -243,13 +243,34 @@ begun, and fires with it the next frame (`main+0x6a980`). Five Links stacked on
 Player 1 at the ghost's grave began theirs with the owl's box at once: another
 player's was kept and Player 1's was gone, so the box never fired.
 
-**Floors that crumble** (`AC_FLOOR`: `ObjDungeonCollapseTile...`,
-`ObjHouseCollapseTile`, `ObjKataKataFloor`, `ObjMatFaceFallFloor`,
-`ObjBrokenFloor...`) crumbled under Player 1 only (user 2026-10-30, the
-Southern Face Shrine). While one updates with another player on it (within 1
-unit of its middle across, a step up or down) and Player 1 not, the game
-manager's player is that player (`floor_player`, the enemies' swap), logged
-once a floor. Not checked in the game yet.
+**Collapse tiles** (the dungeons' and caves' cracked floor tiles,
+`ObjDungeonCollapseTile...`) crumbled under Player 1 only (user 2026-10-30, a
+Tal Tal Heights cave, `Tamaranch04`: "the crumbling stone we are by doesn't
+crumble for other players"). A tile checks the game manager's player in a job
+of its own each frame (main+0xb01a40, x19 the tile), not in the actors' update
+where the enemies' "Link" is swapped: within 1.35 across of its middle, the
+drop starts (main+0xb005b0). `COOP_TILE_PLAYER_SITE` (the job's
+`ldr x8, [x20, #0x4b8]`) gives it the player nearest it instead (`tile_player`;
+knocked-out players and ones away from the map aren't taken), and the game's own
+check goes by him. The job's earlier check of the player's state (main+0x3ed00,
+then his +0x1568) is still Player 1's. `build/floor.sh`: Player 2 put on a
+Catfish's Maw tile falls through it within a second and comes back up at the
+pit's edge; before, he stood on it, and walked over one, and it held. The same
+in the user's cave (Player 2 put on the tile at 68.25, 21.75). Player 1 on a
+tile: the same frames as before.
+
+The levels name their objects cut short, not by kind: a Catfish's Maw tile is
+`ObjDungeonCo-99000F005B920361` (an `ObjDungeonCollapseTileLv05`). The first
+fix (2026-10-30) matched the kinds' full names and never fired; it also swapped
+"Link" during the tile's update, which the tile doesn't read.
+
+**Other floors that crumble** (`AC_FLOOR`: level names starting
+`ObjHouseColl`, `ObjKataKataFl`, `ObjMatFaceFa`, `ObjBrokenFlo` - prefixes only
+one kind has; `ObjKataKata-` in Turtle Rock could also be the lava button block
+`ObjKataKataLava`, so it isn't one) keep the enemies' swap: while one updates
+with another player on it (within 1 unit of its middle across, a step up or
+down) and Player 1 not, the game manager's player is that player
+(`floor_player`), logged once a floor. Not checked in the game.
 
 **Warp holes.** An `AreaWarpHoleEventBox` keeps a player actor whose `+0x43`
 bit 6 is clear, then plays the jump and the "Where to?" menu for Player 1,
@@ -739,6 +760,7 @@ the game's reads of it by the RomFS index's patch list, while co-op is on
 | COOP_ACTIVE_BOX_SITE | 0x700085c848 | fsub s8, s0, s3 | the active screens' box takes in every player (35) |
 | COOP_WARP_OBJ_TOUCH / LEAVE_SITE | 0x7000cbd42c / d290 | ldrb w8, [x8, #0x43] | the overworld's warp hole objects (36, 37) |
 | COOP_SHADOW_BOX_SITE | 0x700100a460 | cbnz w1 | the shadow map's box grown with the zoom (38) |
+| COOP_TILE_PLAYER_SITE | 0x7000b01c70 | ldr x8, [x20, #0x4b8] | a collapse tile measures the player nearest it (39) |
 
 Runtime constants: `PLAYER_VTABLE`, `PLAYER_MAX_HEALTH`, `PLAY_ANIMATION`,
 `DOACTION_CURRENT` / `_PENDING` / `_COOLDOWN` (the slots), `DOACTION_TAKE_RET` /
@@ -1012,8 +1034,9 @@ runtime gives the menus was checked and is valid, so its cause isn't known yet.
   checked, and the Armos Knight only in scripted fights
   (`build/armos_fight.sh`). A Like Like's grab wasn't seen: only its parts are
   logged (`LARECOMP_COOP_LOG`).
-- **Crumbling floors** (`AC_FLOOR`) weren't checked in the game: no script
-  stands another player on one.
+- **Other crumbling floors** (`AC_FLOOR`: Catfish's Maw's broken floor, a
+  house's collapse tiles, the Face Shrine's falling floor) weren't checked in
+  the game; the collapse tiles are (`build/floor.sh`).
 - **Controller rows** (`coop_pad_path_N`) have no test: whether a real pad's
   SDL path stays the same across restarts and reconnects wasn't checked.
 - **Zols on a knocked-out player:** one that lands on him stays and hits him
