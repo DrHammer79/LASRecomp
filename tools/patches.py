@@ -1205,5 +1205,9 @@ _COOP_HOOKS = {
     # on the Field) become the light's projection and the shadow lookups' matrix. Zoomed out the view reached past it,
     # and the shadows at its edge ran on as dark diagonal stripes (user 2026-10-29): it grows with the camera's zoom.
     A.COOP_SHADOW_BOX_SITE: (0x350025c1, (), 'cbnz w1: the shadow map\'s light box fitted to a world box around Player 1'),
+    # A dungeon's collapse tile (ObjDungeonCollapseTile...) drops when the game manager's player comes within 1.35 across
+    # of its middle, checked in a job of its own (main+0xb01a40, x19 the tile; not an actor update, where "Link" is
+    # swapped for enemies): only Player 1 set one off (user 2026-10-30). The Link it measures is the one nearest it.
+    A.COOP_TILE_PLAYER_SITE: (0xf9425e88, (), 'ldr x8, [x20, #0x4b8]: the Link a collapse tile measures'),
 }
 HOOKS.update({a: h for a, h in _COOP_HOOKS.items() if a})

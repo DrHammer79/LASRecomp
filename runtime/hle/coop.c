@@ -1281,15 +1281,17 @@ static bool on_game_thread(void) {  // (per call of the actor hooks: pthread_sel
 // jumped at its target and landed on another player clung to him, then went over to its target (user 2026-10-28). So
 // do the Zols, red and green, which cling as well: one hopping after Player 1 landed on Player 2 on the way, latched
 // on, and was on Player 1 the next moment (user 2026-10-30, red ones: "latches to p2 and then teleports to p1").
-// A floor that crumbles under Link (AC_FLOOR: the collapse tiles, the rattling floor...) looks for "Link" on it: only
-// Player 1 set one off (user 2026-10-30, the Southern Face Shrine). Another player standing on it is its "Link" for
-// its update, while Player 1 isn't.
+// A floor that crumbles under Link (AC_FLOOR: the rattling floor, a house's collapse tiles...) looks for "Link" on it:
+// another player standing on it is its "Link" for its update, while Player 1 isn't (not checked in the game). The
+// levels name their objects cut short, not by their kind: "ObjBrokenFlo-..." is the ObjBrokenFloorLv5 (Catfish's Maw)
+// - the kinds' full names matched none of them. So the prefixes are those only one kind starts with ("ObjKataKata-",
+// Turtle Rock's, could be ObjKataKata or ...Lava as well: a lava block with a button). The dungeons' collapse tiles
+// ("ObjDungeonCo-...") measure the player in a job of their own instead: tile_player.
 #define AC_SETS 16384
 #define AC_WAYS 4  // (an actor's set of four: the one seen longest ago makes way)
 enum { AC_OTHER, AC_ENEMY, AC_ENEMY_NEAREST, AC_ENEMY_PART, AC_FLOOR };
 static bool floor_name(const char *name) {
-    static const char *const kinds[] = {"ObjDungeonCollapseTile", "ObjHouseCollapseTile", "ObjKataKataFloor",
-                                        "ObjMatFaceFallFloor", "ObjBrokenFloor"};
+    static const char *const kinds[] = {"ObjHouseColl", "ObjKataKataFl", "ObjMatFaceFa", "ObjBrokenFlo"};
     for (size_t i = 0; i < sizeof kinds / sizeof *kinds && !strncmp(name, "Obj", 3); i++)
         if (!strncmp(name, kinds[i], strlen(kinds[i]))) return true;
     return false;
@@ -1401,6 +1403,26 @@ static int floor_player(uint64_t floor) {
     return 0;
 }
 
+// A dungeon's collapse tile ("ObjDungeonCo-...": ObjDungeonCollapseTile, ...Lv05, ...Cave...) drops when the game
+// manager's player is within 1.35 across of its middle, measured in a job of its own each frame (main+0xb01a40, x19 the
+// tile; the drop main+0xb005b0) - not one of the actors' updates, where "Link" is swapped for the enemies: only Player 1
+// set one off (user 2026-10-30, a Tal Tal Heights cave: "the crumbling stone we are by doesn't crumble for other
+// players"; build/floor.sh). The Link it measures (COOP_TILE_PLAYER_SITE) is the player nearest it: the game's own
+// check then goes by him. (Its job's earlier check of the player's state is still Player 1's.)
+static uint64_t tile_player(uint64_t tile, uint64_t own) {
+    float e[3], d[COOP_MAX], bd;
+    if (g_n < 2 || !own || !actor_pos(tile, e)) return own;
+    int best = player_dists(e, d, &bd);
+    if (best <= 0 || !collision_of(g_extra[best])) return own;
+    static uint64_t said[4];  // (once a tile, when he's on it)
+    static unsigned nsaid;
+    if (bd < 1.35f * 1.35f && said[0] != tile && said[1] != tile && said[2] != tile && said[3] != tile) {
+        CLOG("[coop] player %d on %.40s: a collapse tile\n", best + 1, (const char *)(uintptr_t)(tile + 0x18));
+        said[nsaid++ % 4] = tile;
+    }
+    return g_extra[best];
+}
+
 static void actor_exec_begin(Cpu *c) {
     if (g_swap_on) return;
     uint64_t actor = g_updating;
@@ -1408,10 +1430,12 @@ static void actor_exec_begin(Cpu *c) {
     uint8_t what = actor_class(actor)->what;
     int t;
     if (what == AC_FLOOR) {
-        static uint64_t said;  // (once a floor: which one, whose)
-        if ((t = floor_player(actor)) && said != actor)
+        static uint64_t said[4];  // (once a floor: which one, whose - the last few: one stands on two floors' edge)
+        static unsigned nsaid;
+        if ((t = floor_player(actor)) && said[0] != actor && said[1] != actor && said[2] != actor && said[3] != actor) {
             CLOG("[coop] player %d on %.40s: its \"Link\"\n", t + 1, (const char *)(uintptr_t)(actor + 0x18));
-        if (t) said = actor;
+            said[nsaid++ % 4] = actor;
+        }
     } else if (!g_settings.coop_targets)
         return;
     else if (what == AC_ENEMY_PART) {
@@ -2457,6 +2481,9 @@ int rt_coop_hook(Cpu *c, int which) {
               // view x2's world box around Player 1 - grown with the zoom
         if (!(uint32_t)c->x[1]) shadow_box(c->x[2]);
         return 0;
+    case 39:  // COOP_TILE_PLAYER_SITE - ldr x8, [x20, #0x4b8]: the Link a collapse tile (x19) measures
+        c->x[8] = tile_player(c->x[19], LD64(c->x[20] + 0x4b8));
+        return 1;
     }
     return 0;
 }
