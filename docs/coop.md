@@ -339,6 +339,21 @@ target's side. The rules for other enemies:
   a fight. After that it changes only to a clearly nearer player (1.5x).
 - Enemies more than 30 units from everyone are left alone.
 
+**Like Likes** read "Link" in their state handlers (main+0x4a64c0 to
+main+0x4ab1d0, x19 the Like Like), which run outside its update, where "Link"
+is its target. One that went for Player 2 hit him, and at the catch
+(main+0x4a9810) flew in a straight line onto Player 1, 18 units off, in about
+15 frames; Player 2 wasn't caught (user 2026-10-30; `build/likelike.sh`, Player
+2 put a unit from one at Goponga Swamp's phone booth). Its nine reads of the
+game manager's player (`COOP_LIKELIKE_SITE_0..8`, `likelike_player`) now get
+the player it goes for (`kept_target`: `enemy_target`'s, read only), with
+enemy targets on and two or more players; for anything that isn't a Like Like
+(by its name, x19) they read as before. Tested: Player 2 is hit, caught (state
+kind 23) and held about 3 s, then spat out; the Like Like stays on him, Player
+1 doesn't move. The game's own "Did...did that thing eat it?!" follows (the
+shield is shared). Player 1 as its target: it walks to him and catches him, as
+before.
+
 **Cut grass and thrown rocks** (`gone_check`, `gone_note`). On the Field the
 game makes a level object again (grass, a rock) when Player 1 steps into its
 screen and its actor is gone: the screens come back fresh, as on the Game Boy.
@@ -761,6 +776,7 @@ the game's reads of it by the RomFS index's patch list, while co-op is on
 | COOP_WARP_OBJ_TOUCH / LEAVE_SITE | 0x7000cbd42c / d290 | ldrb w8, [x8, #0x43] | the overworld's warp hole objects (36, 37) |
 | COOP_SHADOW_BOX_SITE | 0x700100a460 | cbnz w1 | the shadow map's box grown with the zoom (38) |
 | COOP_TILE_PLAYER_SITE | 0x7000b01c70 | ldr x8, [x20, #0x4b8] | a collapse tile measures the player nearest it (39) |
+| COOP_LIKELIKE_SITE_0..8 | 0x70004a65f4, a7040, a7fb8, a89f4, a8ce8, a9400, a9898, aac54, ab1f0 | ldr x22/x21/x9/x8, [x20 or x21, #0x4b8] | a Like Like's "Link" is the player it goes for (40-48) |
 
 Runtime constants: `PLAYER_VTABLE`, `PLAYER_MAX_HEALTH`, `PLAY_ANIMATION`,
 `DOACTION_CURRENT` / `_PENDING` / `_COOLDOWN` (the slots), `DOACTION_TAKE_RET` /
@@ -1032,8 +1048,8 @@ runtime gives the menus was checked and is valid, so its cause isn't known yet.
   whose chasing is in a component not named `...React...` or `...PlayerComp`
   would still go to Player 1. Bosses other than the Armos Knight weren't
   checked, and the Armos Knight only in scripted fights
-  (`build/armos_fight.sh`). A Like Like's grab wasn't seen: only its parts are
-  logged (`LARECOMP_COOP_LOG`).
+  (`build/armos_fight.sh`). A Like Like's grab is checked (`build/likelike.sh`)
+  on the Field only (Eagle's Tower's weren't tried).
 - **Other crumbling floors** (`AC_FLOOR`: Catfish's Maw's broken floor, a
   house's collapse tiles, the Face Shrine's falling floor) weren't checked in
   the game; the collapse tiles are (`build/floor.sh`).
