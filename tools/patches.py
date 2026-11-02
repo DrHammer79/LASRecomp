@@ -194,14 +194,19 @@ PATCHES[ADV_EXIT_DIALOG_SITE] = _adv_exit_dialog
 DAMAGE_LSL_SITES = (A.DAMAGE_LSL_SITES_0, A.DAMAGE_LSL_SITES_1, A.DAMAGE_LSL_SITES_2)
 # Fixed damage (-2 quarter hearts, -4 in Hero Mode: `csel w20, w10, w9, eq` with w10=-4, w9=-2).
 DAMAGE_FIXED_SITE = A.DAMAGE_FIXED_SITE
+# (An enemy's hit, at the third lsl site, is then halved by the game: co-op's split for it is COOP_DAMAGE_HALVED_SITE,
+# after that, where the version has it.)
 
 
 def _damage_lsl(gen, a):
     w = struct.unpack_from('<I', gen.nso.image, a - gen.base)[0]
     assert (w & 0xffe0fc00) == 0x1ac02000, hex(w)  # lslv (32-bit)
     rd, rn, rm = w & 31, (w >> 5) & 31, (w >> 16) & 31
+    hit = f'rt_damage((int32_t)c->x[{rn}], (int32_t)(c->x[{rm}] & 31))'
+    if not (A.COOP_DAMAGE_HALVED_SITE and a == DAMAGE_LSL_SITES[2]):
+        hit = f'rt_coop_damage(c, {hit})'
     return (f'{{ extern int32_t rt_damage(int32_t, int32_t); extern int32_t rt_coop_damage(Cpu *, int32_t); '
-            f'c->x[{rd}] = (uint32_t)rt_coop_damage(c, rt_damage((int32_t)c->x[{rn}], (int32_t)(c->x[{rm}] & 31))); }}'
+            f'c->x[{rd}] = (uint32_t){hit}; }}'
             f'  /* {a:#x}: lsl w{rd}, w{rn}, w{rm} (damage) */')
 
 
@@ -1131,5 +1136,10 @@ _COOP_HOOKS = {
     A.COOP_LIKELIKE_SITE_6: (0xf9425e88, (), 'ldr x8, [x20, #0x4b8]: "Link" for a Like Like (x19)'),
     A.COOP_LIKELIKE_SITE_7: (0xf9425ea8, (), 'ldr x8, [x21, #0x4b8]: "Link" for a Like Like (x19)'),
     A.COOP_LIKELIKE_SITE_8: (0xf9425e95, (), 'ldr x21, [x20, #0x4b8]: "Link" for a Like Like (x19)'),
+    # An enemy's hit (DAMAGE_LSL_SITES[2]) is then halved by the game - flag 0x6f (main+0x8d1a30) or PlayerStatus+0x9c
+    # negative: the Blue Clothes, a Guardian Acorn - and both ways meet here with the hit in w20. Co-op's split
+    # (rt_coop_damage) is here, not at the lsl: there, Player 1's hits were halved and the others' weren't (user
+    # 2026-11-02, "P1 takes hardly any damage, and other players take full damage").
+    A.COOP_DAMAGE_HALVED_SITE: (0x79410908, (), 'ldrh w8, [x8, #0x84]: an enemy\'s hit (w20), after its halving'),
 }
 HOOKS.update({a: h for a, h in _COOP_HOOKS.items() if a})

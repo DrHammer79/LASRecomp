@@ -430,6 +430,16 @@ stairs' rock, `ObjRock-4800A5005B88BEDC`, back as he stepped onto them).
   (`DAMAGE_*` in `tools/patches.py`) call `rt_coop_damage(c, rt_damage(...))`,
   and a hit on players 2.. comes off their own hearts. The Link a hit is on is
   found in the state code's callee-saved registers (`running_player`).
+- **Halved hits:** an enemy's hit (the third `DAMAGE_LSL_SITES`) is halved by
+  the game after it is computed: flag 0x6f (`main+0x8d1a30`) or PlayerStatus
+  `+0x9c` negative (the Blue Clothes, a Guardian Acorn). Both ways meet at an
+  `ldrh w8, [x8, #0x84]` (`COOP_DAMAGE_HALVED_SITE`) with the hit in w20, and the
+  split runs there, so every player's hit is halved as Player 1's is. Taken at
+  the lsl before that, Player 1 lost a quarter heart where the others lost a
+  half (user 2026-11-02: "P1 takes hardly any damage, and other players take
+  full damage"; it was also behind 2026-11-01's "way more damage than p1").
+  Checked: the seed save's spear Moblin, every hit a quarter on both players
+  (before: Player 2 a half). Player 1's hits are logged too now.
 - **Gains:** hearts the game's set gains go to every player who is up: a
   heart, a fairy, a potion, a container. `COOP_HEAL_SITE_0/1` read the uncapped
   total, and `PLAYER_MAX_HEALTH` is re-read.
@@ -820,6 +830,7 @@ the game's reads of it by the RomFS index's patch list, while co-op is on
 | COOP_SHADOW_BOX_SITE | 0x700100a460 | cbnz w1 | the shadow map's box grown with the zoom (38) |
 | COOP_TILE_PLAYER_SITE | 0x7000b01c70 | ldr x8, [x20, #0x4b8] | a collapse tile measures the player nearest it (39) |
 | COOP_LIKELIKE_SITE_0..8 | 0x70004a65f4, a7040, a7fb8, a89f4, a8ce8, a9400, a9898, aac54, ab1f0 | ldr x22/x21/x9/x8, [x20 or x21, #0x4b8] | a Like Like's "Link" is the player it goes for (40-48) |
+| COOP_DAMAGE_HALVED_SITE | 0x7000d4c750 | ldrh w8, [x8, #0x84] | an enemy's hit split after the game halves it (49) |
 
 Runtime constants: `PLAYER_VTABLE`, `PLAYER_MAX_HEALTH`, `PLAY_ANIMATION`,
 `DOACTION_CURRENT` / `_PENDING` / `_COOLDOWN` (the slots), `DOACTION_TAKE_RET` /
