@@ -56,6 +56,13 @@ pushed while his rests, on another pad makes it his), but never one that
 another player has: their pads' events go to their slots before that check,
 and neither a pad added nor the one left when his is unplugged becomes his if
 it's in a slot (`tools/test_active_pad.c`, with two players and three pads).
+- The settings menu takes every controller's sticks (`runtime/ui/menu.mm`):
+  each controller's are kept apart, and a direction is the furthest any of
+  them pushes it, on from 0.5 and off below 0.35. Before (upstream's), every
+  pad's stick events set the same keys at 0.3: with five pads, one resting
+  stick's noise undid another's held direction and a stick resting near 0.3
+  stepped the menu by itself (user 2026-11-01: "menu freaks out randomly with
+  no one doing controllers on it"). Not checked with real pads.
 - The slots follow the player count in effect (`coop_players_now`: the game's,
   which changes out of play only). Changed mid-play, a pad let go took over
   Player 1's Link at its next press while its own Link stood still.
@@ -339,6 +346,25 @@ target's side. The rules for other enemies:
   a fight. After that it changes only to a clearly nearer player (1.5x).
 - Enemies more than 30 units from everyone are left alone.
 
+**Blade traps** (`ObjBladeTrap`: named as an object, not an enemy) shot only
+at Player 1 lined up with them (user 2026-11-01, Catfish's Maw). They are
+`AC_TRAP`: in a trap's update and its reaction part's (`BladeTrap:ReactionCom`),
+"Link" is the nearest player within 0.75 of its row or column (`trap_target`),
+nobody: Player 1. Checked in Catfish's Maw 07E (a trap in each corner):
+Player 2 put in line with the top two, Player 1 in the middle - both go for
+Player 2 at once and hit him within 20 frames; the build before went on
+going for Player 1, and Player 2 stood in line unhurt.
+
+**Thrown objects.** A lifted object (a pot, a rock, a bomb: an `ACT_LIFT`
+action) asks for "Link" in its own update, and flies the way he faces when
+thrown: another player's pot flew the way Player 1 faced (user 2026-11-01:
+"throwing pots goes backwards"; found by probes on the reads: the pot's
+update, main+0xb27da4, through main+0xd56b80). The object another player
+lifted last (`doaction_get`: `carried_by`) has him for "Link" while it updates
+(`carrier`: by its address and its name, 5 minutes at most). Checked in Marin
+and Tarin's house: Player 2 lifts a pot facing west, turns east and throws - it
+flies east (before: north, Player 1's way); Player 1 the same: east, as before.
+
 **Like Likes** read "Link" in their state handlers (main+0x4a64c0 to
 main+0x4ab1d0, x19 the Like Like), which run outside its update, where "Link"
 is its target. One that went for Player 2 hit him, and at the catch
@@ -431,7 +457,9 @@ stairs' rock, `ObjRock-4800A5005B88BEDC`, back as he stepped onto them).
   knockback ended on the spikes and the next began - he never lay still. A
   knocked-out player isn't knocked back again (`dead_state`: a change to a
   state of kind 11 stays undone; the hit that knocked him out plays out), and
-  two such hits within 3 s (`DOWN_HITS`) put him on Player 1's spot
+  three hits that would cost him hearts, each within 1.5 s of the last
+  (`DOWN_HITS`, `DOWN_HIT_FRAMES`; the spikes hit every 30 to 60 frames), put
+  him on Player 1's spot
   (`down_move_tick`): his state changed to the first of kind 0 through the
   game's own change (`COOP_DEAD_STATE_SITE`'s function), then taken off the
   map half a second and put on Player 1 as a player lost below the world is.
@@ -445,7 +473,22 @@ stairs' rock, `ObjRock-4800A5005B88BEDC`, back as he stepped onto them).
   Hits with an enemy within 8 units of him in the last half second don't
   count either (`down_enemy_note`, as enemies update): they do him nothing,
   and put on Player 1 he was put by the enemy Player 1 fought - the Armos
-  Knight's knocked-out players went back and forth every few seconds.
+  Knight's knocked-out players went back and forth every few seconds. Until
+  2026-11-01 two hits within 3 s did it, and a knockback with nothing off
+  (cancelled for him) counted too: players knocked out by a wall in Catfish's
+  Maw, a Spark passing every few seconds, were put on Player 1 four times in
+  15 s, and again from there (user: "still moving down-but-not-out players
+  around"). Re-checked in the spike room: knocked out, hit three times in
+  half a second, put on Player 1.
+- **Hit again at once:** one contact came off another player's hearts two to
+  four times in the same moment (a third of all their hits in a session: user
+  2026-11-01, "other players seem to be taking way more damage than p1"; a
+  blade trap's one hit, four times). Each of the game's damage sites stores
+  the hearts (`DAMAGE_*_SITES`), so the repeats are separate calls; their cause
+  wasn't found. Another player's hit within `HURT_GAP` (30 frames) of his last
+  costs nothing (logged "hit just now, unhurt"). Checked: Zols on Player 2 in
+  the Mysterious Forest, one heart-costing hit a contact (the build before:
+  two or three).
 - **Getting up:** a hit that knocks a player out leaves him in the knocked-back
   state (kind 11), which never ended under the lying pose, so a revived player
   couldn't move until a door reset him. The pose waits for his state to be
@@ -1055,6 +1098,14 @@ runtime gives the menus was checked and is valid, so its cause isn't known yet.
   the game; the collapse tiles are (`build/floor.sh`).
 - **Controller rows** (`coop_pad_path_N`) have no test: whether a real pad's
   SDL path stays the same across restarts and reconnects wasn't checked.
+- **Red Zols "jumping only for Player 1"** (user 2026-11-01, Catfish's Maw)
+  wasn't reproduced: in the Mysterious Forest and in Catfish's Maw 06E (the
+  user's Zols, still in the floor) the Zol by Player 2 went to him and stayed
+  on him, on this build and the one before. Four reads of "Link" in the Zol's
+  code (main+0x799ab4, 0x79ae3c, 0x79d96c, 0x79df00) never ran in those tests;
+  they aren't hooked.
+- **Grass back in Animal Village** (user 2026-11-01): the log has no cut grass
+  made again there (only one kept gone in view); not reproduced.
 - **Zols on a knocked-out player:** one that lands on him stays and hits him
   (nothing comes off); it isn't moved off.
 - **The top of the map zoomed out:** the user saw "slight texture glitching"

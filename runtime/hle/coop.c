@@ -197,9 +197,13 @@ int coop_player_down(int i) { return own_hearts() && i > 0 && i < COOP_MAX && g_
 // A knocked-out player hit again and again lies in something that hurts: knocked back by each hit, he never lay still
 // (user 2026-10-28: spikes in a side-view room of Angler's Tunnel, kinds 11 and 3 in turn). DOWN_HITS of them, each
 // within DOWN_HIT_FRAMES of the last, and he is put on Player 1's spot as the next frame starts (down_move_tick), still
-// knocked out, where he can be revived.
-#define DOWN_HITS 2
-#define DOWN_HIT_FRAMES 180  // (3 s)
+// knocked out, where he can be revived. Only hits that would cost him hearts count (rt_coop_damage): spikes hit every
+// 30 to 60 frames. A knockback with nothing off (the others' swords, a shove) - cancelled for him (dead_state) - and
+// hits seconds apart (a Spark running along the wall past two knocked-out players) moved players lying out of harm's
+// way onto Player 1, in the middle of his fight, and again from there (user 2026-11-01, Catfish's Maw: "still moving
+// down-but-not-out players around").
+#define DOWN_HITS 3
+#define DOWN_HIT_FRAMES 90  // (1.5 s)
 static uint64_t g_down_hit_at[COOP_MAX];
 static int g_down_hits[COOP_MAX];
 static bool g_down_move[COOP_MAX];
@@ -290,6 +294,7 @@ static void revive_hit(int j) {
 }
 
 // A hit of `dmg` quarter hearts (after the difficulty setting) about to come off the game's hearts.
+#define HURT_GAP 30  // (half a second: another player's hit within it of his last costs nothing)
 int32_t rt_coop_damage(Cpu *c, int32_t dmg) {
     if (!own_hearts() || dmg <= 0) return dmg;
     int i = running_player(c);
@@ -302,6 +307,15 @@ int32_t rt_coop_damage(Cpu *c, int32_t dmg) {
         CLOG("[coop] player %d hit for %d: just revived, unhurt\n", i + 1, dmg);
         return 0;
     }
+    // (one hit came off another player's hearts two and three times in the same moment - a third of all his hits in
+    // a session, user 2026-11-01: "other players seem to be taking way more damage than p1"; spikes, the most often
+    // anything hits, do so about every 45 frames)
+    static uint64_t hurt_at[COOP_MAX];
+    if (i && renderer_present_count() < hurt_at[i] + HURT_GAP) {
+        CLOG("[coop] player %d hit for %d: hit just now, unhurt\n", i + 1, dmg);
+        return 0;
+    }
+    if (i) hurt_at[i] = renderer_present_count();
     revive_hit(i);  // (with infinite hearts too: the hit still lands)
     if (!i) return dmg;
     if (g_settings.cheat_hearts) return 0;
@@ -1153,9 +1167,11 @@ static void targets_forget(void) {
 }
 RT_ON_RESET(coop_targets_reset) { targets_forget(); }
 
-static bool actor_pos(uint64_t actor, float out[3]) {  // (an actor's main component +0x80: its position at +0x80)
-    uint64_t p = actor ? LD64(actor + 0x80) : 0;
-    if (!p) return false;
+// (an actor's main component +0x80: its position at +0x80. Not every actor has one there: an update's "actor" at
+// Animal Village held 1.0f at +0x80, and following it stopped the game - 2026-11-01, a test run)
+static bool actor_pos(uint64_t actor, float out[3]) {
+    uint64_t p = heap_ptr(actor) ? LD64(actor + 0x80) : 0;
+    if (!heap_ptr(p)) return false;
     memcpy(out, (const void *)(uintptr_t)(p + 0x80), 12);
     return true;
 }
@@ -1299,7 +1315,7 @@ static bool on_game_thread(void) {  // (per call of the actor hooks: pthread_sel
 // ("ObjDungeonCo-...") measure the player in a job of their own instead: tile_player.
 #define AC_SETS 16384
 #define AC_WAYS 4  // (an actor's set of four: the one seen longest ago makes way)
-enum { AC_OTHER, AC_ENEMY, AC_ENEMY_NEAREST, AC_ENEMY_PART, AC_FLOOR };
+enum { AC_OTHER, AC_ENEMY, AC_ENEMY_NEAREST, AC_ENEMY_PART, AC_FLOOR, AC_TRAP };
 static bool floor_name(const char *name) {
     static const char *const kinds[] = {"ObjHouseColl", "ObjKataKataFl", "ObjMatFaceFa", "ObjBrokenFlo"};
     for (size_t i = 0; i < sizeof kinds / sizeof *kinds && !strncmp(name, "Obj", 3); i++)
@@ -1338,6 +1354,7 @@ static ActorClass *actor_class(uint64_t actor) {
     // Zols hopped at Player 1 whoever they targeted, user 2026-10-28)
     e->what = strstr(name, "React") || strstr(name, "PlayerComp") ? AC_ENEMY_PART
               : floor_name(name)                                     ? AC_FLOOR
+              : !strncmp(name, "ObjBladeTrap", 12)                   ? AC_TRAP
               : strstr(name, "Comp") || strncmp(name, "Enemy", 5) ? AC_OTHER
               : !strncmp(name, "EnemyMiniZol", 12) || !strncmp(name, "EnemyZolRed", 11) || !strncmp(name, "EnemyZolGreen", 13)
                   ? AC_ENEMY_NEAREST
@@ -1450,12 +1467,51 @@ static uint64_t tile_player(uint64_t tile, uint64_t own) {
     return g_extra[best];
 }
 
+// A blade trap (ObjBladeTrap: an object by its name, not an enemy) shoots along its row or column at "Link" lined up
+// with it: only Player 1 set them off (user 2026-11-01, Catfish's Maw). Its "Link" (AC_TRAP: its update and its
+// reaction part's) is the nearest player within TRAP_LINE of its row or column; nobody: Player 1, who isn't either.
+#define TRAP_LINE 0.75f  // (half a tile)
+static int trap_target(uint64_t trap) {
+    float e[3], p[3], bd = 1e30f;
+    int best = 0;
+    if (!actor_pos(trap, e)) return 0;
+    for (int i = 0; i < g_n; i++) {
+        if ((i && g_down[i]) || !player_pos(coop_player(i), p) || p[1] < -500.0f) continue;
+        float ax = fabsf(p[0] - e[0]), az = fabsf(p[2] - e[2]);
+        if ((ax < TRAP_LINE || az < TRAP_LINE) && fmaxf(ax, az) < bd) bd = fmaxf(ax, az), best = i;
+    }
+    return best;
+}
+
+// A lifted object (a pot, a rock, a bomb...: ACT_LIFT) asks for "Link" in its own update, and flies the way he faces
+// when thrown: another player's pot flew the way Player 1 faced (user 2026-11-01: "for other players, throwing pots
+// goes backwards"; probed: the pot's update, main+0xb27da4, through main+0xd56b80). The object another player lifted
+// last (doaction_get) has him for "Link" while it updates - known by its address and its name, CARRY_FRAMES at most.
+#define CARRY_FRAMES (60 * 300)  // (5 minutes)
+static struct { uint64_t obj, tag, until; } g_carried[COOP_MAX];
+static void carried_by(int who, uint64_t obj) {
+    for (int i = 0; i < COOP_MAX; i++)
+        if (g_carried[i].obj == obj) g_carried[i].obj = 0;
+    if (who > 0 && heap_ptr(obj))
+        g_carried[who].obj = obj, g_carried[who].tag = LD64(obj + 0x18),
+        g_carried[who].until = renderer_present_count() + CARRY_FRAMES;
+}
+static int carrier(uint64_t actor) {  // (the other player who lifted it last; 0: none)
+    for (int i = 1; i < g_n; i++)
+        if (g_carried[i].obj == actor) {
+            if (renderer_present_count() < g_carried[i].until && LD64(actor + 0x18) == g_carried[i].tag) return i;
+            g_carried[i].obj = 0;
+        }
+    return 0;
+}
+
 static void actor_exec_begin(Cpu *c) {
     if (g_swap_on) return;
     uint64_t actor = g_updating;
     if (!actor) return;
+    int t = carrier(actor);
+    if (t) goto swap;
     uint8_t what = actor_class(actor)->what;
-    int t;
     if (what == AC_FLOOR) {
         static uint64_t said[4];  // (once a floor: which one, whose - the last few: one stands on two floors' edge)
         static unsigned nsaid;
@@ -1473,14 +1529,17 @@ static void actor_exec_begin(Cpu *c) {
         // nearest - it went for Player 1 (user 2026-10-31, "always going on p1 when hitting p2"; build/zolhit.sh).
         uint64_t owner = LD64(actor + 0x48);
         uint8_t of = heap_ptr(owner) ? actor_class(owner)->what : AC_OTHER;
-        if (of != AC_ENEMY && of != AC_ENEMY_NEAREST) return;
-        t = of == AC_ENEMY_NEAREST ? clinger_target(owner) : nearest_player(owner);
-    } else if (what == AC_ENEMY)
+        if (of != AC_ENEMY && of != AC_ENEMY_NEAREST && of != AC_TRAP) return;
+        t = of == AC_ENEMY_NEAREST ? clinger_target(owner) : of == AC_TRAP ? trap_target(owner) : nearest_player(owner);
+    } else if (what == AC_TRAP)
+        t = trap_target(actor);
+    else if (what == AC_ENEMY)
         t = enemy_target(actor);
     else if (what == AC_ENEMY_NEAREST)
         t = clinger_target(actor);
     else
         return;
+swap:;
     uint64_t gm = LD64(GA(GAME_MGR)), own = gm ? LD64(gm + 0x4b8) : 0;
     if (ENV("LARECOMP_COOP_TRACE") && traced(actor)) {  // (trace_actor: whom it goes for)
         static uint64_t who[32][2];
@@ -1935,6 +1994,7 @@ static int doaction_get(Cpu *c) {
     if ((!take && !check) || who < 0 || !comp) return 0;
     if (take) {
         g_claim[who].comp = comp, g_claim[who].until = f + CLAIM_FRAMES;
+        if (LD8(comp + 0x1a0) == ACT_LIFT) carried_by(who, LD64(comp + 0x48));
         if (!who && !own_action(comp)) talk_started(0, f);  // (Player 1's own talk, chest, sign)
         return 0;
     }
@@ -2032,7 +2092,8 @@ static int warp_hole(Cpu *c, bool touch) {
 // (With "game over for everyone" his last hit is let through; with shared hearts a death is the game's own.)
 // A knocked-out player isn't knocked back again either (the change to a state of kind 11 stays undone; the hit that
 // knocked him out plays out): in spikes each knockback ended on them and the next began, and moved meanwhile his state
-// put him back. Each one counts as a hit while down (down_hit): lying still, he's put on Player 1.
+// put him back. Lying still, the spikes' hits (rt_coop_damage: down_hit) put him on Player 1; the knockback alone
+// doesn't count (a sword's or a shove's costs nothing).
 #define PLAYER_STATE_DEAD 0x12
 #define LINK_KIND_KNOCKED_BACK 11
 
@@ -2041,10 +2102,7 @@ static int dead_state(Cpu *c) {
     int i = coop_index(c->x[0] - 0x4e0);
     if (!i || !own_hearts()) return 0;
     uint64_t st = g_down[i] && s < 0x40 ? LD64(g_extra[i] + 0x1340 + 8ull * s) : 0;
-    if (heap_ptr(st) && LD8(st + 0x28) == LINK_KIND_KNOCKED_BACK) {
-        down_hit(i);
-        return 2;  // (to the change's ret)
-    }
+    if (heap_ptr(st) && LD8(st + 0x28) == LINK_KIND_KNOCKED_BACK) return 2;  // (to the change's ret)
     if ((s != PLAYER_STATE_DEAD && s != PLAYER_STATE_DEAD + 1) ||
         (g_settings.coop_knockout == COOP_KO_GAME_OVER && g_hp[i] == 0))
         return 0;
