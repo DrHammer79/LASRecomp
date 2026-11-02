@@ -113,7 +113,8 @@ int rt_coop_hook(Cpu *c, int which);  // coop.c (which: the COOP_* site, below)
     X(COOP_LIKELIKE_SITE_5) \
     X(COOP_LIKELIKE_SITE_6) \
     X(COOP_LIKELIKE_SITE_7) \
-    X(COOP_LIKELIKE_SITE_8)
+    X(COOP_LIKELIKE_SITE_8) \
+    X(COOP_DAMAGE_HALVED_SITE)
 enum {
 #define X(name) H_##name,
     HOOK_SITES(X)
@@ -275,6 +276,7 @@ int rt_hook(Cpu *c, uint64_t site) {
     case H_COOP_TILE_PLAYER_SITE: case H_COOP_LIKELIKE_SITE_0: case H_COOP_LIKELIKE_SITE_1:
     case H_COOP_LIKELIKE_SITE_2: case H_COOP_LIKELIKE_SITE_3: case H_COOP_LIKELIKE_SITE_4: case H_COOP_LIKELIKE_SITE_5:
     case H_COOP_LIKELIKE_SITE_6: case H_COOP_LIKELIKE_SITE_7: case H_COOP_LIKELIKE_SITE_8:
+    case H_COOP_DAMAGE_HALVED_SITE:
         return rt_coop_hook(c, id - H_COOP_CREATE_SITE);
     }
     return 0;
