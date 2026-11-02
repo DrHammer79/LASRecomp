@@ -264,6 +264,30 @@ static std::atomic<bool> g_last_pad{false};
 static char g_kbd_text[96];
 static int g_kbd_max = 8;
 static bool capturing() { return g_open.load() || g_kbd.load() == 1; }
+
+// Each controller's sticks and triggers are kept apart (SDL_EVENT_GAMEPAD_AXIS_MOTION), and the menu gets, for each
+// direction, the furthest any controller pushes it: with co-op's controllers all sending, one resting stick's noise
+// set a direction another was holding back to nothing, and a stick resting near the old 0.3 went on and off by itself
+// (user 2026-11-01: "menu freaks out randomly with no one doing controllers on it"). A direction counts from PAD_ON
+// and stops below PAD_OFF.
+#define PAD_SLOTS 8
+#define PAD_ON 0.5f
+#define PAD_OFF 0.35f
+static SDL_JoystickID g_axis_pad[PAD_SLOTS];  // (0: free - SDL's ids start at 1)
+static float g_axis[PAD_SLOTS][SDL_GAMEPAD_AXIS_COUNT];
+static bool g_dir_on[6];  // (LStick left, right, up, down; RStick up, down)
+
+static float axis_max(int axis, float sign) {  // (the furthest any controller pushes that axis that way)
+    float m = 0;
+    for (int s = 0; s < PAD_SLOTS; s++)
+        if (g_axis_pad[s] && g_axis[s][axis] * sign > m) m = g_axis[s][axis] * sign;
+    return m;
+}
+static float dir_value(int d, int axis, float sign) {
+    float m = axis_max(axis, sign);
+    g_dir_on[d] = m >= (g_dir_on[d] ? PAD_OFF : PAD_ON);
+    return g_dir_on[d] ? m : 0;
+}
 // The game's name limit counts characters as the console's keyboard does, in UTF-16 units (a character past U+FFFF
 // takes two); the text is UTF-8. Cuts s after max_units of them, only between characters (a character left incomplete
 // - a cut inside it, or bytes that are no character - goes too, with the rest), and returns how many units are left.
@@ -354,24 +378,32 @@ bool menu_handle_event(const SDL_Event *e) {
     }
     case SDL_EVENT_GAMEPAD_AXIS_MOTION: {
         if (!capturing()) return false;
-        float v = e->gaxis.value / 32767.0f;
+        int axis = e->gaxis.axis, s = 0;
+        if (axis < 0 || axis >= SDL_GAMEPAD_AXIS_COUNT) return true;
+        while (s < PAD_SLOTS && g_axis_pad[s] != e->gaxis.which) s++;
+        if (s == PAD_SLOTS) {  // (a controller not seen yet: a free slot, or the first one's)
+            for (s = 0; s < PAD_SLOTS - 1 && g_axis_pad[s]; s++) {}
+            g_axis_pad[s] = e->gaxis.which;
+            memset(g_axis[s], 0, sizeof g_axis[s]);
+        }
+        g_axis[s][axis] = e->gaxis.value / 32767.0f;
         QEvent q = {};
         q.kind = QEvent::ANALOG;
-        switch (e->gaxis.axis) {
+        switch (axis) {
         case SDL_GAMEPAD_AXIS_LEFTX:
-            q.key = ImGuiKey_GamepadLStickLeft; q.value = v < -0.3f ? -v : 0; push(q);
-            q.key = ImGuiKey_GamepadLStickRight; q.value = v > 0.3f ? v : 0; push(q);
+            q.key = ImGuiKey_GamepadLStickLeft; q.value = dir_value(0, axis, -1); push(q);
+            q.key = ImGuiKey_GamepadLStickRight; q.value = dir_value(1, axis, 1); push(q);
             break;
         case SDL_GAMEPAD_AXIS_LEFTY:
-            q.key = ImGuiKey_GamepadLStickUp; q.value = v < -0.3f ? -v : 0; push(q);
-            q.key = ImGuiKey_GamepadLStickDown; q.value = v > 0.3f ? v : 0; push(q);
+            q.key = ImGuiKey_GamepadLStickUp; q.value = dir_value(2, axis, -1); push(q);
+            q.key = ImGuiKey_GamepadLStickDown; q.value = dir_value(3, axis, 1); push(q);
             break;
         case SDL_GAMEPAD_AXIS_RIGHTY:  // (scrolls a right column of plain text: option_rows.mm)
-            q.key = ImGuiKey_GamepadRStickUp; q.value = v < 0 ? -v : 0; push(q);
-            q.key = ImGuiKey_GamepadRStickDown; q.value = v > 0 ? v : 0; push(q);
+            q.key = ImGuiKey_GamepadRStickUp; q.value = dir_value(4, axis, -1); push(q);
+            q.key = ImGuiKey_GamepadRStickDown; q.value = dir_value(5, axis, 1); push(q);
             break;
-        case SDL_GAMEPAD_AXIS_LEFT_TRIGGER: q.key = ImGuiKey_GamepadL2; q.value = v; push(q); break;
-        case SDL_GAMEPAD_AXIS_RIGHT_TRIGGER: q.key = ImGuiKey_GamepadR2; q.value = v; push(q); break;
+        case SDL_GAMEPAD_AXIS_LEFT_TRIGGER: q.key = ImGuiKey_GamepadL2; q.value = axis_max(axis, 1); push(q); break;
+        case SDL_GAMEPAD_AXIS_RIGHT_TRIGGER: q.key = ImGuiKey_GamepadR2; q.value = axis_max(axis, 1); push(q); break;
         default: break;
         }
         return true;
