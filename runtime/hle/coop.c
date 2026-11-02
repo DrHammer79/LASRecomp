@@ -293,7 +293,10 @@ static void revive_hit(int j) {
     g_reviving[j] = 0, g_revive_hit[j] = true;
 }
 
-// A hit of `dmg` quarter hearts (after the difficulty setting) about to come off the game's hearts.
+// A hit of `dmg` quarter hearts (after the difficulty setting, and an enemy's after the game halves it: the Blue
+// Clothes, a Guardian Acorn - COOP_DAMAGE_HALVED_SITE) about to come off the game's hearts. (Taken at the difficulty site
+// before that, Player 1's hits were halved and the others' weren't: user 2026-11-02, "P1 takes hardly any damage,
+// and other players take full damage".)
 #define HURT_GAP 30  // (half a second: another player's hit within it of his last costs nothing)
 int32_t rt_coop_damage(Cpu *c, int32_t dmg) {
     if (!own_hearts() || dmg <= 0) return dmg;
@@ -317,7 +320,10 @@ int32_t rt_coop_damage(Cpu *c, int32_t dmg) {
     }
     if (i) hurt_at[i] = renderer_present_count();
     revive_hit(i);  // (with infinite hearts too: the hit still lands)
-    if (!i) return dmg;
+    if (!i) {
+        CLOG("[coop] player 1 hit for %d\n", dmg);
+        return dmg;
+    }
     if (g_settings.cheat_hearts) return 0;
     if (g_hp[i] < 0) g_hp[i] = g_max_hp > 0 ? g_max_hp : 12;
     g_hp[i] -= dmg;
@@ -2571,6 +2577,9 @@ int rt_coop_hook(Cpu *c, int which) {
         return 1;
     case 40: case 41: case 42: case 43: case 44: case 45: case 46: case 47: case 48:  // COOP_LIKELIKE_SITE_0..8
         return likelike_player(c, which - 40);  // (ldr: "Link" for a Like Like, x19)
+    case 49:  // COOP_DAMAGE_HALVED_SITE - ldrh w8, [x8, #0x84]: an enemy's hit (w20), after the game halved it or not
+        c->x[20] = (uint32_t)rt_coop_damage(c, (int32_t)c->x[20]);
+        return 0;
     }
     return 0;
 }
