@@ -52,8 +52,33 @@ Everything else is upstream's [peiikai/LASRecomp](https://github.com/peiikai/LAS
    folder (on Windows, next to `lasrecomp.exe`), then Quit to Start Screen and play again. Without it every Link wears the game's own tunic,
    and the hearts still show each player's colour.
 
-Hearts, revive time, the zoom and the rules are in the same tab. [docs/coop.md](docs/coop.md) explains every setting
-and how co-op works inside the game.
+**Settings** (Controls tab, right under Inputs)
+
+| Option | What it does | Default |
+|---|---|---|
+| **Co-op** | | |
+| Players | 1 is off; 2 to 8 Links from the next file loaded | 1 |
+| Player N color | each player's colour: Green, Red, Blue, Yellow, Purple, Pink, Black or White | all different |
+| Player N controller | choose it, then press a button on that player's controller | none |
+| **Co-op hearts** | | |
+| Hearts | Shared: the game's one set. Each player's own: a hit costs only that player's hearts, and hearts picked up go to everyone | each player's own |
+| Out of hearts | Knocked out: lie down until a teammate holds A beside you (or Player 1 reaches a new room), back with 30% of full hearts. Game over for all: as when Player 1 runs out | knocked out |
+| Revive time | seconds a teammate holds A to revive | 4 |
+| Other players' hearts | where their hearts show: bottom left, bottom right or top right | bottom left |
+| Hearts in player colors | each player's hearts in their colour, Player 1's too | on |
+| **Camera** | | |
+| Zoom out | With co-op (2 players or more), Always (alone too) or Off | with co-op |
+| Camera zoom | how far out the camera always is: normal to 60% out, in 10% steps | 50% out |
+| Zoom out to fit everyone | zooms further out to keep every player on screen | on |
+| Fit up to | the furthest that goes: up to 200% out | 200% out |
+| Indoor zoom | houses, caves and dungeons: normal to 60% out | normal |
+| **Co-op rules** | | |
+| Bring lost players back | players left off screen are put back beside Player 1 | on |
+| Only Player 1 triggers exits | only Player 1 takes everyone through doors and screen edges | on |
+| Enemies target the nearest player | enemies go after whoever is closest, not only Player 1 | on |
+| Players block each other | the Links bump into each other instead of walking through | off |
+
+[docs/coop.md](docs/coop.md) explains every setting in more detail and how co-op works inside the game.
 
 **Bugs:** co-op isn't part of upstream, so report co-op bugs on
 [this fork's Issues](https://github.com/DrHammer79/LASRecomp/issues), not peiikai's. Say how many players, where in the
