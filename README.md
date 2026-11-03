@@ -1,5 +1,9 @@
 # LAS Recomp
 
+> [!TIP]
+> **This is a fork of [peiikai/LASRecomp](https://github.com/peiikai/LASRecomp) with local co-op added.** What it adds, how
+> to play it and where to report its bugs: [This fork: local co-op](#this-fork-local-co-op).
+
 > [!IMPORTANT]
 > **This project was made almost exclusively with AI.** Nearly all of the code, tooling, reverse engineering and
 > documentation in this repository was written by and will be maintained by an AI (Anthropic's Claude, through Claude Code),
@@ -18,6 +22,39 @@ native Windows, macOS and Linux application.
 > - Linux - x86-64, Vulkan graphics backend (AppImage)
 > - Linux aarch64 (ARM) - **experimental**: the latest build is on the [Experimental builds](https://github.com/peiikai/LASRecomp/releases/tag/experimental) page; reports welcome
 >   ([docs/linux.md](docs/linux.md) lists what to include)
+
+## This fork: local co-op
+
+This fork adds local co-op: 2 to 8 Links on one PC, one controller each, after the Switch mod LA_Coop_ExactStack_360.
+Everything else is upstream's [peiikai/LASRecomp](https://github.com/peiikai/LASRecomp) `beta_6`, and this branch
+(`coop`) is kept on top of it.
+
+**What it adds**
+- Each player has their own hearts (or one shared pool). A player out of hearts is knocked out until another player
+  revives them by holding A beside them.
+- Enemies go after the nearest player, not only Player 1.
+- A colour for each player: their hearts, and their tunic when the mod's tunic file is in place (below).
+- The camera zooms out to keep everyone on screen.
+- Players left off screen are brought back to Player 1, and only Player 1 leads everyone through exits (both can be
+  turned off).
+
+**Playing**
+1. This fork has no prebuilt releases: build it as in [Building from source](#building-from-source), with your own game
+   files, as for upstream. Co-op needs game version 1.0.1 or 1.1.0 (on 1.0.0 its option is greyed out).
+2. Connect a controller for each player.
+3. In the menu's Controls tab, under Co-op, set Players. For each player, choose "Player N controller" and press a
+   button on that player's controller.
+4. Load a save: the other Links join from the next file loaded.
+5. Optional tunic colours: put the co-op mod's `Playerlink.bfres` in `coop/romfs/region_common/actor/` in the data
+   folder (on Windows, next to `lasrecomp.exe`), then Quit to Start Screen and play again. Without it every Link wears the game's own tunic,
+   and the hearts still show each player's colour.
+
+Hearts, revive time, the zoom and the rules are in the same tab. [docs/coop.md](docs/coop.md) explains every setting
+and how co-op works inside the game.
+
+**Bugs:** co-op isn't part of upstream, so report co-op bugs on
+[this fork's Issues](https://github.com/DrHammer79/LASRecomp/issues), not peiikai's. Say how many players, where in the
+game and what happened, and attach `lasrecomp.log` from the data folder (where it is: under Building from source).
 
 ## System requirements
 
