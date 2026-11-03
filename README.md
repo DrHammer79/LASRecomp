@@ -1,8 +1,9 @@
 # LAS Recomp
 
 > [!TIP]
-> **This is a fork of [peiikai/LASRecomp](https://github.com/peiikai/LASRecomp) with local co-op added.** What it adds, how
-> to play it and where to report its bugs: [This fork: local co-op](#this-fork-local-co-op).
+> **This is a fork of [peiikai/LASRecomp](https://github.com/peiikai/LASRecomp) with local co-op for 2 to 8 players
+> added**, one controller each. What it adds, how to play it and where to report its bugs:
+> [This fork: local co-op](#this-fork-local-co-op).
 
 > [!IMPORTANT]
 > **This project was made almost exclusively with AI.** Nearly all of the code, tooling, reverse engineering and
@@ -43,7 +44,7 @@ Everything else is upstream's [peiikai/LASRecomp](https://github.com/peiikai/LAS
 **Playing**
 1. This fork has no prebuilt releases: build it as in [Building from source](#building-from-source), with your own game
    files, as for upstream. Co-op needs game version 1.0.1 or 1.1.0 (on 1.0.0 its option is greyed out).
-2. Connect a controller for each player.
+2. Connect a controller for each player, up to 8.
 3. In the menu's Controls tab, under Co-op, set Players. For each player, choose "Player N controller" and press a
    button on that player's controller.
 4. Load a save: the other Links join from the next file loaded.
