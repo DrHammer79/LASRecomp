@@ -370,6 +370,7 @@ static float tex_fr[2][64][2];          // per bound texture slot: the part of t
 static uint32_t tex_wh[2][64][2];       // per bound texture slot: guest size
 static int draw_bottle;                 // a fragment texture is the bottle's item icon (1) / model map (2): Escape Bottle
 static int draw_heart;                  // ... a HUD / file select heart's: heart colour (Cosmetics tab)
+static int draw_tunic;                  // ... one of Link's tunic maps: local co-op's player colours (runtime/hle/coop.c)
 static bool draw_item_cursor;           // a fragment texture is the Items page's cursor brackets
 static int draw_recolour[2];            // ... Cosmetics recolour textures: their classes (runtime/nvn/recolour.c)
 static char draw_recolour_names[512];   // ... their names (LARECOMP_LOG_RECOLOUR_AT, test)
@@ -2289,7 +2290,7 @@ static int sampler_slots(int n, __strong id<MTLSamplerState> *smp, NvnSamplerDes
 
 static void bind_textures(int stage, ShaderInfo *si) {
     if (stage == 1) {
-        draw_bottle = draw_heart = draw_recolour[0] = draw_recolour[1] = 0, draw_item_cursor = false;
+        draw_bottle = draw_heart = draw_tunic = draw_recolour[0] = draw_recolour[1] = 0, draw_item_cursor = false;
         draw_recolour_names[0] = 0;
     }
     bool mapped = si->ntex > MSL_MAX_SAMPLERS;  // (fragment only: the translator refuses such vertex shaders)
@@ -2329,6 +2330,7 @@ static void bind_textures(int stage, ShaderInfo *si) {
                     }
                 }
                 if (!draw_heart) draw_heart = texpatch_heart_kind(id);
+                if (!draw_tunic) { extern int texpatch_tunic_kind(int texture); draw_tunic = texpatch_tunic_kind(id); }
                 recolour_add(draw_recolour, recolour_class_of(id));
                 if (recolour_name(id)) {
                     size_t n = strlen(draw_recolour_names);
@@ -4799,6 +4801,10 @@ static void draw_one(CmdRec *r, bool indexed) {
             escape_bottle_tint(draw_bottle, (const float *)(uintptr_t)st.ubuf[0][u].addr, (uint32_t)st.ubuf[0][u].size, tint);
         }
         if (draw_heart) { extern void texpatch_heart_tint(int kind, float tint[8]); texpatch_heart_tint(draw_heart, tint); }
+        if (draw_tunic) {  // local co-op: a Link's tunic in his player's colour (runtime/hle/coop.c; his bone matrices)
+            extern void coop_tunic_tint(const float *bones, uint32_t size, float tint[8]);
+            coop_tunic_tint((const float *)(uintptr_t)st.ubuf[0][3].addr, (uint32_t)st.ubuf[0][3].size, tint);
+        }
         E_bytes(1, tint, sizeof tint, 19);
     }
     for (int s = 0; s < 12; s++) {

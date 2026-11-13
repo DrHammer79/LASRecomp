@@ -7206,14 +7206,20 @@ static void draw_(CmdRec *r, bool indexed) {
         extern int texpatch_bottle_kind(int id);
         extern int texpatch_heart_kind(int id);
         extern void texpatch_heart_tint(int kind, float tint[8]);
-        int bottle = 0, heart = 0;
+        extern int texpatch_tunic_kind(int id);
+        int bottle = 0, heart = 0, tunic = 0;
         for (int i = 0; i < pr->fi->ntex && fknown; i++) {
             NvnTexture *t = FTEX(i);
             const TexBackend *b = t ? (const TexBackend *)t->backend : NULL;
             if (b && b->tp > 0 && !bottle) bottle = texpatch_bottle_kind(b->tp - 1);
             if (b && b->tp > 0 && !heart) heart = texpatch_heart_kind(b->tp - 1);
+            if (b && b->tp > 0 && !tunic) tunic = texpatch_tunic_kind(b->tp - 1);
         }
         if (heart) texpatch_heart_tint(heart, tint);
+        if (tunic) {  // local co-op: a Link's tunic in his player's colour (runtime/hle/coop.c; his bone matrices, ubuf 3)
+            extern void coop_tunic_tint(const float *bones, uint32_t size, float tint[8]);
+            coop_tunic_tint((const float *)(uintptr_t)st.ubuf[0][3].addr, (uint32_t)st.ubuf[0][3].size, tint);
+        }
         if (bottle) {
             extern void escape_bottle_tint(int kind, const float *ui, uint32_t ui_size, float tint[8]);
             int u = bottle == 3 || bottle == 6 ? 3 : 0;  // (fairy / Piece of Power models: their bone matrices - souls.c, triforce.c)
