@@ -437,4 +437,3 @@ static void actor_exec_end(void) {
     g_as_on = false;
     atomic_store_explicit(&g_as_link, 0, memory_order_relaxed);
 }
-
