@@ -27,7 +27,9 @@ enum { CHAOS_LETTERS_OFF = 0, CHAOS_LETTERS_EXPLORED = 1, CHAOS_LETTERS_MAP = 2 
 enum { COOP_HEALTH_SHARED = 0, COOP_HEALTH_OWN = 1 };
 enum { COOP_KO_REVIVE = 0, COOP_KO_GAME_OVER = 1 };
 enum { COOP_HUD_BOTTOM_LEFT = 0, COOP_HUD_BOTTOM_RIGHT = 1, COOP_HUD_TOP_RIGHT = 2 };
-enum { COOP_ZOOM_MAX = 6, COOP_ZOOM_FIT_MAX = 20 };  // co-op camera zoom, in 10% steps out
+// co-op camera zoom, in 10% steps out; fitting everyone in view goes to COOP_ZOOM_FIT_DEFAULT (twice as far) unless
+// set further, to three times as far at most: more of the world made and drawn, for a strong machine
+enum { COOP_ZOOM_MAX = 6, COOP_ZOOM_FIT_DEFAULT = 10, COOP_ZOOM_FIT_MAX = 20 };
 enum { COOP_ZOOM_WITH_COOP = 0, COOP_ZOOM_ALWAYS = 1, COOP_ZOOM_OFF = 2 };  // when the camera zoom is on
 enum { COOP_COLOURS = 8 };  // the co-op Playerlink.bfres colour sets: green, red, blue, yellow, purple, pink, black, white
 // System language served to the game (runtime/services/am.c GetDesiredLanguage, services/hid_set.c GetLanguageCode):

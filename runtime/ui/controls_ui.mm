@@ -330,9 +330,10 @@ static void zoom_options(bool coop) {
         if (g_settings.coop_camera_fit) {
             opt_indent(1);
             int f = g_settings.coop_zoom_fit - 1;
-            if (opt_choice("Fit up to", &f, outs + 1, COOP_ZOOM_FIT_MAX, COOP_ZOOM_FIT_MAX - 1,
+            if (opt_choice("Fit up to", &f, outs + 1, COOP_ZOOM_FIT_MAX, COOP_ZOOM_FIT_DEFAULT - 1,
                            "The furthest out it zooms to fit everyone. Below Camera zoom, Camera zoom is the furthest. "
-                           "Far out, the overworld loads more around Player 1.",
+                           "Past Out 100% (twice as far) the overworld loads and draws much more around Player 1: "
+                           "for a strong PC, it may not hold 60 fps on others.",
                            false))
                 g_settings.coop_zoom_fit = f + 1;
             opt_indent(-1);
@@ -369,8 +370,9 @@ static void coop_options(void) {
     if (int cs = coop_colours_state()) {
         static char where[1400];
         snprintf(where, sizeof where,
-                 "The tunic colors need the co-op mod's Playerlink.bfres at %s. Without it every Link wears Player 1's "
-                 "tunic.", coop_colours_path());
+                 "All eight tunic colors need the co-op mod's Playerlink.bfres at %s. Without it the other players "
+                 "wear the game's own green, red or blue tunic: their color when it is one of those, else one of them.",
+                 coop_colours_path());
         opt_warn_next();
         opt_action("Tunic colors", cs == 1 ? "Quit to Start Screen" : "Not installed",
                    cs == 1 ? "The players' tunic colors load as the game starts. Quit to the Start Screen and play "
