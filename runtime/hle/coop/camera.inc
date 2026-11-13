@@ -302,4 +302,3 @@ static void zoom_tick(bool play) {
         g_box = g_box_ready = 1.0f;
     if (forced) g_zoom = (float)atof(forced);
 }
-

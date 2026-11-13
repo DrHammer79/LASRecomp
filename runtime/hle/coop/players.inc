@@ -325,4 +325,3 @@ bool coop_heart_rgb(uint32_t *rgb) {
     *rgb = coop_colour_rgb(0);
     return true;
 }
-
