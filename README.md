@@ -39,7 +39,8 @@ co-op branch is kept on top of it. It calls itself LAS Recomp Co-Op (0.1.0): the
 - Each player has their own hearts (or one shared pool). A player out of hearts is knocked out until another player
   revives them by holding A beside them.
 - Enemies go after the nearest player, not only Player 1.
-- A colour for each player: their hearts, and their tunic when the mod's tunic file is in place (below).
+- A colour for each player: their hearts, and their tunic - green, red or blue with the game's own files, any of
+  eight with the mod's tunic file in place (below).
 - The camera zooms out to keep everyone on screen.
 - Players left off screen are brought back to Player 1, and only Player 1 leads everyone through exits (both can be
   turned off).
@@ -52,8 +53,9 @@ co-op branch is kept on top of it. It calls itself LAS Recomp Co-Op (0.1.0): the
    button on that player's controller.
 4. Load a save: the other Links join from the next file loaded.
 5. Optional tunic colours: put the co-op mod's `Playerlink.bfres` in `coop/romfs/region_common/actor/` in the data
-   folder (on Windows, next to `lasrecomp.exe`), then Quit to Start Screen and play again. Without it every Link wears the game's own tunic,
-   and the hearts still show each player's colour.
+   folder (on Windows, next to `lasrecomp.exe`), then Quit to Start Screen and play again. Without it the other players
+   wear the game's own green, red or blue tunic (their colour when it is one of those), and the hearts still show each
+   player's colour.
 
 **Settings** (Controls tab, right under Inputs)
 
@@ -73,7 +75,7 @@ co-op branch is kept on top of it. It calls itself LAS Recomp Co-Op (0.1.0): the
 | Zoom out | With co-op (2 players or more), Always (alone too) or Off | with co-op |
 | Camera zoom | how far out the camera always is: normal to 60% out, in 10% steps | 50% out |
 | Zoom out to fit everyone | zooms further out to keep every player on screen | on |
-| Fit up to | the furthest that goes: up to 200% out | 200% out |
+| Fit up to | the furthest that goes: up to 200% out (three times as far). Past 100% the overworld loads and draws much more: for a strong PC | 100% out |
 | Indoor zoom | houses, caves and dungeons: normal to 60% out | normal |
 | **Co-op rules** | | |
 | Bring lost players back | players left off screen are put back beside Player 1 | on |
@@ -82,6 +84,11 @@ co-op branch is kept on top of it. It calls itself LAS Recomp Co-Op (0.1.0): the
 | Players block each other | the Links bump into each other instead of walking through | off |
 
 [docs/coop.md](docs/coop.md) explains every setting in more detail and how co-op works inside the game.
+
+**Playing online:** the co-op is local - every player's controller on the PC running the game. Friends elsewhere can
+join it through a game-streaming service that passes their controllers through as pads on that PC, such as Parsec:
+they see the host's screen and play on their own Link. Each friend's controller counts as one of the host's
+(on Windows, 4 Xbox-type controllers at most). Lag is the stream's.
 
 **Bugs:** co-op isn't part of upstream, so report co-op bugs on
 [this fork's Issues](https://github.com/DrHammer79/LASRecomp/issues), not peiikai's. Say how many players, where in the

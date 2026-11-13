@@ -151,8 +151,9 @@ extern "C" const char *larecomp_version(void) { return LARECOMP_VERSION; }  // (
 // v0.<n>.<m> the same as beta_<n>.<m>; other tags (the alpha_* ones) are ignored. (Beta 5 and earlier only know
 // beta_<n>: they never offer a hotfix; builds before Beta 5.3 don't know v0.<n>.<m> either.) Offline / no curl /
 // anything unexpected: nothing is shown.
-#define RELEASES_URL "https://api.github.com/repos/peiikai/LASRecomp/releases?per_page=100"
-#define RELEASE_PAGE "https://github.com/peiikai/LASRecomp/releases/tag/"
+// LAS Recomp Co-Op (this fork): its own releases - upstream's would install a build without co-op as an "update".
+#define RELEASES_URL "https://api.github.com/repos/DrHammer79/LASRecomp/releases?per_page=100"
+#define RELEASE_PAGE "https://github.com/DrHammer79/LASRecomp/releases/tag/"
 
 #include "update_tags.h"  // tag_rank, tag_label
 
