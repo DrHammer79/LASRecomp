@@ -165,7 +165,6 @@ static void revive_hit(int j) {
 // Clothes, a Guardian Acorn - COOP_DAMAGE_HALVED_SITE) about to come off the game's hearts. (Taken at the difficulty site
 // before that, Player 1's hits were halved and the others' weren't: user 2026-11-02, "P1 takes hardly any damage,
 // and other players take full damage".)
-#define HURT_GAP 30  // (half a second: another player's hit within it of his last costs nothing)
 static bool g_hit_own;  // (the hit just taken was another player's, off his own hearts: COOP_DAMAGE_HALVED_SITE)
 // The Link hit: where the game's code holds him (the enemy hit's function: x21; the fixed hits' - a pit, deep water -:
 // x19), else the Link whose code is running (running_player: a register scan, for the event-scripted damage).
@@ -189,15 +188,6 @@ static int32_t coop_damage(Cpu *c, int32_t dmg, uint64_t link) {
         CLOG("[coop] player %d hit for %d: just revived, unhurt\n", i + 1, dmg);
         return 0;
     }
-    // (one hit came off another player's hearts two and three times in the same moment - a third of all his hits in
-    // a session, user 2026-11-01: "other players seem to be taking way more damage than p1"; spikes, the most often
-    // anything hits, do so about every 45 frames)
-    static uint64_t hurt_at[COOP_MAX];
-    if (i && renderer_present_count() < hurt_at[i] + HURT_GAP && !ENV("LARECOMP_COOP_NO_HURT_GAP")) {
-        CLOG("[coop] player %d hit for %d: hit just now, unhurt\n", i + 1, dmg);
-        return 0;
-    }
-    if (i) hurt_at[i] = renderer_present_count();
     revive_hit(i);  // (with infinite hearts too: the hit still lands)
     if (!i) {
         CLOG("[coop] player 1 hit for %d\n", dmg);

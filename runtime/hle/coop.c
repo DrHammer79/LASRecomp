@@ -168,7 +168,7 @@ bool coop_colours(void);
 static bool alone_hook(int which) {
     switch (which) {
     case 7: return coop_colours();
-    case 15: case 16: return g_back_on || g_leftover || ENV("LARECOMP_COOP_TRACE");  // (trace_actor: alone too)
+    case 15: case 16: return g_leftover || ENV("LARECOMP_COOP_TRACE") || ENV("LARECOMP_TRACK_RESPAWN");  // (alone too)
     case 17: return zoom_on() || g_back != 0;
     case 33: case 34: case 35: return g_back_on;
     case 38: return g_zoom > 1.0f;
@@ -281,15 +281,9 @@ int rt_coop_hook(Cpu *c, int which) {
                 return skip_update(c);
             }
         }
-        if (!rt_coop_on()) {  // (alone, zoomed out: grass and rocks kept gone - alone_hook)
-            if (heap_ptr(g_updating)) trace_actor(g_updating);
-            if (!g_back_on) return 0;
-            respawn_track(g_updating);
-            return heap_ptr(g_updating) && gone_check(c, g_updating) ? skip_update(c) : 0;
-        }
-        respawn_track(g_updating);
-        if (heap_ptr(g_updating) && gone_check(c, g_updating)) return skip_update(c);
-        if (heap_ptr(g_updating)) down_enemy_note(g_updating), trace_actor(g_updating);
+        if (heap_ptr(g_updating)) respawn_track(g_updating), trace_actor(g_updating);
+        if (!rt_coop_on()) return 0;  // (alone: alone_hook)
+        if (heap_ptr(g_updating)) down_enemy_note(g_updating);
         actor_exec_begin(c);
         act_update_begin(g_updating);
         return 0;
@@ -297,13 +291,11 @@ int rt_coop_hook(Cpu *c, int which) {
     case 16:  // COOP_ACTOR_EXEC_DONE - after it
         if (!on_game_thread()) return 0;
         if (!rt_coop_on()) {  // (alone: alone_hook)
-            if (g_back_on && heap_ptr(g_updating)) gone_note(g_updating);
             g_updating = 0;
             return 0;
         }
         act_update_end();
         actor_exec_end();
-        if (heap_ptr(g_updating)) gone_note(g_updating);
         if (g_updating) coop_actor_updated(c, g_updating);
         g_updating = 0;
         return 0;
@@ -385,8 +377,9 @@ int rt_coop_hook(Cpu *c, int which) {
         // The game goes on to take w20 off its hearts (x8: PlayerStatus) and, only for a hit of 1 or more
         // (main+0xd4c788), runs what follows a hit for the Link hit (x21): his controller's rumble and the time he
         // can't be hit again (his +0x1e80). Another player's hit, off his own hearts, was 0 to it: the same contact hit
-        // him again on the next frames - one hit came off his hearts two to four times (user 2026-11-01; HURT_GAP hid
-        // it). So it stays a hit for the game, which takes nothing off: its hearts are read as that much more.
+        // him again on the next frames - one hit came off his hearts two to four times (user 2026-11-01; until
+        // 2026-11-13 a 30-frame gap after each of his hits hid it). So it stays a hit for the game, which takes nothing
+        // off: its hearts are read as that much more.
         int32_t dmg = (int32_t)c->x[20], got = rt_coop_damage_of(c, dmg, c->x[21]);
         if (got == 0 && g_hit_own && dmg > 0) {
             c->x[8] = (uint32_t)(LD16(c->x[8] + 0x84) + dmg);
@@ -530,7 +523,7 @@ static void play_ended(void) {
 void coop_level_change(const char *level, const char *locator) {
     extern int game_in_play(void);
     extern const char *chaos_current_level(void);  // runtime/ui/chaos_overlay.mm
-    gone_forget();  // (a new level: everything comes back, as without co-op)
+    actor_class_forget();  // (a new level: its actors' addresses are others')
     g_level_changed = renderer_present_count();
     if (g_held_at) hold_release();  // (a warp while paused: the others back where they were, in this level still)
     g_hold_next = false;
