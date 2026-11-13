@@ -1,7 +1,9 @@
 # Local co-op
 
 Two to eight Links on one PC, one controller each, after the Switch mod
-LA_Coop_ExactStack_360 (its "8 Players" build, game 1.0.1). It works with game
+[The Legend of Zelda: Link's Awakening Multiplayer](https://gamesdb.launchbox-app.com/games/details/422143-the-legend-of-zelda-links-awakening-multiplayer)
+by Estuko and Geek Joystick ([trailer](https://www.youtube.com/watch?v=1JfE42xE-4k)), its build
+LA_Coop_ExactStack_360 (the "8 Players" build, game 1.0.1). It works with game
 versions 1.0.1 and 1.1.0 (address table `v1_0_1`). Version 1.0.0 has every
 `COOP_*` address at 0x0, so co-op stays off there and its option is greyed out.
 
