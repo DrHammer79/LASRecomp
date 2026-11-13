@@ -1,14 +1,73 @@
 // NVN command buffers: commands are recorded into the guest-provided command memory as CmdRec
 // records, so the game's own memory management and out-of-memory callbacks work as designed.
 // A command handle is the guest address of a list's first record.
+#include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
 
+#include "../game_addresses.h"
 #include "nvn.h"
 
 #define JUMP_RESERVE (sizeof(CmdRec) + 8)
 
 static NvnCmdBuf *cb_of(uint64_t guest) { return HOST(NvnCmdBuf, guest); }
+
+// Out of command memory where the game can't give more. The graphics library's (nn::gfx) buffers pass the event on to
+// their own handler (GFX_CMDBUF_MEMORY_EVENT: the out-of-command-memory one at +0xd0 of the callback's data, the
+// buffer), which some leave unset - sized for the Switch, whose commands take a fraction of a CmdRec's room. With the
+// camera zoomed out to 2.5x (the co-op fork's zoom: three times as much drawn) one ran out, and the call to the unset
+// handler stopped the game (2026-10-28). Such a buffer goes on in host memory: chunks chained in as the game's own would be, kept until
+// OVERFLOW_KEEP frames after the buffer next gets the game's memory (or goes) - by then the render thread has
+// translated everything recorded in them, as the game's memory is reused only after its fence.
+#define OVERFLOW_MIN (1u << 20)
+#define OVERFLOW_KEEP 8
+typedef struct Overflow {
+    struct Overflow *next;
+    uint64_t free_at;  // (retired: the frame it can go)
+} Overflow;
+static Overflow *g_retired;  // (any recording thread's: under g_retired_lock)
+static pthread_mutex_t g_retired_lock = PTHREAD_MUTEX_INITIALIZER;
+
+static bool no_game_handler(const NvnCmdBuf *cb) {
+    uint64_t ev = GA(GFX_CMDBUF_MEMORY_EVENT);
+    return ev && cb->callback == ev && cb->callback_data && !*(const uint64_t *)(uintptr_t)(cb->callback_data + 0xd0);
+}
+
+static void overflow_retire(NvnCmdBuf *cb) {  // (the buffer's chunks, once it has the game's memory again or goes)
+    extern uint64_t renderer_present_count(void);
+    uint64_t now = renderer_present_count();
+    pthread_mutex_lock(&g_retired_lock);
+    for (Overflow **p = &g_retired; *p;) {  // (the ones retired long enough ago go)
+        Overflow *o = *p;
+        if (now >= o->free_at) *p = o->next, free(o);
+        else p = &o->next;
+    }
+    while (cb->overflow) {
+        Overflow *o = cb->overflow;
+        cb->overflow = o->next;
+        o->free_at = now + OVERFLOW_KEEP, o->next = g_retired, g_retired = o;
+    }
+    pthread_mutex_unlock(&g_retired_lock);
+}
+
+static void overflow_chunk(NvnCmdBuf *cb, uint32_t need) {
+    uint64_t size = cb->size > OVERFLOW_MIN ? cb->size : OVERFLOW_MIN;
+    if (size < need + 2 * JUMP_RESERVE) size = need + 2 * JUMP_RESERVE;
+    Overflow *o = malloc(sizeof(Overflow) + 16 + size);
+    if (!o) FATAL("nvn: out of command memory (need %u), no host memory either\n", need);
+    o->next = cb->overflow, cb->overflow = o;
+    uint64_t mem = ((uint64_t)(uintptr_t)(o + 1) + 15) & ~15ull;
+    if (cb->recording && cb->mem) {  // (the list being recorded goes on there, as at nvnCommandBufferAddCommandMemory)
+        CmdRec *j = (CmdRec *)(uintptr_t)(cb->mem + cb->used);
+        memset(j, 0, sizeof *j);
+        j->op = CMD_JUMP, j->size = sizeof(CmdRec), j->x[0] = mem;
+    }
+    static int logged;
+    if (logged++ < 4)
+        LOG("[nvn] command buffer %llx out of command memory (%llu bytes) with no handler for it: %llu more in host "
+            "memory\n", (unsigned long long)cb->guest, (unsigned long long)cb->size, (unsigned long long)size);
+    cb->mem = mem, cb->size = size, cb->used = 0;
+}
 
 NVN(nvnCommandBufferInitialize) {
     NvnCmdBuf *cb = calloc(1, sizeof *cb);
@@ -16,7 +75,12 @@ NVN(nvnCommandBufferInitialize) {
     SET_HOST(A(0), cb);
     RET(1);
 }
-NVN(nvnCommandBufferFinalize) { free(cb_of(A(0))); SET_HOST(A(0), 0); }
+NVN(nvnCommandBufferFinalize) {
+    NvnCmdBuf *cb = cb_of(A(0));
+    if (cb) overflow_retire(cb);  // (none: finalized already, or never initialized - nothing to do, as free(NULL))
+    free(cb);
+    SET_HOST(A(0), 0);
+}
 NVN(nvnCommandBufferSetDebugLabel) { (void)c; }
 
 static CmdRec *raw_rec(uint64_t at, uint32_t op, uint32_t size) {
@@ -35,6 +99,7 @@ NVN(nvnCommandBufferAddCommandMemory) {
         CmdRec *j = raw_rec(cb->mem + cb->used, CMD_JUMP, sizeof(CmdRec));
         j->x[0] = mem;
     }
+    if (cb->overflow) overflow_retire(cb);
     cb->mem = mem;
     cb->size = size;
     cb->used = 0;
@@ -60,6 +125,10 @@ NVN(nvnCommandBufferSetCommandMemoryCallbackEnabled) { (void)c; }
 static CmdRec *rec(Cpu *c, NvnCmdBuf *cb, uint32_t op, uint32_t extra) {
     uint32_t size = (uint32_t)((sizeof(CmdRec) + extra + 7) & ~7u);
     for (int tries = 0; !cb->mem || cb->used + size + JUMP_RESERVE > cb->size; tries++) {
+        if (no_game_handler(cb)) {
+            overflow_chunk(cb, size);
+            continue;
+        }
         if (!cb->callback || tries == 2) FATAL("nvn: out of command memory (need %u)\n", size);
         uint64_t saved[8];
         memcpy(saved, c->x, sizeof saved);
