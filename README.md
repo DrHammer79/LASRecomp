@@ -28,7 +28,9 @@ native Windows, macOS, Linux, Android and iOS application.
 
 ## This fork: local co-op
 
-This fork adds local co-op: 2 to 8 Links on one PC, one controller each, after the Switch mod LA_Coop_ExactStack_360.
+This fork adds local co-op: 2 to 8 Links on one PC, one controller each, after the Switch mod
+[The Legend of Zelda: Link's Awakening Multiplayer](https://gamesdb.launchbox-app.com/games/details/422143-the-legend-of-zelda-links-awakening-multiplayer)
+by Estuko and Geek Joystick (its build LA_Coop_ExactStack_360), whose work this co-op is built on: thank you.
 Everything else is upstream's [peiikai/LASRecomp](https://github.com/peiikai/LASRecomp) `beta_6`, and this fork's
 co-op branch is kept on top of it. It calls itself LAS Recomp Co-Op (0.1.0): the `[fork]` line near the top of its
 `lasrecomp.log` says so.
@@ -198,7 +200,7 @@ The iOS app is made on your computer from your own game files, then sideloaded.
 - Optional extras: 360-degree movement, blur removal, mirror mode, faster walking and hiding the Hero Mode icon.
 - Cosmetics: change Link's tunic, hair, skin and shield colours, the colour of the grass, leaves and sand (with season presets), the water, fences, walls and houses, give enemies random colours, or play with a Game Boy, Game Boy Color or grayscale filter.
 - Optional run timer, with LiveSplit support.
-- Local co-op for 2 to 8 players, one controller each (game versions 1.0.1 and 1.1.0), after the LA_Coop_ExactStack_360 mod: separate hearts with knock-outs and revives, enemies that go after the nearest player, and a colour for each player. Set it up in the Controls tab. Tunic colours need the mod's `Playerlink.bfres` in `coop/romfs/region_common/actor/`.
+- Local co-op for 2 to 8 players, one controller each (game versions 1.0.1 and 1.1.0), after the [Link's Awakening Multiplayer](https://gamesdb.launchbox-app.com/games/details/422143-the-legend-of-zelda-links-awakening-multiplayer) mod by Estuko and Geek Joystick: separate hearts with knock-outs and revives, enemies that go after the nearest player, and a colour for each player. Set it up in the Controls tab. Tunic colours need the mod's `Playerlink.bfres` in `coop/romfs/region_common/actor/`.
 
 **Randomizer**
 - In-game seed generator, with seed IDs for sharing and separate saves for each seed.
