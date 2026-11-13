@@ -13849,7 +13849,11 @@ static void ImGui::NavUpdateWindowing()
                 g.NavInputSource = ImGuiInputSource_Keyboard;
                 break;
             }
-    if (g.NavWindowingToggleLayer && g.NavInputSource == ImGuiInputSource_Keyboard)
+    // LAS Recomp: only for a toggle an Alt key started. The gamepad's windowing (ImGuiKey_NavGamepadMenu: West) sets
+    // NavWindowingToggleLayer too; a keyboard key then made the input source the keyboard, and with no toggle key
+    // (ImGuiKey_None) IsKeyReleased / TestKeyOwner below failed GetKeyData's IsNamedKey check. Dear ImGui fixed it in
+    // 1.92.0 (#8525).
+    if (g.NavWindowingToggleLayer && g.NavInputSource == ImGuiInputSource_Keyboard && g.NavWindowingToggleKey != ImGuiKey_None)
     {
         // We cancel toggling nav layer when any text has been typed (generally while holding Alt). (See #370)
         // We cancel toggling nav layer when other modifiers are pressed. (See #4439)
