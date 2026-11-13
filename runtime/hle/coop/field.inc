@@ -1,41 +1,23 @@
 // Local co-op, cut grass and thrown rocks kept gone, the screens kept and active around every player, the shadow map's box. A part of runtime/hle/coop.c: included there, in this order, as one translation unit -
 // the parts share the players' state and each other's helpers (coop.c's head says how it is laid out).
 
-// ---- Cut grass and thrown rocks. On the Field the game makes a level object - grass, a rock - again when Player 1
-// steps into its screen and its actor is gone: the screens come back fresh, as on the Game Boy. Alone, what Link cut
-// or threw is in the screen he just left, scrolled out of view. With co-op the others cut and throw in screens
-// Player 1 isn't in, and the view shows the screens around: grass and rocks came back beside the players - a thrown
-// rock back on the stairs in Player 1's way (user's log 2026-10-28: the stairs' rock, ObjRock-4800A5005B88BEDC, back
-// as he stepped onto them). Each one destroyed is remembered by its actor's name (the level object's id), and one made
-// again while a player is near it or it's in view is killed at once (ACTOR_KILL, as its own break does), before its
-// first update: it stays gone until it comes back where nobody sees it. Not indoors: a room comes back whole as Player
-// 1 walks in, with everyone, as without co-op.
-// What counts as destroyed: dying in its own update (cut, or thrown and broken), or dying elsewhere - in another
-// actor's update: lifted, cut by another player's sword - with a player within GONE_TAKER of it, or in a screen well
-// inside those the game keeps (gone_kept_screen: a boomerang's, an arrow's, a bomb's from afar). The screens the game
-// unloads as Player 1 moves on kill theirs between updates, far from everyone, and those come back whole: counted as
-// destroyed, at the zoom's wide views the tall grass around was gone, bare earth in its place (2026-10-28).
-// Only those are kept (GONE_SLOTS; the one destroyed longest ago makes way when they're all taken): a slot for every
-// one seen filled up in play - thousands walking the Field - and from then on nothing was kept, so cut grass and a
-// thrown boulder came back again (user 2026-10-28, File 3, four players: 2 kept in a session).
-#define GONE_SLOTS 4096
+// ---- Cut grass and thrown rocks. On the Field the game makes a level object - grass, a rock - again when its screen
+// comes back into the box of screens it keeps around Player 1 and its actor is gone: the screens come back fresh, as on
+// the Game Boy. Alone, that is a screen well behind Link, out of view. With co-op the others cut and throw in screens
+// Player 1 isn't in, and the zoomed-out view shows the screens around: grass and rocks came back beside the players
+// (user's log 2026-10-28: a thrown rock back on the stairs in Player 1's way). Until 2026-11-13 each one destroyed was
+// remembered by name and one made again in view refused at the actor factory or killed on its first update (the
+// "spawn skip"); upstream's review asked for the cause. It is the kept box, centred on Player 1 only: below, with co-op
+// it reaches every player (keep_reach), and with the zoom it grows with the view (g_box, COOP_KEEP_BOX_SITE), so no
+// screen anyone can see is let go and made fresh. (gone_key, gone_near, gone_watched, ACTOR_DEAD: for the respawn log.)
 #define GONE_PROBES 8
 #define GONE_NEAR 10.0f
-#define GONE_TAKER 4.0f
 #define ACTOR_DEAD (1u << 30)  // (actor +0x40: killed - runtime/hle/apple_trees.c)
-static struct { uint64_t key, at_frame; float at[3]; } g_gone[GONE_SLOTS];
-static bool g_gone_dead_before;  // (the actor updating was dead as its update began)
-static bool g_gone_used;         // (one kept since it was cleared)
-static uint64_t g_level_changed; // (the frame of the last level change: gone_note)
-static void gone_forget(void) {
-    if (g_gone_used) memset(g_gone, 0, sizeof g_gone);
-    g_gone_used = false;
-    actor_class_forget();
-}
-RT_ON_RESET(coop_gone_reset) { gone_forget(), g_level_changed = 0; }
+static uint64_t g_level_changed; // (the frame of the last level change: respawn_track)
+RT_ON_RESET(coop_gone_reset) { g_level_changed = 0; }
 
-// A grass's or rock's key: its level object's id, the hex after its kind in its name ("ObjRock-61025C005BA1C308") -
-// the actor factory's spawn info has it at +0 (coop_spawn_skip) - or 0: not one of them.
+// A grass's or rock's key: its level object's id, the hex after its kind in its name ("ObjRock-61025C005BA1C308"), or
+// 0: not one of them.
 static uint64_t gone_key(const char *name) {
     static const char *const kinds[] = {"ObjRock-", "ObjGrass-", "ObjGrass2x2-", "ObjLawn-", "ObjSkullStone-"};
     size_t at = 0;
@@ -50,28 +32,6 @@ static uint64_t gone_key(const char *name) {
         key = key << 4 | (uint64_t)d;
     }
     return key ? key : 1;
-}
-
-// (a key's first slot: a multiplicative hash's top bits - the ids of one room file's objects share their low 32 bits)
-static int gone_slot(uint64_t key, int p) { return (int)(((key * 0x9E3779B97F4A7C15ull) >> 52) + p) % GONE_SLOTS; }
-
-static int gone_find(uint64_t key) {  // its slot, or -1: not destroyed
-    for (int p = 0; p < GONE_PROBES; p++)
-        if (g_gone[gone_slot(key, p)].key == key) return gone_slot(key, p);
-    return -1;
-}
-
-static void gone_keep(uint64_t key, const float at[3]) {
-    if (gone_find(key) >= 0) return;
-    int k = gone_slot(key, 0);
-    for (int p = 0; p < GONE_PROBES; p++) {
-        int s = gone_slot(key, p);
-        if (!g_gone[s].key) { k = s; break; }
-        if (g_gone[s].at_frame < g_gone[k].at_frame) k = s;
-    }
-    g_gone[k].key = key, g_gone[k].at_frame = renderer_present_count();
-    memcpy(g_gone[k].at, at, sizeof g_gone[k].at);
-    g_gone_used = true;
 }
 
 static bool gone_near(const float at[3], float r) {  // a player within r of it
@@ -89,66 +49,6 @@ static bool gone_watched(const float at[3]) {  // a player near it, or in view
     extern float widescreen_factor(void);
     return view_point(view_camera(), at, 16.0f / 9.0f * widescreen_factor(), &nx, &ny, &front) && front && fabsf(nx) < 1.15f &&
            fabsf(ny) < 1.15f;
-}
-
-// The actor factory's spawn (runtime/hle/souls.c rt_actor_create_fn: its spawn info's key +0, position +0x180): one
-// of these kept gone, made again where it's seen, isn't made at all - the factory's own "no such actor" path. Killed
-// on its first update instead (gone_check, still there for one made another way), it had been made, loaded and drawn
-// a frame: a screen's broken rocks flashed back with a hitch each time Player 1 stepped into it again, standing on its
-// edge - three times in a few seconds (user 2026-10-30).
-bool coop_spawn_skip(uint64_t info) {
-    if (!info || !g_gone_used || !LD64(info) || !(rt_coop_on() || g_back_on) || !on_field()) return false;
-    int k = gone_find(LD64(info));  // (key 0: made by the game as it goes, not a level object - and an empty slot's)
-    if (k < 0) return false;
-    const float *at = (const float *)(uintptr_t)(info + 0x180);
-    if (!gone_watched(at)) {
-        CLOG("[coop] %016llX back where nobody sees it (%.2f %.2f %.2f)\n", (unsigned long long)LD64(info), at[0], at[1],
-             at[2]);
-        g_gone[k].key = 0;
-        return false;
-    }
-    static uint64_t logged_frame;
-    uint64_t frame = renderer_present_count();
-    if (frame != logged_frame)  // (one line a batch)
-        CLOG("[coop] %016llX not made again, in view at (%.2f %.2f %.2f): kept gone (and the rest of its batch)\n",
-             (unsigned long long)LD64(info), at[0], at[1], at[2]);
-    logged_frame = frame;
-    return true;
-}
-
-// Before an actor's update: true when it was one of these made again where it's seen, now killed. (Looked at once,
-// on its first update.)
-static bool gone_check(Cpu *c, uint64_t actor) {
-    g_gone_dead_before = (LD32(actor + 0x40) & ACTOR_DEAD) != 0;
-    if ((LD32(actor + 0x18) & 0xffffff) != ('O' | 'b' << 8 | 'j' << 16)) return false;
-    ActorClass *e = actor_class(actor);
-    if (e->gone == GONE_NOTED && !g_gone_dead_before) e->gone = GONE_NEW;  // (alive: made again at the same address)
-    if (!e->key || e->gone != GONE_NEW) return false;
-    e->gone = GONE_LIVE;
-    int k = gone_find(e->key);
-    if (k < 0 || g_gone_dead_before) return false;
-    extern const char *chaos_current_level(void);  // runtime/ui/chaos_overlay.mm
-    const char *lv = chaos_current_level();
-    float at[3];
-    if (!actor_pos(actor, at)) memcpy(at, g_gone[k].at, sizeof at);
-    if (!lv || strcmp(lv, "Field") || !gone_watched(at)) {
-        float p1[3] = {0};
-        player_pos(host_player(), p1);
-        CLOG("[coop] %.40s back where nobody sees it (%.2f %.2f %.2f; Player 1 at %.2f %.2f %.2f)\n",
-             (const char *)(uintptr_t)(actor + 0x18), at[0], at[1], at[2], p1[0], p1[1], p1[2]);
-        g_gone[k].key = 0;
-        return false;
-    }
-    uint64_t saved[31], sp = c->sp, pc = c->pc;
-    memcpy(saved, c->x, sizeof saved);
-    c->x[0] = actor;
-    guest_call(c, GA(ACTOR_KILL));
-    memcpy(c->x, saved, sizeof saved);
-    c->sp = sp, c->pc = pc;
-    e->gone = GONE_NOTED;
-    CLOG("[coop] %.40s made again in view at (%.2f %.2f %.2f): kept gone\n", (const char *)(uintptr_t)(actor + 0x18),
-         at[0], at[1], at[2]);
-    return true;  // (still gone: its next one is checked the same way)
 }
 
 // The screens kept around Player 1 (main+0x85c280's box, 90 x 72, grown by g_box: COOP_KEEP_BOX_SITE) lose their
@@ -170,32 +70,6 @@ static void keep_reach(float *rx, float *rz) {  // (how far the kept box must re
         *rx = fmaxf(*rx, dx), *rz = fmaxf(*rz, dz);
     }
 }
-static bool gone_kept_screen(const float at[3]) {
-    float p1[3], rx, rz;
-    if (!player_pos(host_player(), p1)) return false;
-    keep_reach(&rx, &rz);
-    float sx = SCREEN_W * floorf(at[0] / SCREEN_W), sz = SCREEN_D * floorf(at[2] / SCREEN_D);  // (its screen's corner)
-    float hx = fmaxf(KEEP_W * g_box / 2, rx) - SCREEN_W, hz = fmaxf(KEEP_D * g_box / 2, rz) - SCREEN_D;
-    return sx + SCREEN_W > p1[0] - hx && sx < p1[0] + hx && sz + SCREEN_D > p1[2] - hz && sz < p1[2] + hz;
-}
-
-// After an actor's update: whether it was destroyed. (Not as a level goes - the level change, coop_level_change, then
-// LEVEL_GOING frames: everything in it dies, and a warp to another spot of the Field would leave it kept gone there.)
-#define LEVEL_GOING 120
-static void gone_note(uint64_t actor) {
-    if (!(LD32(actor + 0x40) & ACTOR_DEAD) || (LD32(actor + 0x18) & 0xffffff) != ('O' | 'b' << 8 | 'j' << 16)) return;
-    if (g_level_changed && renderer_present_count() < g_level_changed + LEVEL_GOING) return;
-    ActorClass *e = actor_class(actor);
-    if (!e->key || e->gone == GONE_NOTED) return;
-    e->gone = GONE_NOTED;
-    float at[3];
-    if (!actor_pos(actor, at)) return;
-    // (dead before its own update, nobody by it, its screen at the kept ones' edge: unloaded - it comes back whole)
-    if (g_gone_dead_before && !gone_near(at, GONE_TAKER) && !(on_field() && gone_kept_screen(at))) return;
-    gone_keep(e->key, at);
-    CLOG("[coop] %.40s destroyed%s\n", (const char *)(uintptr_t)(actor + 0x18), g_gone_dead_before ? " (taken)" : "");
-}
-
 static void scale_s(Cpu *c, int r, float k) {  // (a float register's scalar, sN, times k)
     float f;
     memcpy(&f, &c->v[r], 4);

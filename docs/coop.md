@@ -415,48 +415,36 @@ kind 23) and held about 3 s, then spat out; the Like Like stays on him, Player
 shield is shared). Player 1 as its target: it walks to him and catches him, as
 before.
 
-**Cut grass and thrown rocks** (`gone_check`, `gone_note`). On the Field the
-game makes a level object again (grass, a rock) when Player 1 steps into its
-screen and its actor is gone: the screens come back fresh, as on the Game Boy.
-Alone, what Link cut or threw is in the screen he just left, out of view. With
-co-op the others cut and throw in screens Player 1 isn't in, and the view
-shows the screens around. Grass and rocks came back beside the players, and a
-thrown rock came back on the stairs in Player 1's way (the user's log: the
-stairs' rock, `ObjRock-4800A5005B88BEDC`, back as he stepped onto them).
-- Each one destroyed is remembered by its actor's name, the level object's id
-  (`ObjRock`, `ObjGrass`, `ObjGrass2x2`, `ObjLawn`, `ObjSkullStone`; its hash
-  worked out once per actor, `actor_class`). Destroyed: actor `+0x40` bit 30
-  set by its own update (cut, or thrown and broken), or set before it with a
-  player within `GONE_TAKER` (4 units: lifted, cut by another player's sword)
-  or in a screen at least one screen inside those the game keeps
-  (`gone_kept_screen`, 90 x 72 grown with the zoom: a boomerang's, an arrow's,
-  a bomb's from afar). The screens the game unloads as Player 1 moves on kill
-  theirs between updates, far from everyone and at the kept ones' edge: those
-  come back whole. Counted as destroyed, the tall grass around was kept gone at
-  the zoom's wide views, bare earth in its place. Nothing is counted for 2 s
-  after a level change (`LEVEL_GOING`): everything in the old level dies.
-- Only those destroyed take a slot (`GONE_SLOTS` 4096; when they're all taken
-  the one destroyed longest ago makes way). The first version took one for
-  every one seen: walking the Field filled the table, and from then on nothing
-  was kept (the user's session: 2 kept, cut grass and a thrown boulder back).
-- One made again while a player is within `GONE_NEAR` (10 units) of it or
-  it's in view isn't made at all (`coop_spawn_skip`, from the actor factory's
-  `rt_actor_create_fn`: its spawn info's key at +0 is the hex in the name,
-  its position at +0x180; the factory's own "no such actor" path). Killed on
-  its first update instead (`ACTOR_KILL`, still there for one made another
-  way), it had been made and drawn a frame: standing on a screen's edge beside
-  rocks the players had broken, a batch of 16 to 21 flashed back with a hitch
-  at each step across (user 2026-10-30). The table's slots go by a hash of the
-  key: one room file's objects share its low 32 bits.
-- One made again away from everyone is left: it grew back unseen, as alone.
-- A level change forgets them all (through a door, everything is back, as
-  alone). Not indoors: a room comes back whole as Player 1 walks in, with
-  everyone.
-- There is no "destroyed" record in the game to change: the thrown rock's
-  actor stays as a dead stub, its level entry never changes, and the spawner
-  makes a new actor for an entry with none. Found by watching the rock's id
-  in memory, the calls on its actor through its break, and the backtrace of
-  its new actor's set-up (`main+0xc44a00`).
+**Cut grass and thrown rocks.** On the Field the game makes a level object
+again (grass, a rock) when its screen comes back into the screens it makes
+around Player 1 and its actor is gone: the screens come back fresh, as on the
+Game Boy. There is no "destroyed" record in the game: the thrown rock's actor
+stays as a dead stub while its screen is kept, and once the screen is let go
+(outside the box of screens kept around Player 1) and made again, the spawner
+makes a new actor for an entry with none (found by watching the rock's id in
+memory, the calls on its actor through its break, and the backtrace of its new
+actor's set-up, `main+0xc44a00`). Alone, the screen made again is one well
+past the view. With co-op, grass and rocks came back beside the players
+(2026-10-28, the user's log: a thrown rock back on the stairs in Player 1's way),
+and zoomed out the view had reached past the screens made.
+- The view is kept inside the screens made (`zoom_room`, the boxes grown with
+  the zoom: "The screens around Player 1"), and the box of screens kept
+  reaches every player (`keep_reach`, `COOP_KEEP_BOX_SITE`): a screen anyone is
+  in, or can see, isn't let go, so it isn't made again in view. A player can't
+  be outside the screens made for long anyway: he falls through and is brought
+  back (`lost_tick`).
+- Until 2026-11-13 each one destroyed was also remembered by name, and one made
+  again near a player or in view was refused at the actor factory
+  (`coop_spawn_skip` in `runtime/hle/souls.c`) or killed on its first update
+  (`gone_check`). Upstream's review (item 3) asked for the cause instead. With
+  the boxes as above it no longer acted: in the scripted runs of 2026-11-13
+  (`rock_run.sh`, `zoom_solo_grass.sh`, 4-player and 2-player runs on the
+  Field) it kept nothing gone, and with it taken out none of the grass and
+  rock actors made again was in view or near a player (1,433 in all). It is gone, and
+  `souls.c` is upstream's again. `LARECOMP_TRACK_RESPAWN=1` still logs each one
+  made again, with SEEN when in view or near a player. Not replayed: the user's
+  Tal Tal Heights save, where broken boulders flashed back at a screen's edge
+  (2026-10-30; `rock_flash.sh` needs it).
 
 **Hearts** (`coop_health`).
 - **Shared:** the game's one set, as without co-op.
@@ -537,8 +525,8 @@ stairs' rock, `ObjRock-4800A5005B88BEDC`, back as he stepped onto them).
   next frames. Now (`COOP_DAMAGE_HALVED_SITE`, case 49) the game sees the
   hit's real size and reads its hearts as that much more, so it takes nothing
   off them, and each Link gets his own time unhurt as Player 1 does. Until
-  then another player's hit within `HURT_GAP` (30 frames) of his last cost
-  nothing, which hid it (`LARECOMP_COOP_NO_HURT_GAP=1` turns it off, to check).
+  then another player's hit within 30 frames of his last cost nothing
+  (`HURT_GAP`), which hid it; it is gone (upstream's review, item 3).
 - **Getting up:** a hit that knocks a player out leaves him in the knocked-back
   state (kind 11), which never ended under the lying pose, so a revived player
   couldn't move until a door reset him. The pose waits for his state to be
@@ -587,10 +575,8 @@ with it (`coop_camera_reach()`).
   With co-op (the default) zooms with 2 players or more, as before, so a game
   alone keeps the game's own camera. Always zooms playing alone too: of the
   co-op hooks only the zoom's run then (`alone_hook`: `COOP_CAMERA_SITE`, the
-  three boxes of screens, the shadow map's box, and on the Field the actors'
-  updates for cut grass and thrown rocks only - zoomed out, the screen Link
-  just left is still in view, so what he cut there is kept gone as with
-  co-op). With no other player
+  three boxes of screens, the shadow map's box; the actors' updates only for
+  `LARECOMP_COOP_TRACE` / `LARECOMP_TRACK_RESPAWN`). With no other player
   fit adds nothing (its rows show only with co-op). Off: 1 with co-op too. The
   section is shown without co-op ("Camera", under Players); hidden on 1.0.0.
   Switched off in play the zoom goes to 1 at once (eased, the view widened for
