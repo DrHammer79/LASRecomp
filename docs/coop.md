@@ -82,10 +82,16 @@ it's in a slot (`tools/test_active_pad.c`, with two players and three pads).
   on any controller, gives that one to the player, taken from whoever had it
   (they get the player's own). The press is taken before the menus see it
   (`input_assign_event`, first in the event loops); Escape or 10 s gives up.
-  Each player's is remembered by SDL's device path (`coop_pad_path_N` in the
-  ini; for an Xbox-type pad its XInput slot): as they connect, one with a
-  player's path goes to him, a slot whose player's controller is connected is
-  kept for it, and Player 1's isn't taken over by a press on a spare one.
+  Each player's is remembered (`coop_pad_path_N` in the ini, `pad_key`): on
+  the desktop by SDL's device path (for an Xbox-type pad its XInput slot,
+  which follows the order they connect in); on a phone or tablet, or where SDL
+  gives no path (iOS, macOS's MFi pads, Android), by the controller's GUID
+  ("guid:..."): its kind, so two of the same kind aren't told apart there and
+  the first to connect goes to the first player it was assigned to. As they
+  connect, one with a player's key goes to him, a slot whose player's
+  controller is connected is kept for it, and Player 1's isn't taken over by a
+  press on a spare one. Only with co-op on (2 players or more): alone, Player
+  1's controller is whichever one is used, as upstream's (#455).
 - On the start screen, before the game has taken the controllers, the Controls
   tab names the ones connected in the order they'll be taken.
 - Windows: SDL reads Xbox-type controllers through XInput, 4 at most (its
@@ -106,7 +112,10 @@ whenever the player count changes out of play.
 `<data root>/coop/romfs/region_common/actor/Playerlink.bfres` when that file
 exists (`coop_romfs_override`, `runtime/services/fs.c`). The repository can't
 ship it: it is the mod's edit of a game file. Without it the game still plays,
-and every Link wears Player 1's tunic. The file is picked up when the RomFS is
+and the other players wear the game's own three tunics (frames 0 green, 1
+red, 3 blue): each one's colour if it is one of those, else one of them by
+his number; Player 1 keeps his own. Only that one file is served from there
+(other game files copied in from the mod's own romfs aren't). The file is picked up when the RomFS is
 indexed, as the game boots (again after Quit to Start Screen). The Controls tab
 says when it is missing, with the path it goes to (`coop_colours_path`), or
 when co-op was turned on after the game started and it comes with Quit to
@@ -186,8 +195,9 @@ alone.
   Player 1's rock.
 - Now each player has his own slots. The other players' slots are kept in
   coop.c and swapped into the game's while it works on theirs: every
-  component is checked once per player, with `+0x4b8` pointing at him for the
-  check; the frame's end runs once per player; and another player's own update
+  component is checked once per player, with "Link" being him for the
+  check (the game's reads of `+0x4b8` give him: `rt_coop_player`, below); the
+  frame's end runs once per player; and another player's own update
   (`COOP_ACTOR_EXEC_*`) acts on his own slot. A component also keeps what its
   last check found (score, "can act"), so each player's findings are put back
   into it while the game works on his.
@@ -218,8 +228,8 @@ alone.
   Player 2 bringing him the bombs got his greeting and was left holding them,
   so the goods (`ObjShopItem`) are nothing to the other players' A. Rupees are
   shared anyway.
-- `+0x4b8` is only moved for the components' checks. The camera, the HUD,
-  events, saving and the camera areas still follow Player 1.
+- "Link" is only another player for the components' checks. The camera, the
+  HUD, events, saving and the camera areas still follow Player 1.
 
 **Events** (`p1_event_tick`). While Player 1 is in an event (walked by a
 cutscene, an item held up, a talk), the others get no input
@@ -301,8 +311,28 @@ through, and with shared hearts a death is the game's own.
 
 **Enemies** (`coop_targets`). While an enemy's update runs
 (`COOP_ACTOR_EXEC_SITE` / `_DONE`, enemies told apart by their level name
-`Enemy...-<key>`), `+0x4b8` holds the Link it targets; it is Player 1's again
-after. Its components update on their own (the owner at `+0x48`). The one it
+`Enemy...-<key>`), "Link" is the Link it targets; Player 1 again after.
+
+*How "Link" is given* (`rt_coop_player`, 2026-11-13). The game reads "Link"
+from its game manager's player slot (`[GAME_MGR]+0x4b8`). Every 64-bit load
+at `+0x4b8` in the main program - 696 in 1.0.1, 531 of them with the game
+manager as their base as a pass through each function sees it, the rest with
+a base it couldn't follow; no `ldp` reaches it - is listed in
+`runtime/game_addresses/coop_player_reads_v1_0_1.txt` (made by
+`tools/coop_player_reads.py` from the game's main) and replaced
+(`tools/patches.py` `_player_read`) by a call that loads the slot and asks
+`rt_coop_player(base, value)`. It gives the Link the updating enemy goes for
+(`g_as_link`, set by `actor_exec_begin`, cleared by `actor_exec_end`) only on
+the game thread and only when the base is the game manager; any other read -
+another thread's, outside an update, co-op off, another object's `+0x4b8` -
+gets what the slot holds, Player 1. The 11 sites that are hooks already (the
+placement's, the collapse tile's, the Like Like's nine) aren't patched: they
+decide for themselves. The slot itself is never written. Until then it was
+swapped for the whole update (written with the target, put back after), which
+upstream's review (2026-11-12) pointed out a worker job reading "Link" during
+an enemy's update would see too. The A-button checks (`doaction_each`) give
+"Link" the same way. What still reads "Link" outside its enemy's update needs
+a hook of its own, as before (the Like Like's states, the collapse tiles). Its components update on their own (the owner at `+0x48`). The one it
 reacts to the player with keeps "Link" (`Zombie:ReactionComp +0x278`), and a
 zombie walked to Player 1 whoever it targeted. So the swap also covers its
 reaction component (the game's `EnemyReactionComponent`: `...ReactionComp`,
@@ -495,12 +525,17 @@ stairs' rock, `ObjRock-4800A5005B88BEDC`, back as he stepped onto them).
 - **Hit again at once:** one contact came off another player's hearts two to
   four times in the same moment (a third of all their hits in a session: user
   2026-11-01, "other players seem to be taking way more damage than p1"; a
-  blade trap's one hit, four times). Each of the game's damage sites stores
-  the hearts (`DAMAGE_*_SITES`), so the repeats are separate calls; their cause
-  wasn't found. Another player's hit within `HURT_GAP` (30 frames) of his last
-  costs nothing (logged "hit just now, unhurt"). Checked: Zols on Player 2 in
-  the Mysterious Forest, one heart-costing hit a contact (the build before:
-  two or three).
+  blade trap's one hit, four times). The cause (found 2026-11-13): the game's
+  enemy-hit function takes the hit off its hearts and then, only for a hit of
+  1 or more (`main+0xd4c788`: `cmp w24, #1; b.lt`), runs what follows a hit
+  for the Link hit - his controller's rumble and the time he can't be hit
+  again (his `+0x1e80`). Another player's hit, kept off his own hearts, was 0
+  to the game, so nothing stopped the same contact hitting him again on the
+  next frames. Now (`COOP_DAMAGE_HALVED_SITE`, case 49) the game sees the
+  hit's real size and reads its hearts as that much more, so it takes nothing
+  off them, and each Link gets his own time unhurt as Player 1 does. Until
+  then another player's hit within `HURT_GAP` (30 frames) of his last cost
+  nothing, which hid it (`LARECOMP_COOP_NO_HURT_GAP=1` turns it off, to check).
 - **Getting up:** a hit that knocks a player out leaves him in the knocked-back
   state (kind 11), which never ended under the lying pose, so a revived player
   couldn't move until a door reset him. The pose waits for his state to be
@@ -540,7 +575,9 @@ The zoom `g_zoom` is how many times further the view reaches. The base is 1.0
 to 1.6 in 0.1 steps (Camera zoom, Normal to Out 60%; default Out 50%). With
 "fit everyone" on, the camera zooms out further until every player who is up
 is inside 70% of the view (`back_need`), up to "Fit up to" (Out 10% to Out
-200%: 1.1 to 3.0; default 3.0), eased in and out, and never closer than the
+200%: 1.1 to 3.0; default Out 100%, 2.0 - upstream's review asked for the
+default near 2x; past it the overworld makes and draws much more, for a strong
+PC, as the option's description says), eased in and out, and never closer than the
 base. Out of play it is 1. The sky and sea margin (`rt_skysea_margin`) grows
 with it (`coop_camera_reach()`).
 - **On with co-op, always, or off** ("Zoom out", `coop_zoom_mode`, `zoom_on`):
@@ -690,6 +727,25 @@ by address and the name's start), the grass and rocks' check only for names
 starting `Obj`, the game thread check once per thread: 1.5 ms left at 2.5
 (with the hooks off, measured: 11.1 ms; on, 12.6).
 
+Measured again on 2026-11-13 (i7-13700K, the seed's start on the Field,
+standing; the game thread's CPU time a frame from `LARECOMP_LOG_PACE=1`; the
+co-op hooks' calls counted, and one call in 256 of every hook timed):
+
+| | game thread CPU a frame | co-op hook calls a frame | a hook call |
+|---|---|---|---|
+| alone, zoom off | 1.36 ms | 7,662 | about 31 ns (0.24 ms a frame) |
+| alone, "Zoom out" Always (1.5) | 1.72 ms | 7,640 | |
+| 4 players, zoom 1 | 1.75 ms | 6,226 | |
+| 4 players, zoom 2 | 2.95 ms | 6,363 | about 79 ns (0.5 ms a frame) |
+| 4 players, zoom 3 | 4.82 ms | 8,230 | |
+
+All held 60 fps. Alone, with co-op off, the hooks still cost about 0.24 ms a
+frame of the game thread (their sites run, and return at once) - about 1.4%
+of a 60 fps frame here; a slower CPU pays more. The zoom is the larger cost:
+3x took the game thread 2.8 times as long as 1x with 4 players, so the
+default fit is now 2x (Out 100%). Not measured on a weaker machine (an M1
+Air, a phone) as upstream's review asked: none was at hand.
+
 Effects drawn as a mesh around the camera, sized for the game's own view, showed
 their edge once the view was wider: the Mysterious Woods fog as a hard-edged
 oval. `widescreen_effect_stretch` already widened their viewport for wide
@@ -763,7 +819,19 @@ Prairie another player stood 30 units east and 20 west of Player 1, while at
 Tal Tal Heights idle players fell a few steps from him as he crossed into the
 next screen.
 
-**The pause menu** (`hold_on_p1`). The pause menu takes "the player's" spot as
+**The pause menu** (`hold_on_p1`). Upstream's review (item 2) asked for the
+read that takes the first Link made to be found and pointed at Player 1, in
+place of the hold below. Looked for on 2026-11-13, not found yet: a guard on
+the other Links' position copies (19, as below) as the menu opens and as a
+save is made showed no game function reading them that doesn't read them on
+every frame anyway, and the player component behind `[GAME_MGR]+0x4a8`
+(`+0x88`, `+0x618`, the route `runtime/hle/warp.c` checks) holds no Link. So
+the spot is most likely kept every frame from the first Link made by one of
+those per-frame readers, and the save copies it. The hold stays, safer: it
+writes only a copy that holds the Link's position now, and puts back only
+one still holding Player 1's spot (`HOLD_NEAR`).
+
+The pause menu takes "the player's" spot as
 it opens, for its map and for a save's restart point (file `0x559c`), from the
 first Link made: another player's. Not through the actors' name map (its
 "Player" entry repointed at Player 1 didn't change the file), nor from a pointer
@@ -861,7 +929,7 @@ only with "Zoom out" Always). On, four headings:
 | Camera | Zoom out | coop_zoom_mode | 0 | 0 with co-op (2+ players), 1 always (alone too), 2 off; shown without co-op |
 | | Camera zoom | coop_zoom | 5 | the least zoom, 10% steps out: 0 normal .. 6 out 60% |
 | | Zoom out to fit everyone | coop_camera_fit | 1 | further out to keep every player in view (shown with co-op) |
-| | Fit up to | coop_zoom_fit | 20 | the furthest fit goes, 10% steps: 1 out 10% .. 20 out 200% (3x as far) |
+| | Fit up to | coop_zoom_fit | 10 | the furthest fit goes, 10% steps: 1 out 10% .. 20 out 200% (3x as far); default out 100% (2x) |
 | | Indoor zoom | coop_zoom_indoor | 0 | houses, caves, dungeons: 0 normal .. 6 out 60%, no fit |
 | Co-op rules | Bring lost players back | coop_leash | 1 | players off screen are brought back to Player 1 |
 | | Only Player 1 triggers exits | coop_host_exits | 1 | only Player 1 leads everyone out |
@@ -951,15 +1019,21 @@ What was checked on 1.0.1, mostly with the test inputs above and
     rock or grass that comes back. (Found later the same day, from the user's
     log: see "Cut grass and thrown rocks" and its test below.)
 
-**ImGui checks.** `IM_ASSERT` (`third_party/imgui/imconfig.h`) calls
-`imgui_check_failed` (`runtime/ui/menu.mm`), which logs the failed check and a
-backtrace once per place and goes on, as a release ImGui (built without them)
-does, instead of stopping the game with a dialog. ImGui's recoverable errors (a
-Begin without its End, a Push without its Pop) don't go through it: ImGui puts
-them right at the frame's end, and they're logged (`imgui_errors_logged`, for
-both contexts). One check was seen with co-op on, in the Controls tab:
-`IsNamedKey(key)` in `GetKeyData` (a key code that isn't one); every key the
-runtime gives the menus was checked and is valid, so its cause isn't known yet.
+**ImGui checks.** ImGui's checks are upstream's own (`IM_ASSERT`, ImGui's
+error recovery): the fork's app-wide change (failed checks logged and let
+through, recoverable errors logged) was taken out on 2026-11-13, as upstream's
+review asked. The one check that had failed - `IsNamedKey(key)` in
+`GetKeyData`, in the Controls tab with co-op on - is Dear ImGui 1.91.9's own:
+a controller's West button (Xbox X; `ImGuiKey_NavGamepadMenu`) starts its
+window switching and sets `NavWindowingToggleLayer`; a keyboard key then makes
+the keyboard the input source, and the Alt-toggle code asks
+`IsKeyReleased(g.NavWindowingToggleKey)` with no toggle key
+(`ImGuiKey_None`). Several players pressing buttons while one uses the
+keyboard made it likely in co-op; upstream's build has it too. Dear ImGui
+fixed it in 1.92.0 (#8525); `third_party/imgui/imgui.cpp` has the guard
+(that code only for a toggle an Alt key started), marked "LAS Recomp". The
+cause was found by reading ImGui's code; a scripted run (menu open, West held,
+Enter) didn't make the check fail, so the fix isn't confirmed by one.
 - **A-button actions** (`tools/coop_tests/interact_check.sh`): Player 2 lifting and
   throwing a rock and a pot, opening a chest (the seashell at Field 07M),
   reading a sign (Field 04P),
@@ -1085,8 +1159,12 @@ runtime gives the menus was checked and is valid, so its cause isn't known yet.
 - **Slower PCs:** 60 fps at 3x was on an i7-13700K (the game's thread is the
   limit: single-threaded game code).
 
-- **Tunic colours** need the mod's `Playerlink.bfres`. Recolouring the tunic
-  at run time (as the cosmetics do) would remove the file and the restart.
+- **Tunic colours:** all eight need the mod's `Playerlink.bfres`; without it,
+  the game's own green, red and blue. Recolouring the tunic at run time, as
+  the cosmetics do, would remove the file and the restart: the cosmetics tint
+  a texture for every draw that samples it, and all the Links share Link's
+  textures, so each draw would have to be told which Link it is (by its model
+  matrix, as `pot_glow.c` tells objects apart) - not done yet.
 - **Manbo's warps and falls to a lower floor** weren't examined. Manbo's warp
   points are the song's arrivals, with no touch of their own: another player
   playing the song with his ocarina may still warp everyone.
