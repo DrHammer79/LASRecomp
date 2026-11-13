@@ -29,8 +29,9 @@ native Windows, macOS, Linux, Android and iOS application.
 ## This fork: local co-op
 
 This fork adds local co-op: 2 to 8 Links on one PC, one controller each, after the Switch mod LA_Coop_ExactStack_360.
-Everything else is upstream's [peiikai/LASRecomp](https://github.com/peiikai/LASRecomp) `beta_6`, and this branch
-(`coop`) is kept on top of it.
+Everything else is upstream's [peiikai/LASRecomp](https://github.com/peiikai/LASRecomp) `beta_6`, and this fork's
+co-op branch is kept on top of it. It calls itself LAS Recomp Co-Op (0.1.0): the `[fork]` line near the top of its
+`lasrecomp.log` says so.
 
 **What it adds**
 - Each player has their own hearts (or one shared pool). A player out of hearts is knocked out until another player
@@ -83,6 +84,7 @@ Everything else is upstream's [peiikai/LASRecomp](https://github.com/peiikai/LAS
 **Bugs:** co-op isn't part of upstream, so report co-op bugs on
 [this fork's Issues](https://github.com/DrHammer79/LASRecomp/issues), not peiikai's. Say how many players, where in the
 game and what happened, and attach `lasrecomp.log` from the data folder (where it is: under Building from source).
+The scripted runs co-op was checked with are in [tools/coop_tests](tools/coop_tests/README.md).
 
 ## System requirements
 
