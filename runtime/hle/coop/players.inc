@@ -197,6 +197,7 @@ int coop_reviving(int i) { return own_hearts() && i >= 0 && i < COOP_MAX && g_re
 // The HUD (runtime/ui/coop_hud.mm): each player's hearts, maximum, knocked out / revive progress and colour.
 typedef struct { int hp, max, down; float revive; uint32_t rgb; } CoopHudRow;
 uint32_t coop_colour_rgb(int player);
+uint32_t coop_colour_rgb_of(int colour);
 
 int coop_hud_rows(CoopHudRow *rows, int cap) {
     extern int game_in_play(void);
@@ -212,11 +213,13 @@ int coop_hud_rows(CoopHudRow *rows, int cap) {
 
 // The player who owns a colour set and its colour as drawn (hearts, the HUD): the co-op Playerlink.bfres's sets. Red
 // is a deeper crimson than the game's own heart red, so a red player's hearts don't read as "the" hearts.
-uint32_t coop_colour_rgb(int player) {
+uint32_t coop_colour_rgb_of(int colour) {  // (a colour set's, by its number)
     static const uint32_t k[COOP_COLOURS] = {0x2fa043, 0x8b1a2b, 0x2c49d6, 0xe8c11c, 0x5b2fbe, 0xd02fc4, 0x3a3a3a,
                                              0xdcdcdc};
-    int s = player >= 0 && player < COOP_MAX ? g_settings.coop_colour[player] : 0;
-    return k[s >= 0 && s < COOP_COLOURS ? s : 0];
+    return k[colour >= 0 && colour < COOP_COLOURS ? colour : 0];
+}
+uint32_t coop_colour_rgb(int player) {
+    return coop_colour_rgb_of(player >= 0 && player < COOP_MAX ? g_settings.coop_colour[player] : 0);
 }
 
 // Player 1's own (the game's) hearts in his colour (runtime/nvn/texpatch.c): true, rgb set.

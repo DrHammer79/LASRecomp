@@ -21,8 +21,6 @@ extern "C" {
 #include "../input_bind.h"
 #include "../settings.h"
 
-extern "C" int coop_colours_state(void);    // (runtime/hle/coop.c: 0 the tunic colours are in, 1 after a restart, 2 no file)
-extern "C" const char *coop_colours_path(void);  // (... where that file goes)
 extern "C" bool coop_supported(void);       // (... false once the game is a version without co-op)
 extern "C" const char *input_player_pad_name(int player);  // (runtime/hle/input.c: a player's controller, or NULL)
 extern "C" void input_assign_begin(int player);  // (runtime/hle/input.c: the next button pressed gives its controller)
@@ -367,21 +365,9 @@ static void coop_options(void) {
         return;
     }
     opt_indent(1);
-    if (int cs = coop_colours_state()) {
-        static char where[1400];
-        snprintf(where, sizeof where,
-                 "All eight tunic colors need the co-op mod's Playerlink.bfres at %s. Without it the other players "
-                 "wear the game's own green, red or blue tunic: their color when it is one of those, else one of them.",
-                 coop_colours_path());
-        opt_warn_next();
-        opt_action("Tunic colors", cs == 1 ? "Quit to Start Screen" : "Not installed",
-                   cs == 1 ? "The players' tunic colors load as the game starts. Quit to the Start Screen and play "
-                             "again: until then every Link wears Player 1's tunic."
-                           : where, false, false);
-    }
     static const char *const colours[COOP_COLOURS] = {"Green", "Red", "Blue", "Yellow", "Purple", "Pink", "Black",
                                                       "White"};
-    static char descs[8][360];
+    static char descs[8][440];
 #ifdef _WIN32
     // (Windows: Xbox-type controllers come through XInput, 4 at most - SDL's RawInput / WGI drivers are off by
     // default. An 8BitDo SN30 Pro in X-input mode, the fifth with four Xbox 360 pads in, didn't even start in Windows
@@ -402,7 +388,7 @@ static void coop_options(void) {
         snprintf(label, sizeof label, "Player %d color", i + 1);
         if (same) snprintf(also, sizeof also, " Player %d has this color too.", same);
         if (i == 0)
-            snprintf(descs[i], sizeof descs[i], "Player 1's tunic and hearts. Controller: keyboard%s%s.%s",
+            snprintf(descs[i], sizeof descs[i], "Player 1's tunic (the Red and Blue Mail stay as they are) and hearts. Controller: keyboard%s%s.%s",
                      pad ? " and " : "", pad ? pad : "", also);
         else
             snprintf(descs[i], sizeof descs[i], "Player %d's tunic and hearts. Controller: %s.%s%s", i + 1,

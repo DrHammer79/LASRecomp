@@ -217,6 +217,12 @@ int texpatch_bottle_kind(int id) {
          : g_refs[id].role == R_POWDER_MODEL ? 4 : g_refs[id].role == R_MAP_MODEL ? 5 : g_refs[id].role == R_POWER_PIECE_MODEL ? 6 : 0;
 }
 
+// (local co-op, runtime/hle/coop.c coop_tunic_tint: a draw sampling one of Link's tunic maps - 1 green, 2 red, 3 blue)
+int texpatch_tunic_kind(int id) {
+    if (id < 0 || id >= g_nrefs) return 0;
+    return g_refs[id].role == R_TUNIC ? 1 : g_refs[id].role == R_TUNIC_RED ? 2 : g_refs[id].role == R_TUNIC_BLUE ? 3 : 0;
+}
+
 int texpatch_heart_kind(int id) {
     if (id < 0 || id >= g_nrefs) return 0;
     return g_refs[id].role == R_HEART;
