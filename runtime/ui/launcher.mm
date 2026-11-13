@@ -1036,7 +1036,6 @@ extern "C" void launcher_play_seed(const char *seed) {
     g_play_seed_req = true;
 }
 static float g_menu_gap = 0.35f;  // space under each item, in line heights
-extern "C" void imgui_errors_logged(ImGuiContext *ctx);  // (runtime/ui/menu.mm: its recoverable errors logged)
 
 // The item just drawn, selected, takes A / Space / Enter while ImGui's nav cursor is hidden. ImGui activates the
 // selected item only with the cursor shown, and a selection made from code (SetKeyboardFocusHere,
@@ -2218,7 +2217,6 @@ extern "C" void launcher_run(const char *root) {
     ImGuiContext *prev_ctx = ImGui::GetCurrentContext();  // the in-game menu's, when back here after a reboot
     ImGuiContext *ctx = ImGui::CreateContext();
     ImGui::SetCurrentContext(ctx);
-    imgui_errors_logged(ctx);
     ImGuiIO &io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_NavEnableGamepad;
     io.IniFilename = NULL;

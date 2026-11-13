@@ -303,20 +303,19 @@ $(GAMELIB): $(GEN_OBJ) | $(EXE)
 	mv -f $@.tmp $@
 	echo $(GAMELIB_FULL_ID) > $@.id
 
-$(B)/rt/ui/%.o: runtime/ui/%.mm $(RT_HDRS) $(IMGUI)/imconfig.h
+$(B)/rt/ui/%.o: runtime/ui/%.mm $(RT_HDRS)
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) $(UIFLAGS) -c $< -o $@
 
-# (imconfig.h: our IM_ASSERT, in every ImGui object)
-$(B)/imgui/%.o: $(IMGUI)/%.cpp $(IMGUI)/imconfig.h
+$(B)/imgui/%.o: $(IMGUI)/%.cpp
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
-$(B)/imgui/imgui_impl_%.o: $(IMGUI)/backends/imgui_impl_%.cpp $(IMGUI)/imconfig.h
+$(B)/imgui/imgui_impl_%.o: $(IMGUI)/backends/imgui_impl_%.cpp
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
-$(B)/imgui/imgui_impl_metal.o: $(IMGUI)/backends/imgui_impl_metal.mm $(IMGUI)/imconfig.h
+$(B)/imgui/imgui_impl_metal.o: $(IMGUI)/backends/imgui_impl_metal.mm
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -fobjc-arc -c $< -o $@
 
