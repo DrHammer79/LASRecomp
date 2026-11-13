@@ -138,4 +138,3 @@ static bool cct_sweep(Cpu *c) {
     return !g_settings.coop_collision || game_side_view() || passing_at(vol[0], vol[1], vol[2]) ||
            passing_at(cap[0], cap[1], cap[2]);
 }
-

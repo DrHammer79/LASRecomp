@@ -411,4 +411,3 @@ static int dead_state(Cpu *c) {
     if (!g_down[i]) knock_out(i);
     return 2;  // (to the change's ret: the state stays)
 }
-
