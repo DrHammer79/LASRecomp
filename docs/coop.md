@@ -334,8 +334,19 @@ decide for themselves. The slot itself is never written. Until then it was
 swapped for the whole update (written with the target, put back after), which
 upstream's review (2026-11-12) pointed out a worker job reading "Link" during
 an enemy's update would see too. The A-button checks (`doaction_each`) give
-"Link" the same way. What still reads "Link" outside its enemy's update needs
-a hook of its own, as before (the Like Like's states, the collapse tiles). Its components update on their own (the owner at `+0x48`). The one it
+"Link" the same way. A read of "Link" outside its enemy's update is answered
+at that read: the Like Like's states (`COOP_LIKELIKE_SITE_0..8`: x19 holds the
+Like Like, fetched by its state code - the player it goes for) and the
+collapse tiles' job (`COOP_TILE_PLAYER_SITE`, x19 the tile: the player nearest
+it) - the places that fetch the player for that object, as upstream's review
+(item 1) asked, not a swap. Which register holds the object differs at each:
+looked for on 2026-11-13, the x0 a read's function was called with (its
+`this`) is that object at none of these ten (a state object, overwritten
+first), so they can't be told from the code's shape alone. Four of the Zol's
+reads (`main+0x799ab4`, `0x79ae3c`, `0x79d96c`, `0x79df00`) are patched reads;
+in its update they give its target; they never ran in the tests.
+
+Its components update on their own (the owner at `+0x48`). The one it
 reacts to the player with keeps "Link" (`Zombie:ReactionComp +0x278`), and a
 zombie walked to Player 1 whoever it targeted. So the swap also covers its
 reaction component (the game's `EnemyReactionComponent`: `...ReactionComp`,
@@ -737,7 +748,12 @@ co-op hooks' calls counted, and one call in 256 of every hook timed):
 
 All held 60 fps. Alone, with co-op off, the hooks still cost about 0.24 ms a
 frame of the game thread (their sites run, and return at once) - about 1.4%
-of a 60 fps frame here; a slower CPU pays more. The zoom is the larger cost:
+of a 60 fps frame here; a slower CPU pays more. Deciding that co-op is off is
+cheap (the count is kept: `rt_coop_players`); the cost is the hook sites'
+dispatch itself - the call from the game's code into `rt_hook`, the site's
+lookup (`hook_id`'s cache), the switch. Taking it away with co-op off would
+need the code generator to check a flag at each site before the call (a
+change to every hook, upstream's `tools/gen.py`): not done. The zoom is the larger cost:
 3x took the game thread 2.8 times as long as 1x with 4 players, so the
 default fit is now 2x (Out 100%). Not measured on a weaker machine (an M1
 Air, a phone) as upstream's review asked: none was at hand.
