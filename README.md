@@ -153,7 +153,7 @@ GetMoreRam. More on the iOS app is there too.
   mirror mode and faster walking.
 - Cosmetics: colours for Link, the grass, water, walls and more, weather (looks only), and Game Boy style filters.
 - Optional run timer, with LiveSplit support.
-- Local co-op for 2 to 8 players, one controller each (game versions 1.0.1 and 1.1.0), after the LA_Coop_ExactStack_360 mod: separate hearts with knock-outs and revives, enemies that go after the nearest player, and a colour for each player. Set it up in the Controls tab. Tunic colours need the mod's `Playerlink.bfres` in `coop/romfs/region_common/actor/`.
+- Local co-op for 2 to 8 players, one controller each (game versions 1.0.1 and 1.1.0), after the [Link's Awakening Multiplayer](https://gamesdb.launchbox-app.com/games/details/422143-the-legend-of-zelda-links-awakening-multiplayer) mod by Estuko and Geek Joystick: separate hearts with knock-outs and revives, enemies that go after the nearest player, and a colour for each player. Set it up in the Controls tab. Tunic colours need the mod's `Playerlink.bfres` in `coop/romfs/region_common/actor/`.
 
 ## Building from source
 
