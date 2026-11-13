@@ -39,8 +39,8 @@ co-op branch is kept on top of it. It calls itself LAS Recomp Co-Op (0.1.0): the
 - Each player has their own hearts (or one shared pool). A player out of hearts is knocked out until another player
   revives them by holding A beside them.
 - Enemies go after the nearest player, not only Player 1.
-- A colour for each player: their hearts, and their tunic - green, red or blue with the game's own files, any of
-  eight with the mod's tunic file in place (below).
+- A colour for each player, one of eight: their hearts and their tunic, coloured as the game draws them (no extra
+  file needed).
 - The camera zooms out to keep everyone on screen.
 - Players left off screen are brought back to Player 1, and only Player 1 leads everyone through exits (both can be
   turned off).
@@ -52,10 +52,6 @@ co-op branch is kept on top of it. It calls itself LAS Recomp Co-Op (0.1.0): the
 3. In the menu's Controls tab, under Co-op, set Players. For each player, choose "Player N controller" and press a
    button on that player's controller.
 4. Load a save: the other Links join from the next file loaded.
-5. Optional tunic colours: put the co-op mod's `Playerlink.bfres` in `coop/romfs/region_common/actor/` in the data
-   folder (on Windows, next to `lasrecomp.exe`), then Quit to Start Screen and play again. Without it the other players
-   wear the game's own green, red or blue tunic (their colour when it is one of those), and the hearts still show each
-   player's colour.
 
 **Settings** (Controls tab, right under Inputs)
 
@@ -207,7 +203,7 @@ The iOS app is made on your computer from your own game files, then sideloaded.
 - Optional extras: 360-degree movement, blur removal, mirror mode, faster walking and hiding the Hero Mode icon.
 - Cosmetics: change Link's tunic, hair, skin and shield colours, the colour of the grass, leaves and sand (with season presets), the water, fences, walls and houses, give enemies random colours, or play with a Game Boy, Game Boy Color or grayscale filter.
 - Optional run timer, with LiveSplit support.
-- Local co-op for 2 to 8 players, one controller each (game versions 1.0.1 and 1.1.0), after the [Link's Awakening Multiplayer](https://gamesdb.launchbox-app.com/games/details/422143-the-legend-of-zelda-links-awakening-multiplayer) mod by Estuko and Geek Joystick: separate hearts with knock-outs and revives, enemies that go after the nearest player, and a colour for each player. Set it up in the Controls tab. Tunic colours need the mod's `Playerlink.bfres` in `coop/romfs/region_common/actor/`.
+- Local co-op for 2 to 8 players, one controller each (game versions 1.0.1 and 1.1.0), after the [Link's Awakening Multiplayer](https://gamesdb.launchbox-app.com/games/details/422143-the-legend-of-zelda-links-awakening-multiplayer) mod by Estuko and Geek Joystick: separate hearts with knock-outs and revives, enemies that go after the nearest player, and a colour for each player. Set it up in the Controls tab.
 
 **Randomizer**
 - In-game seed generator, with seed IDs for sharing and separate saves for each seed.
