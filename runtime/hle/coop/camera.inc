@@ -279,7 +279,6 @@ static void zoom_tick(bool play) {
     float aspect = 16.0f / 9.0f * widescreen_factor();
     bool fit = g_settings.coop_camera_fit && top > base;
     g_back_on = play && zoom_field();
-    if (play && g_held_at) return;  // (the pause menu's hold: everyone on Player 1's spot - the zoom stays as it was)
     if (!play || !zoom_on()) want = 1.0f;
     else if (fit) {  // (each player who is up inside 0.7 of the view - not one lost below the world; never in of base)
         float p[3];

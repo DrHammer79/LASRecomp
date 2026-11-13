@@ -204,8 +204,12 @@ def _damage_lsl(gen, a):
     rd, rn, rm = w & 31, (w >> 5) & 31, (w >> 16) & 31
     hit = f'rt_damage((int32_t)c->x[{rn}], (int32_t)(c->x[{rm}] & 31))'
     if not (A.COOP_DAMAGE_HALVED_SITE and a == DAMAGE_LSL_SITES[2]):
-        hit = f'rt_coop_damage(c, {hit})'
-    return (f'{{ extern int32_t rt_damage(int32_t, int32_t); extern int32_t rt_coop_damage(Cpu *, int32_t); '
+        # (the Link hit, where the game's code holds him: the second site's function keeps him in x20; the third's, an
+        # enemy's hit where the version has no halving site, in x21; the first is an event's damage command - no Link,
+        # Player 1's: every event plays on him)
+        link = {DAMAGE_LSL_SITES[1]: 'c->x[20]', DAMAGE_LSL_SITES[2]: 'c->x[21]'}.get(a, '0')
+        hit = f'rt_coop_damage_of(c, {hit}, {link})'
+    return (f'{{ extern int32_t rt_damage(int32_t, int32_t); extern int32_t rt_coop_damage_of(Cpu *, int32_t, uint64_t); '
             f'c->x[{rd}] = (uint32_t){hit}; }}'
             f'  /* {a:#x}: lsl w{rd}, w{rn}, w{rm} (damage) */')
 
@@ -1231,6 +1235,11 @@ _COOP_HOOKS = {
     # (rt_coop_damage) is here, not at the lsl: there, Player 1's hits were halved and the others' weren't (user
     # 2026-11-02, "P1 takes hardly any damage, and other players take full damage").
     A.COOP_DAMAGE_HALVED_SITE: (0x79410908, (), 'ldrh w8, [x8, #0x84]: an enemy\'s hit (w20), after its halving'),
+    # A Link's update (main+0xd355c0, x19 the Link) looks up the player entity's object (the game manager's +0x4a8,
+    # main+0x11b70) and keeps his spot on safe ground in it (+0x680, snapped; +0x690 his facing; +0x694 set): the
+    # save's restart point (main+0xdfc710 -> main+0xdfcb90, file +0x559c). Every Link did, so it was the last one
+    # updated - the first one made. Only Player 1's finds the object.
+    A.COOP_RESTART_SITE: (0xf9425681, (), 'ldr x1, [x20, #0x4a8]: a Link\'s update looks up the player entity (its restart point)'),
 }
 HOOKS.update({a: h for a, h in _COOP_HOOKS.items() if a})
 
