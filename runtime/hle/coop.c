@@ -47,8 +47,6 @@ static int g_creating = -1;         // the player coop_create is making a Link f
 static int g_placing = -1;          // the player coop_place is placing (-1: none)
 static int g_entering;              // inside coop_enter's own call of the walk-in
 static uint64_t g_placed_frame;     // when the players were last put on a spawn point (renderer frame)
-static uint64_t g_held_at;          // the pause menu's hold: when the others were put on Player 1's spot (0: they
-                                    // aren't) - their positions then aren't theirs (hold_on_p1)
 static uint64_t g_lost_until[COOP_MAX];  // a player lost below the world: put on Player 1 at this frame (0: he isn't;
 static bool g_lost_parked[COOP_MAX];     // ... standing again, parked out of sight until then - lost_tick)
 
@@ -172,6 +170,7 @@ static bool alone_hook(int which) {
     case 17: return zoom_on() || g_back != 0;
     case 33: case 34: case 35: return g_back_on;
     case 38: return g_zoom > 1.0f;
+    case 50: return g_leftover;  // (a Link left over can be the one updated last)
     }
     return false;
 }
@@ -265,10 +264,10 @@ int rt_coop_hook(Cpu *c, int which) {
         if (!on_game_thread()) return 0;
         uint64_t a = heap_ptr(c->x[0]) ? LD64(c->x[0] + 8) : 0;
         g_updating = heap_ptr(a) ? a : 0;
-        // A Link's (only Links are held, lost or made: another actor made where a Link was isn't one of them):
-        // held on Player 1's spot for the pause menu (hold_on_p1); off the map after falling through it (lost_tick)
+        // A Link's (only Links are lost or made: another actor made where a Link was isn't one of them): off the map
+        // after falling through it (lost_tick)
         bool link = g_updating && LD64(g_updating) == GA(PLAYER_VTABLE) && (rt_coop_on() || g_leftover);
-        if (link && (pause_updated(g_updating) || lost_away(g_updating))) return skip_update(c);
+        if (link && lost_away(g_updating)) return skip_update(c);
         int made = link ? made_index(g_updating) : -1;
         if (made >= 0) {
             g_made[made].seen = renderer_present_count();
@@ -388,6 +387,17 @@ int rt_coop_hook(Cpu *c, int which) {
         c->x[20] = (uint32_t)got;
         return 0;
     }
+    case 50:  // COOP_RESTART_SITE - ldr x1, [x20, #0x4a8]: a Link's update (x19) looks up the player entity
+        // The game keeps the save's restart point in the player entity's object (+0x680: the spot on safe ground, snapped
+        // to 0.75; +0x690 the facing; +0x694 set), which each Link's update writes (main+0xd355c0) - every Link's, so it
+        // was the last one updated, the first one made: a save with him away restarted Player 1 on his spot, and one with
+        // him fallen through the ground had Link falling forever (user 2026-10-28). The save copies it (main+0xdfc710 ->
+        // main+0xdfcb90, file +0x559c). Another player's Link (or one left over) finds no entity there, the game's own
+        // path for that (main+0xd35788 cbz): only Player 1's keeps the restart point, as alone. (Until 2026-11-13 the
+        // others' 19 position copies were held on Player 1's spot while the pause menu was open.)
+        if (c->x[19] == host_player() || (!coop_index(c->x[19]) && made_index(c->x[19]) < 0)) return 0;
+        c->x[1] = 0;
+        return 1;
     }
     return 0;
 }
@@ -511,7 +521,6 @@ static void play_ended(void) {
     hearts_forget();
     memset(g_asleep, 0, sizeof g_asleep);
     memset(g_sleep_anim, 0, sizeof g_sleep_anim);
-    hold_forget();  // (play ended from the pause menu: the next file's Links aren't held, and nothing is written back)
     lost_forget();
     act_forget();
     g_p1_event = g_p1_walk_in = false, g_talking = false, g_talker = 0;
@@ -525,8 +534,6 @@ void coop_level_change(const char *level, const char *locator) {
     extern const char *chaos_current_level(void);  // runtime/ui/chaos_overlay.mm
     actor_class_forget();  // (a new level: its actors' addresses are others')
     g_level_changed = renderer_present_count();
-    if (g_held_at) hold_release();  // (a warp while paused: the others back where they were, in this level still)
-    g_hold_next = false;
     if (!g_act_calls && !g_act_swapped) act_forget();  // (the old level's components: none of the slots' any more)
     if (!rt_coop_on() || !game_in_play()) return;
     const char *lv = chaos_current_level();
@@ -569,10 +576,7 @@ void coop_tick(Cpu *c) {
     }
     g_hud_host = host_player(), g_hud_cam = view_camera();  // (for the HUD: as the frame starts)
     g_leftover = made_spare(0) >= 0;
-    if (!rt_coop_on()) {  // (Links left over from a session with more players - parked: the pause menu's hold too)
-        if (play && g_leftover) pause_tick();
-        return;
-    }
+    if (!rt_coop_on()) return;
     p1_event_tick();
     a_press_tick(renderer_present_count());
     if (g_p1_walk_in && !g_talking)  // (a talk walks Player 1 up to the one he talks to, a walk-in too: coop_enter)
@@ -598,10 +602,7 @@ void coop_tick(Cpu *c) {
     }
     hearts_tick(c);
     sleep_tick(c);
-    if (play) {  // (while the pause menu holds the others on Player 1's spot their positions aren't theirs: g_held_at)
-        pause_tick();
-        if (!g_held_at) down_move_tick(c), lost_tick(), leash_tick(), room_follow_tick();
-    }
+    if (play) down_move_tick(c), lost_tick(), leash_tick(), room_follow_tick();
     extern uint64_t input_coop_buttons(int player);
     uint64_t frame = renderer_present_count();
     static int test_die;  // LARECOMP_COOP_DIE=<player>,... (test): those players sent to the dead state 3 s after they
@@ -623,7 +624,7 @@ void coop_tick(Cpu *c) {
             }
             if (!*p) break;
         }
-    for (int i = 1; i < g_n && !g_held_at; i++) {
+    for (int i = 1; i < g_n; i++) {
         if (!collision_of(g_extra[i])) continue;
         // both sticks pressed in: back to Player 1 (the mod's CheckAndTeleport)
         uint64_t b = input_coop_buttons(i);

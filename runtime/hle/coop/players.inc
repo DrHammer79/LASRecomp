@@ -146,21 +146,6 @@ static int made_spare(int k) {
 }
 static uint64_t made_take_back(void) { int k = made_spare(0); return k < 0 ? 0 : g_made[k].actor; }
 
-// The pause menu takes "the player's" spot as it opens - for its map, and for a save's restart point - from the first
-// Link made: another player's (Player 1's is made last: the scene's camera is the last Link's; made first, the camera
-// wasn't Player 1's). Not through the actors' name map (its "Player" entry repointed at Player 1 didn't change the
-// file), nor from a pointer kept anywhere found, nor at save time (his position copies all on Player 1 while paused
-// didn't change it). A file saved with him far away - fallen through ground that isn't loaded - loaded with Link
-// falling forever (user 2026-10-28; with 2 players, saved with Player 2 9 units away, the file held Player 2's spot).
-// So as Player 1 presses + or - (the pause menu, the map), every other Link's position - every copy his components
-// keep - is Player 1's for the pause, put back once it is over (checked: saved with Player 2 away, the file holds
-// Player 1's spot, and Player 2 is back on his own after the menu closes, walking).
-static const uint16_t k_pos_copies[][2] = {  // ([Link + component] + offset: found 2026-10-28 by value)
-    {0x80, 0x80}, {0x80, 0xb0}, {0x80, 0x350}, {0x2a8, 0xb0}, {0x2d8, 0x80}, {0x2d8, 0xb0}, {0x2d8, 0x350},
-    {0x2e8, 0xb0}, {0x318, 0x380}, {0x328, 0xb0}, {0x378, 0xb0}, {0x388, 0xb0}, {0x3c0, 0x350}, {0x3d0, 0x1f0},
-    {0x4a0, 0xb0}, {0x5b8, 0x290}, {0x1358, 0x290}, {0x1850, 0x2f0}, {0x19d0, 0x1f0}};
-#define NPOS (sizeof k_pos_copies / sizeof k_pos_copies[0])
-
 // A knocked-out player hit again and again (down_hit) goes onto Player 1's spot as one fallen through the world does
 // (lost_tick): standing still (his state kind 0), he's taken off the map, his update not running, then put on Player
 // 1. Moved while knocked back or falling - his collision's position, or every copy a standing Link keeps - his state
@@ -192,87 +177,6 @@ static void down_move_tick(Cpu *c) {
         g_down_moved_until[i] = g_lost_until[i] + 120;  // (and 2 s once he's there)
     }
 }
-
-static uint64_t g_p1_updated;          // (the frame Player 1's update last ran)
-
-static struct { uint64_t addr; float v[3]; } g_held[(COOP_MAX + MADE_MAX) * NPOS];
-static int g_nheld;
-
-// Only a copy that holds his position now (within HOLD_NEAR of his collision's) is written - one of these offsets held a
-// pointer once, written over, the game crashed - and only one still holding Player 1's spot goes back (hold_release).
-#define HOLD_NEAR 2.0f
-static float g_held_h[3];  // (Player 1's spot, written into them)
-static void hold_link(uint64_t link, const float h[3]) {
-    float me[3];
-    if (!collision_of(link) || !player_pos(link, me)) return;
-    memcpy(g_held_h, h, sizeof g_held_h);
-    for (size_t k = 0; k < NPOS && g_nheld < (int)(sizeof g_held / sizeof *g_held); k++) {
-        uint64_t comp = LD64(link + k_pos_copies[k][0]), a = comp + k_pos_copies[k][1];
-        bool dup = false;
-        for (int j = 0; j < g_nheld && !dup; j++) dup = g_held[j].addr == a;
-        if (!heap_ptr(comp) || dup) continue;
-        float v[3];
-        memcpy(v, (const void *)(uintptr_t)a, 12);
-        if (!(fabsf(v[0] - me[0]) < HOLD_NEAR && fabsf(v[1] - me[1]) < HOLD_NEAR && fabsf(v[2] - me[2]) < HOLD_NEAR))
-            continue;
-        g_held[g_nheld].addr = a;
-        memcpy(g_held[g_nheld].v, (const void *)(uintptr_t)a, 12);
-        memcpy((void *)(uintptr_t)a, h, 12);
-        g_nheld++;
-    }
-}
-
-
-
-static void hold_on_p1(void) {
-    float h[3];
-    if (g_held_at || !player_pos(host_player(), h)) return;
-    g_nheld = 0;
-    for (int i = 1; i < g_n; i++) hold_link(g_extra[i], h);
-    // (and the Links left over, parked below the level: the first one made can be one of them - co-op turned off, it
-    // is - and the menu would take its spot)
-    for (int k = made_spare(0); k >= 0; k = made_spare(k + 1)) hold_link(g_made[k].actor, h);
-    g_held_at = renderer_present_count();
-    CLOG("[coop] pause menu: the other players on Player 1's spot (%d copies)\n", g_nheld);
-}
-
-static void hold_release(void) {
-    for (int j = g_nheld - 1; j >= 0; j--)
-        if (!memcmp((const void *)(uintptr_t)g_held[j].addr, g_held_h, 12))  // (still what we put there)
-            memcpy((void *)(uintptr_t)g_held[j].addr, g_held[j].v, 12);
-    CLOG("[coop] pause over: the other players back (%d copies)\n", g_nheld);
-    g_nheld = 0, g_held_at = 0;
-}
-
-static bool g_hold_next;  // (+ or - pressed: hold as Player 1's update - which opens the menu - runs)
-// (play over, or a reset: the hold forgotten, nothing written back - its components may be gone)
-static void hold_forget(void) { g_nheld = 0, g_held_at = 0, g_hold_next = false; }
-
-static void pause_tick(void) {
-    extern uint64_t input_buttons_now(void);  // (runtime/hle/input.c: Player 1's buttons, by BIND_*)
-    static uint64_t last;
-    uint64_t b = input_buttons_now();
-    uint64_t pressed = b & ~last & (1ull << BIND_PLUS | 1ull << BIND_MINUS);
-    last = b;
-    // (not while held: + closing the menu held them again as it closed, for 8 more frames)
-    if (pressed && !g_p1_event && !g_held_at) g_hold_next = true;
-}
-
-// An actor's update about to run. Player 1's on the frame + or - was pressed holds the others on his spot (the menu
-// opens after the frame's updates); theirs don't run while they're held - their own code never sees the copies
-// changed - and once Player 1's runs again after the pause (or 8 frames on, no menu), they're let go. True: skip it.
-static bool pause_updated(uint64_t actor) {
-    if (!actor) return false;
-    uint64_t now = renderer_present_count();
-    if (actor == host_player()) {
-        if (g_held_at && (now >= g_p1_updated + 2 || now > g_held_at + 8)) hold_release();
-        g_p1_updated = now;
-        if (g_hold_next) g_hold_next = false, hold_on_p1();
-        return false;
-    }
-    return g_held_at && (coop_index(actor) || made_index(actor) >= 0);
-}
-RT_ON_RESET(coop_pause_reset) { g_p1_updated = 0, hold_forget(); }
 
 // (neither while Player 1 is in an event - nobody else can act then: they showed over the warp holes' "Where to?" map,
 // 2026-10-28)
