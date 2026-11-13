@@ -182,14 +182,11 @@ static bool floor_name(const char *name) {
         if (!strncmp(name, kinds[i], strlen(kinds[i]))) return true;
     return false;
 }
-enum { GONE_NEW, GONE_LIVE, GONE_NOTED };  // (grass and rocks: not looked at yet; looked at; its death seen)
 typedef struct {
     uint64_t actor, name;  // (its name's first 24 bytes, folded)
-    uint64_t key;          // (grass and rocks: its name's hash - the level object's id; 0: not one of them)
     uint32_t seen;         // (the frame it was last looked up in)
-    uint8_t what, gone;
+    uint8_t what;
 } ActorClass;
-static uint64_t gone_key(const char *name);
 static ActorClass g_ac[AC_SETS][AC_WAYS];
 static bool g_ac_used;  // (an entry made since it was cleared: every level change clears it, with co-op off too)
 static void actor_class_forget(void) {
@@ -209,7 +206,7 @@ static ActorClass *actor_class(uint64_t actor) {
     e->seen = now, g_ac_used = true;
     char name[64];
     snprintf(name, sizeof name, "%.63s", nm);
-    e->actor = actor, e->name = tag, e->key = gone_key(name), e->gone = GONE_NEW;
+    e->actor = actor, e->name = tag;
     // (the reaction part is "...ReactionComp" or, for 28 kinds - Zols, Armos, Pokey, Togezo... - "...ReactionCom": red
     // Zols hopped at Player 1 whoever they targeted, user 2026-10-28)
     e->what = strstr(name, "React") || strstr(name, "PlayerComp") ? AC_ENEMY_PART
