@@ -110,24 +110,34 @@ them (at the start screen) gave a Link that never moved. Those events are kept
 (`hid_bind_style_event`), and `input_style_changed()` signals them again
 whenever the player count changes out of play.
 
-**Colours.** `COOP_COLOR_SITE` picks each Link's tunic frame from the mod's
-`Playerlink.bfres`: 24 colour frames, 3 per colour set. It is served from
-`<data root>/coop/romfs/region_common/actor/Playerlink.bfres` when that file
-exists (`coop_romfs_override`, `runtime/services/fs.c`). The repository can't
-ship it: it is the mod's edit of a game file. Without it the game still plays,
-and the other players wear the game's own three tunics (frames 0 green, 1
-red, 3 blue): each one's colour if it is one of those, else one of them by
-his number; Player 1 keeps his own. Only that one file is served from there
-(other game files copied in from the mod's own romfs aren't). The file is picked up when the RomFS is
-indexed, as the game boots (again after Quit to Start Screen). The Controls tab
-says when it is missing, with the path it goes to (`coop_colours_path`), or
-when co-op was turned on after the game started and it comes with Quit to
-Start Screen (`coop_colours_state`). Before the game has started, nothing is
-shown: the colours come as it starts. Co-op turned off after it started, the
-file is still in: each Link's frame then picks the game's own tunic's set in
-it (green, red, blue), and the countdown's move (below) is no longer applied.
-Co-op's RomFS files go before a randomizer seed's (an older seed's tunic
-`Playerlink.bfres`: the colours need co-op's).
+**Colours** (`coop_tunic_tint`, 2026-11-13: no edited game file, as upstream's
+review asked, item 7). Every player's tunic is coloured as it is drawn. The
+game's Link material samples his tunic map (`MI_body_alb.0`, `.1`, `.2` in
+`Playerlink.bfres`: green, Red Mail, Blue Mail - recognised on upload,
+`texpatch_tunic_kind`). Each Link's draws carry his bone matrices (uniform
+buffer 3), and the first one's translation is his position (found with a
+probe: within 0.05 of it), so the renderer (Vulkan `exec.c`, Metal
+`renderer.m`) asks for each such draw whose Link it is, and that player's
+colour comes from the per-draw HSV tint the Cosmetics tab's live recolours use
+(`runtime/nvn/recolour.c`): the green tunic's hue window (or the Cosmetics
+tab's tunic colour's, the green map being recoloured to it on upload) moved
+to his colour, its saturation and value scaled, the shading kept; the leather,
+skin and hair, outside the window, stay. The other players wear the green
+tunic (`COOP_COLOR_SITE`: frame 0) and take their colour this way; Player 1
+keeps the game's own tunic (the Red and Blue Mail stay as they are) and is
+tinted only when he chose another colour than Green. Checked with 8 players
+(the default colours): green (Player 1's Blue Mail), red, blue, yellow,
+purple, pink, black and white tunics, each shaded as the game's.
+- The players' positions for it are taken as each frame starts (game thread,
+  `tunic_tick`); a draw goes to the nearest within 0.75.
+- The co-op mod's `Playerlink.bfres` (24 colour frames, 3 per colour set) is
+  still used if it's there (`<data root>/coop/romfs/region_common/actor/`,
+  `coop_romfs_override`, picked up as the RomFS is indexed: as the game boots,
+  again after Quit to Start Screen): `COOP_COLOR_SITE` then picks each Link's
+  set, and nothing is tinted. Only that file is served from there. It isn't
+  needed, and the repository doesn't ship it (an edit of a game file). Co-op's
+  RomFS files go before a randomizer seed's (an older seed's tunic
+  `Playerlink.bfres`).
 Red is a deeper crimson (0x8b1a2b) than the game's heart red, so a red
 player's hearts don't read as the game's own.
 
@@ -1158,12 +1168,8 @@ Enter) didn't make the check fail, so the fix isn't confirmed by one.
 - **Slower PCs:** 60 fps at 3x was on an i7-13700K (the game's thread is the
   limit: single-threaded game code).
 
-- **Tunic colours:** all eight need the mod's `Playerlink.bfres`; without it,
-  the game's own green, red and blue. Recolouring the tunic at run time, as
-  the cosmetics do, would remove the file and the restart: the cosmetics tint
-  a texture for every draw that samples it, and all the Links share Link's
-  textures, so each draw would have to be told which Link it is (by its model
-  matrix, as `pot_glow.c` tells objects apart) - not done yet.
+- **Tunic colours on Metal** (macOS, iOS): the same call as Vulkan's
+  (`renderer.m`), not run: checked on Windows (Vulkan) only.
 - **Manbo's warps and falls to a lower floor** weren't examined. Manbo's warp
   points are the song's arrivals, with no touch of their own: another player
   playing the song with his ocarina may still warp everyone.
