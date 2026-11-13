@@ -23,6 +23,14 @@
 
 #define COOP_MAX 8
 
+// This fork's own name and version, the log's [fork] line just before upstream's [info] line (runtime/main.c). Co-op
+// isn't upstream's: a co-op bug filed on upstream's issues by mistake is told from its log at once, and sent here.
+#define COOP_FORK_VERSION "0.1.0"
+const char *coop_fork_name(void) {
+    return "LAS Recomp Co-Op " COOP_FORK_VERSION ", a fork of LAS Recomp with local co-op - report its bugs at "
+           "https://github.com/DrHammer79/LASRecomp/issues";
+}
+
 static int g_n = -1;                // players (rt_coop_players; read again out of play: coop_tick)
 static uint64_t g_extra[COOP_MAX];  // players 2..8: their Link actors ([0] unused: Player 1 is the game's own)
 static int g_creating = -1;         // the player coop_create is making a Link for (-1: none)

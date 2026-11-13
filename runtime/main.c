@@ -263,6 +263,10 @@ static void log_startup_info(void) {
     char ram[32] = "RAM unknown";
     if (si.ram && tenths % 10) snprintf(ram, sizeof ram, "%llu.%llu GB RAM", tenths / 10, tenths % 10);
     else if (si.ram) snprintf(ram, sizeof ram, "%llu GB RAM", tenths / 10);
+    // (hle/coop.c: this fork's own line first, so its logs aren't taken for upstream's; the [info] line after it stays
+    // as upstream's tools/log_triage.py reads it)
+    extern const char *coop_fork_name(void);
+    fprintf(stderr, "[fork] %s\n", coop_fork_name());
     fprintf(stderr, "[info] LAS Recomp %s, %s, %s%s, %s%s%s\n", larecomp_version(), si.os[0] ? si.os : "unknown OS",
             si.cpu[0] ? si.cpu : "unknown CPU", cores, ram, si.package ? ", " : "", si.package ? si.package : "");
 }
