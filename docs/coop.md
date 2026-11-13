@@ -42,8 +42,8 @@ back a live one that no player holds before making a new one. One that is left
 over anyway is put out of the way (under the map) and its update is skipped
 (`COOP_ACTOR_EXEC_SITE`). That goes on with co-op turned off too (`g_leftover`:
 the game keeps the Links through a Game Over's Continue and a return to the
-title, and they copied Player 1), and the pause menu's hold takes them in (see
-"The pause menu").
+title, and they copied Player 1), and they don't keep the save's restart point
+(see "The save's restart point").
 
 **Spawns.** A placement at a spawn point (`COOP_PLACE_SITE`) is run for each
 player on the same spot, Player 1 last (`COOP_PLACE_PLAYER_SITE` picks the
@@ -450,9 +450,18 @@ and zoomed out the view had reached past the screens made.
 - **Shared:** the game's one set, as without co-op.
 - **Each player's own:** Player 1 keeps the game's hearts (PlayerStatus `+0x84`)
   and its HUD; the others' hearts are in coop.c. The damage patches
-  (`DAMAGE_*` in `tools/patches.py`) call `rt_coop_damage(c, rt_damage(...))`,
-  and a hit on players 2.. comes off their own hearts. The Link a hit is on is
-  found in the state code's callee-saved registers (`running_player`).
+  (`DAMAGE_*` in `tools/patches.py`) call `rt_coop_damage_of(c, rt_damage(...),
+  link)`, and a hit on players 2.. comes off their own hearts. The Link hit is
+  the one the game's code holds: the enemy-hit function's x21
+  (`COOP_DAMAGE_HALVED_SITE`, or the third lsl site where a version has no
+  halving site), the fixed hits' (a pit, deep water) x19, the second lsl
+  site's function (`main+0xd96830`) x20; the first lsl site is an event's
+  "damage" command (`main+0xd7c870`) with no Link, Player 1's, as every event
+  plays on him. Until 2026-11-13 the Link was found by scanning the
+  callee-saved registers for one (`running_player`), which upstream's review
+  pointed out nothing guarantees. Checked: Player 2 held in Angler's Tunnel's
+  spikes is hit 19 times in 25 s and Player 1 never; the Like Like's hit on
+  Player 2 is his.
 - **Halved hits:** an enemy's hit (the third `DAMAGE_LSL_SITES`) is halved by
   the game after it is computed: flag 0x6f (`main+0x8d1a30`) or PlayerStatus
   `+0x9c` negative (the Blue Clothes, a Guardian Acorn). Both ways meet at an
@@ -583,9 +592,7 @@ with it (`coop_camera_reach()`).
   seconds over screens no longer made), and `COOP_CAMERA_SITE` runs once more
   alone to put the camera's own values back.
 - **Who counts:** players who are up, not one lost below the world (parked at
-  y −1000 he took the zoom and the boxes of screens to their largest), and not
-  during the pause menu's hold (everyone is on Player 1's spot then: the zoom
-  stays as it was).
+  y −1000 he took the zoom and the boxes of screens to their largest).
 
 **On the Field the camera is moved back** (`camera_back`, at
 `COOP_CAMERA_SITE`, right after the camera's view matrix is set). The view
@@ -799,8 +806,7 @@ until it's time, then put on Player 1 standing, which a teleport needs.
 Teleports (`ride_on_host`) also set the Link's safe spot (`Link+0x1b40`, where
 the game puts him back after a fall). Only on the Field: elsewhere the ground
 is all there, and swimming down or a long ladder in a side-view room dropped a
-player 8 too. Not during the pause menu's hold (his position is Player 1's
-then), and forgotten at a spawn and as play ends (`lost_forget`).
+player 8 too. Forgotten at a spawn and as play ends (`lost_forget`).
 
 Where the ground is solid (the active screens) was found later the same day:
 see "The screens around Player 1". It explains what was seen before: on Ukuku
@@ -808,42 +814,33 @@ Prairie another player stood 30 units east and 20 west of Player 1, while at
 Tal Tal Heights idle players fell a few steps from him as he crossed into the
 next screen.
 
-**The pause menu** (`hold_on_p1`). Upstream's review (item 2) asked for the
-read that takes the first Link made to be found and pointed at Player 1, in
-place of the hold below. Looked for on 2026-11-13, not found yet: a guard on
-the other Links' position copies (19, as below) as the menu opens and as a
-save is made showed no game function reading them that doesn't read them on
-every frame anyway, and the player component behind `[GAME_MGR]+0x4a8`
-(`+0x88`, `+0x618`, the route `runtime/hle/warp.c` checks) holds no Link. So
-the spot is most likely kept every frame from the first Link made by one of
-those per-frame readers, and the save copies it. The hold stays, safer: it
-writes only a copy that holds the Link's position now, and puts back only
-one still holding Player 1's spot (`HOLD_NEAR`).
-
-The pause menu takes "the player's" spot as
-it opens, for its map and for a save's restart point (file `0x559c`), from the
-first Link made: another player's. Not through the actors' name map (its
-"Player" entry repointed at Player 1 didn't change the file), nor from a pointer
-kept anywhere scanned, nor at save time (every copy of his position on Player
-1's while paused didn't change it either). A file saved with him far away,
-fallen through the ground, loaded with Link falling forever at the map's origin
-(the user's two files, 2026-10-28: restart point y −7). So when Player 1
-presses + or −, every copy of the other Links' positions that their components
-keep (`k_pos_copies`, found by value) is set to Player 1's for the pause, their
-updates skipped meanwhile, and put back once Player 1's update runs again after
-the pause (or 8 frames on, if no menu came). Checked with `tools/coop_tests/savetest.sh`:
-saved with Player 2 9 units away, the file holds Player 1's spot, and after the
-menu closes Player 2 is back on his own spot, walking.
-- The Links left over (parked below the map, co-op off too) are held as well:
-  the first one made can be one of them.
-- While held, nothing reads their positions as theirs: no revives (A held in
-  the menu revived a player lying far away), no zoom fit, no lost players,
-  bring-back or room follow, no L3+R3.
-- Play ending from the menu (Save and Quit, a Game Over) forgets the hold
-  without writing anything back (`hold_forget`): its components may be gone, and
-  the next file's Links were moved to the old level's spots. A level change (a
-  warp from the overlay while paused) lets them go first.
-- `+` or `-` that closes the menu doesn't hold them again.
+**The save's restart point** (`COOP_RESTART_SITE`). A file saved with
+another player far away restarted Player 1 on that player's spot, and one
+saved with him fallen through the ground loaded with Link falling forever at
+the map's origin (the user's two files, 2026-10-28: restart point y -7). Found
+on 2026-11-13, as upstream's review (item 2) asked:
+- The save copies the restart point (file `+0x559c`) from the player
+  entity's object: the game manager's `+0x4a8` is the player entity,
+  `main+0x11b70` gives its object (`+0x88`), and `main+0xdfc710` ->
+  `main+0xdfcb90` copies the object's `+0x680` (the spot, snapped to 0.75)
+  when its `+0x694` is set, else `+0x660` (the arrival point).
+- Each Link's update (`main+0xd355c0`, x19 the Link) looks up that object
+  (`ldr x1, [x20, #0x4a8]` at `main+0xd35778`, then `main+0x11b70`) and,
+  standing on safe ground, writes its own spot into `+0x680` (and its facing
+  `+0x690`, `+0x694` set). Every Link did, so it was the last one updated:
+  the first one made (Player 1's is made last). Found by watching the save
+  buffer's `+0x559c` being written (`LARECOMP_WATCH_ADDR`), then the object's
+  `+0x680`.
+- At `COOP_RESTART_SITE` another player's Link (or one left over, co-op off
+  too) finds no entity, and the game's own path for no object (`cbz` at
+  `main+0xd35788`) skips that part of his update: only Player 1's keeps the
+  restart point, as alone. Checked with `tools/coop_tests/savetest.sh`: 2
+  players, Player 1 at 197.62 and Player 2 9 units away: the file holds
+  197.25 (Player 1's spot, snapped); 3 players, Player 3 (the first made) away
+  and Player 1 still: 194.25, Player 1's.
+- Until then, while the pause menu was open, the other Links' 19 position
+  copies were held on Player 1's spot (`hold_on_p1`, `k_pos_copies`, found by
+  value) and their updates skipped: that is gone.
 
 **The game's countdown** (Dampé's timed chamber challenges, `Dg_TimeCount`)
 sits in the bottom left, where the hearts go. With co-op on, its pane
@@ -890,6 +887,7 @@ the game's reads of it by the RomFS index's patch list, while co-op is on
 | COOP_TILE_PLAYER_SITE | 0x7000b01c70 | ldr x8, [x20, #0x4b8] | a collapse tile measures the player nearest it (39) |
 | COOP_LIKELIKE_SITE_0..8 | 0x70004a65f4, a7040, a7fb8, a89f4, a8ce8, a9400, a9898, aac54, ab1f0 | ldr x22/x21/x9/x8, [x20 or x21, #0x4b8] | a Like Like's "Link" is the player it goes for (40-48) |
 | COOP_DAMAGE_HALVED_SITE | 0x7000d4c750 | ldrh w8, [x8, #0x84] | an enemy's hit split after the game halves it (49) |
+| COOP_RESTART_SITE | 0x7000d35778 | ldr x1, [x20, #0x4a8] | a Link's update looks up the player entity, for the save's restart point: only Player 1's finds it (50) |
 
 Runtime constants: `PLAYER_VTABLE`, `PLAYER_MAX_HEALTH`, `PLAY_ANIMATION`,
 `DOACTION_CURRENT` / `_PENDING` / `_COOLDOWN` (the slots), `DOACTION_TAKE_RET` /
@@ -1125,12 +1123,8 @@ Enter) didn't make the check fail, so the fix isn't confirmed by one.
     above the door frame" not reproduced); the Spiked Beetle's reaction part
     among those that follow the target (`Togezo:EnemyReactionCom`). A Gel
     (a split red Zol) wasn't brought about by a script.
-  - The pause menu's hold writes every position copy of the other Links
-    (`k_pos_copies`, found on a standing Link) whatever their state - written
-    for good, as the spikes' first move did, one of them knocked back held a
-    pointer and the game crashed. Held: 16 pauses with Player 2 bouncing in
-    the spikes (kinds 11 and 3), 16 with him knocked out asleep - no crash
-    (his update doesn't run while held, and every copy is put back).
+  - (The pause menu's hold, which wrote the other Links' position copies, is
+    gone: see "The save's restart point".)
 
 ## Not done or not checked
 
