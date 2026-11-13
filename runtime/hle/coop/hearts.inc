@@ -3,7 +3,7 @@
 
 // ---- Hearts (setting coop_health). Shared: the game's one set, as without co-op. Own: Player 1 keeps the game's
 // (PlayerStatus +0x84, quarter hearts; its HUD), players 2.. have their own here. A hit lands on the Link whose state
-// code computes it (rt_coop_damage, from tools/patches.py DAMAGE_*_SITES): another player's comes off his hearts and
+// code computes it (rt_coop_damage_of, from tools/patches.py DAMAGE_*_SITES): another player's comes off his hearts and
 // not the game's. Hearts the game's set gains (a heart, a fairy, a potion, a container) every player gains too.
 // Out of hearts, a player is knocked out (coop_knockout): he can't act and nothing hurts him until another player
 // holds A beside him for coop_revive_s seconds - or the players reach another area - and he is back with 30% of the
@@ -65,7 +65,7 @@ int coop_player_down(int i) { return own_hearts() && i > 0 && i < COOP_MAX && g_
 // A knocked-out player hit again and again lies in something that hurts: knocked back by each hit, he never lay still
 // (user 2026-10-28: spikes in a side-view room of Angler's Tunnel, kinds 11 and 3 in turn). DOWN_HITS of them, each
 // within DOWN_HIT_FRAMES of the last, and he is put on Player 1's spot as the next frame starts (down_move_tick), still
-// knocked out, where he can be revived. Only hits that would cost him hearts count (rt_coop_damage): spikes hit every
+// knocked out, where he can be revived. Only hits that would cost him hearts count (rt_coop_damage_of): spikes hit every
 // 30 to 60 frames. A knockback with nothing off (the others' swords, a shove) - cancelled for him (dead_state) - and
 // hits seconds apart (a Spark running along the wall past two knocked-out players) moved players lying out of harm's
 // way onto Player 1, in the middle of his fight, and again from there (user 2026-11-01, Catfish's Maw: "still moving
@@ -139,17 +139,6 @@ static void p1_event_tick(void) {
 
 int coop_input_blocked(int i) { return coop_player_down(i) || (rt_coop_on() && i > 0 && g_p1_event); }
 
-// The Link whose code is running: Link's state functions keep him in a callee-saved register (x19 / x20 at the damage
-// sites); the others are checked too. 0: Player 1 (or no Link found).
-static int running_player(Cpu *c) {
-    for (int r = 19; r <= 28; r++)
-        if (c->x[r] && c->x[r] == host_player()) return 0;
-        else if (coop_index(c->x[r])) return coop_index(c->x[r]);
-    for (int r = 0; r < 19; r++)
-        if (coop_index(c->x[r])) return coop_index(c->x[r]);
-    return 0;
-}
-
 static void revive_hit(int j) {
     if (!g_reviving[j]) return;
     for (int i = 1; i < COOP_MAX; i++)
@@ -166,19 +155,17 @@ static void revive_hit(int j) {
 // before that, Player 1's hits were halved and the others' weren't: user 2026-11-02, "P1 takes hardly any damage,
 // and other players take full damage".)
 static bool g_hit_own;  // (the hit just taken was another player's, off his own hearts: COOP_DAMAGE_HALVED_SITE)
-// The Link hit: where the game's code holds him (the enemy hit's function: x21; the fixed hits' - a pit, deep water -:
-// x19), else the Link whose code is running (running_player: a register scan, for the event-scripted damage).
+// The Link hit, where the game's code holds him (tools/patches.py): the enemy hit's function x21, the fixed hits' (a
+// pit, deep water) x19, the other Link hit's (main+0xd96830) x20; 0 for the event-scripted damage (main+0xd7c870, an
+// event's command, no Link): Player 1's, as every event plays on him. (Until 2026-11-13 the Link was found by scanning
+// the callee-saved registers for one: upstream's review.)
 static int32_t coop_damage(Cpu *c, int32_t dmg, uint64_t link);
-int32_t rt_coop_damage(Cpu *c, int32_t dmg) { return coop_damage(c, dmg, 0); }
 int32_t rt_coop_damage_of(Cpu *c, int32_t dmg, uint64_t link) { return coop_damage(c, dmg, link); }
 static int32_t coop_damage(Cpu *c, int32_t dmg, uint64_t link) {
+    (void)c;
     g_hit_own = false;
     if (!own_hearts() || dmg <= 0) return dmg;
-    int i = link == host_player() && link ? 0 : coop_index(link) ? coop_index(link) : running_player(c);
-    if (link && i != running_player(c)) {  // (the register scan's answer, as before: logged when it differs)
-        static int said;
-        if (said++ < 8) CLOG("[coop] hit: player %d (the scan said %d)\n", i + 1, running_player(c) + 1);
-    }
+    int i = coop_index(link);  // (Player 1's, or a Link that is no player's: 0)
     if (g_down[i]) {
         CLOG("[coop] player %d hit for %d: knocked out, unhurt\n", i + 1, dmg);
         down_hit(i);
@@ -379,7 +366,7 @@ static void hearts_tick(Cpu *c) {
     memset(g_reviving, 0, sizeof g_reviving);
     for (int j = 0; j < g_n; j++)
         if (g_revive_hit[j] && !((j ? input_coop_buttons(j) : input_buttons_now()) & 1)) g_revive_hit[j] = false;
-    for (int i = 1; i < g_n && !g_held_at; i++) {
+    for (int i = 1; i < g_n; i++) {
         if (!g_down[i]) continue;
         float pi[3];
         bool helped = false, near = false;

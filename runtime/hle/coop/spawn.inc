@@ -6,8 +6,8 @@
 // the manager ends up holding his, as without co-op. (The Links it made: g_made, above.)
 
 // The creator, once for each other player, then for Player 1 - last: the scene's camera is the last Link's (made first,
-// the camera wasn't his), and it leaves the game manager's player (+0x4b8) on him. (The pause menu still finds the
-// first one made: see hold_on_p1.)
+// the camera wasn't his), and it leaves the game manager's player (+0x4b8) on him. (Each Link's update writes the
+// save's restart point into the player entity's object - only Player 1's does: COOP_RESTART_SITE.)
 static int coop_create(Cpu *c) {
     if (g_creating >= 0) return 0;  // (our own call: the creator as it is)
     uint64_t args[8];
