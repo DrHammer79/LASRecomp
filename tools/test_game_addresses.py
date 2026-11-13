@@ -98,12 +98,18 @@ for key in VERSIONS:
     p = importlib.reload(patches)
     own = set(p.HOOKS) - set(p._COOP_HOOKS)
     own_hooks = len(own) if own_hooks is None else own_hooks
-    assert len(p.PATCHES) == len(fixture['patches']) and len(own) == own_hooks, key
-    assert set(p.PATCHES) | set(p.HOOKS) <= set(tables[key][0].values()), key
+    # (local co-op's reads of "Link" are patches too, listed per version - runtime/game_addresses/
+    # coop_player_reads_<version>.txt, not the address tables: each an `ldr xT, [xN, #0x4b8]`, none a hook)
+    reads = set(p._PLAYER_READS)
+    assert all((w & 0xffc00000) == 0xf9400000 and ((w >> 10) & 0xfff) * 8 == 0x4b8 for w in p._PLAYER_READS.values()), key
+    assert not reads & set(p.HOOKS), key
+    assert len(set(p.PATCHES) - reads) == len(fixture['patches']) and len(own) == own_hooks, key
+    assert (set(p.PATCHES) - reads) | set(p.HOOKS) <= set(tables[key][0].values()), key
     coop = {n: v for n, v in tables[key][0].items() if n.startswith('COOP_')}
     if coop.get('COOP_CREATE_SITE'):
         assert all(coop.values()), f'{key}: co-op addresses at 0: {[n for n, v in coop.items() if not v]}'
         assert set(p._COOP_HOOKS) <= set(p.HOOKS), key
+        assert len(reads) > 500, f'{key}: {len(reads)} reads of "Link" listed'
 select_version('v1_0_0')
 patches = importlib.reload(patches)
 

@@ -89,12 +89,11 @@ int coop_players_setting(void) {
 // out of play only (coop_tick) - else the setting.
 int coop_players_now(void) { return g_n > 0 ? g_n : coop_players_setting(); }
 
-// Player 1's Link: the game manager's player (+0x4b8), as for the game itself - or, while an enemy's update has it
-// pointing at the Link that enemy targets (actor_exec_begin), the one it holds back.
-static bool g_swap_on;      // an enemy's update has the player slot (actor_exec_begin)
-static uint64_t g_swapped;  // the slot's own Link meanwhile
+// Player 1's Link: the game manager's player (+0x4b8), as for the game itself. Co-op never writes that slot: the
+// game's reads of it ask rt_coop_player, which gives an updating enemy the Link it goes for (g_as_link).
+static bool g_as_on;                  // an enemy's update has decided whom it goes for (actor_exec_begin)
+static _Atomic uint64_t g_as_link;    // ... "Link" for the game's reads meanwhile (the game thread's; 0: the slot's)
 static uint64_t host_player(void) {
-    if (g_swap_on) return g_swapped;
     uint64_t gm = LD64(GA(GAME_MGR));
     return gm ? LD64(gm + 0x4b8) : 0;
 }
@@ -310,9 +309,20 @@ static void revive_hit(int j) {
 // before that, Player 1's hits were halved and the others' weren't: user 2026-11-02, "P1 takes hardly any damage,
 // and other players take full damage".)
 #define HURT_GAP 30  // (half a second: another player's hit within it of his last costs nothing)
-int32_t rt_coop_damage(Cpu *c, int32_t dmg) {
+static bool g_hit_own;  // (the hit just taken was another player's, off his own hearts: COOP_DAMAGE_HALVED_SITE)
+// The Link hit: where the game's code holds him (the enemy hit's function: x21; the fixed hits' - a pit, deep water -:
+// x19), else the Link whose code is running (running_player: a register scan, for the event-scripted damage).
+static int32_t coop_damage(Cpu *c, int32_t dmg, uint64_t link);
+int32_t rt_coop_damage(Cpu *c, int32_t dmg) { return coop_damage(c, dmg, 0); }
+int32_t rt_coop_damage_of(Cpu *c, int32_t dmg, uint64_t link) { return coop_damage(c, dmg, link); }
+static int32_t coop_damage(Cpu *c, int32_t dmg, uint64_t link) {
+    g_hit_own = false;
     if (!own_hearts() || dmg <= 0) return dmg;
-    int i = running_player(c);
+    int i = link == host_player() && link ? 0 : coop_index(link) ? coop_index(link) : running_player(c);
+    if (link && i != running_player(c)) {  // (the register scan's answer, as before: logged when it differs)
+        static int said;
+        if (said++ < 8) CLOG("[coop] hit: player %d (the scan said %d)\n", i + 1, running_player(c) + 1);
+    }
     if (g_down[i]) {
         CLOG("[coop] player %d hit for %d: knocked out, unhurt\n", i + 1, dmg);
         down_hit(i);
@@ -326,7 +336,7 @@ int32_t rt_coop_damage(Cpu *c, int32_t dmg) {
     // a session, user 2026-11-01: "other players seem to be taking way more damage than p1"; spikes, the most often
     // anything hits, do so about every 45 frames)
     static uint64_t hurt_at[COOP_MAX];
-    if (i && renderer_present_count() < hurt_at[i] + HURT_GAP) {
+    if (i && renderer_present_count() < hurt_at[i] + HURT_GAP && !ENV("LARECOMP_COOP_NO_HURT_GAP")) {
         CLOG("[coop] player %d hit for %d: hit just now, unhurt\n", i + 1, dmg);
         return 0;
     }
@@ -336,11 +346,11 @@ int32_t rt_coop_damage(Cpu *c, int32_t dmg) {
         CLOG("[coop] player 1 hit for %d\n", dmg);
         return dmg;
     }
-    if (g_settings.cheat_hearts) return 0;
+    if (g_settings.cheat_hearts) return g_hit_own = true, 0;
     if (g_hp[i] < 0) g_hp[i] = g_max_hp > 0 ? g_max_hp : 12;
     g_hp[i] -= dmg;
     CLOG("[coop] player %d hit for %d (%d left)\n", i + 1, dmg, g_hp[i]);
-    if (g_hp[i] > 0) return 0;
+    if (g_hp[i] > 0) return g_hit_own = true, 0;
     if (g_settings.coop_knockout == COOP_KO_GAME_OVER) {
         g_hp[i] = 0;
         LOG("[coop] player %d out of hearts: game over\n", i + 1);
@@ -634,7 +644,7 @@ static bool player_screen(int i, float lift, float w, float h, float *sx, float 
 
 // ---- The camera zoomed out (settings coop_zoom, coop_camera_fit, coop_zoom_fit): g_zoom, coop_zoom 10% steps out
 // always (up to 60%); with coop_camera_fit, further out as far as it takes to keep every player who is up in view, up
-// to coop_zoom_fit steps (up to 200%: three times as far), never in of coop_zoom, eased in and out. 1 out of play and
+// to coop_zoom_fit steps (by default 100%: twice as far; up to 200%, three times, set so), never in of coop_zoom, eased in and out. 1 out of play and
 // while zoom_on() isn't. On the Field the camera is moved back by it (camera_back); indoors its field of view is widened
 // instead (runtime/hle/widescreen.c rt_fovy, also the culling pass's).
 // Widening the view on the Field first (to 2.3): its top edge ran toward the horizon, so each step out needed far more
@@ -1045,19 +1055,31 @@ static uint64_t g_p1_updated;          // (the frame Player 1's update last ran)
 static struct { uint64_t addr; float v[3]; } g_held[(COOP_MAX + MADE_MAX) * NPOS];
 static int g_nheld;
 
+// Only a copy that holds his position now (within HOLD_NEAR of his collision's) is written - one of these offsets held a
+// pointer once, written over, the game crashed - and only one still holding Player 1's spot goes back (hold_release).
+#define HOLD_NEAR 2.0f
+static float g_held_h[3];  // (Player 1's spot, written into them)
 static void hold_link(uint64_t link, const float h[3]) {
-    if (!collision_of(link)) return;
+    float me[3];
+    if (!collision_of(link) || !player_pos(link, me)) return;
+    memcpy(g_held_h, h, sizeof g_held_h);
     for (size_t k = 0; k < NPOS && g_nheld < (int)(sizeof g_held / sizeof *g_held); k++) {
         uint64_t comp = LD64(link + k_pos_copies[k][0]), a = comp + k_pos_copies[k][1];
         bool dup = false;
         for (int j = 0; j < g_nheld && !dup; j++) dup = g_held[j].addr == a;
         if (!heap_ptr(comp) || dup) continue;
+        float v[3];
+        memcpy(v, (const void *)(uintptr_t)a, 12);
+        if (!(fabsf(v[0] - me[0]) < HOLD_NEAR && fabsf(v[1] - me[1]) < HOLD_NEAR && fabsf(v[2] - me[2]) < HOLD_NEAR))
+            continue;
         g_held[g_nheld].addr = a;
         memcpy(g_held[g_nheld].v, (const void *)(uintptr_t)a, 12);
         memcpy((void *)(uintptr_t)a, h, 12);
         g_nheld++;
     }
 }
+
+
 
 static void hold_on_p1(void) {
     float h[3];
@@ -1072,7 +1094,9 @@ static void hold_on_p1(void) {
 }
 
 static void hold_release(void) {
-    for (int j = g_nheld - 1; j >= 0; j--) memcpy((void *)(uintptr_t)g_held[j].addr, g_held[j].v, 12);
+    for (int j = g_nheld - 1; j >= 0; j--)
+        if (!memcmp((const void *)(uintptr_t)g_held[j].addr, g_held_h, 12))  // (still what we put there)
+            memcpy((void *)(uintptr_t)g_held[j].addr, g_held[j].v, 12);
     CLOG("[coop] pause over: the other players back (%d copies)\n", g_nheld);
     g_nheld = 0, g_held_at = 0;
 }
@@ -1181,7 +1205,7 @@ static struct { uint64_t actor, until, seen, since; int who; } g_target[TARGET_S
 
 static void targets_forget(void) {
     memset(g_target, 0, sizeof g_target);
-    g_swap_on = false, g_swapped = 0;
+    g_as_on = false, atomic_store_explicit(&g_as_link, 0, memory_order_relaxed);
 }
 RT_ON_RESET(coop_targets_reset) { targets_forget(); }
 
@@ -1523,8 +1547,21 @@ static int carrier(uint64_t actor) {  // (the other player who lifted it last; 0
     return 0;
 }
 
+// "Link" for the game's code: each read of the game manager's player slot (+0x4b8) in the main program is this call
+// (tools/patches.py _player_read, the reads in runtime/game_addresses/coop_player_reads_<version>.txt). While an
+// enemy updates on the game thread (actor_exec_begin), the game manager's reads give the Link it goes for; any other
+// read - another thread's (a worker job's), outside an update, with co-op off, another object's +0x4b8 (a read whose
+// base the list's scan couldn't follow) - what the slot holds. Until 2026-11-13 the slot itself was swapped for the
+// whole update, which any other thread's read saw too.
+// (it loads the slot itself, only when it is the game's answer: while an enemy's is given, the slot isn't read by these
+// reads at all - LARECOMP_COOP_WATCH_SLOT, a test, catches any other read of it then)
+uint64_t rt_coop_player(uint64_t base) {
+    uint64_t as = atomic_load_explicit(&g_as_link, memory_order_relaxed);
+    return as && on_game_thread() && base == LD64(GA(GAME_MGR)) ? as : LD64(base + 0x4b8);
+}
+
 static void actor_exec_begin(Cpu *c) {
-    if (g_swap_on) return;
+    if (g_as_on) return;
     uint64_t actor = g_updating;
     if (!actor) return;
     int t = carrier(actor);
@@ -1573,15 +1610,14 @@ swap:;
         who[k][0] = actor, who[k][1] = (uint64_t)now + 1;
     }
     if (!t || !own || !collision_of(g_extra[t])) return;
-    g_swap_on = true, g_swapped = own;
-    ST64(gm + 0x4b8, g_extra[t]);
+    g_as_on = true;
+    atomic_store_explicit(&g_as_link, g_extra[t], memory_order_relaxed);
 }
 
 static void actor_exec_end(void) {
-    if (!g_swap_on) return;
-    uint64_t gm = LD64(GA(GAME_MGR));
-    if (gm) ST64(gm + 0x4b8, g_swapped);
-    g_swap_on = false, g_swapped = 0;
+    if (!g_as_on) return;
+    g_as_on = false;
+    atomic_store_explicit(&g_as_link, 0, memory_order_relaxed);
 }
 
 // The player creator (an event action, main+0x83a470): the game makes its Link (the manager's +0x4b8). With co-op
@@ -1846,11 +1882,14 @@ static int g_act_calls;                          // inside our own calls of the 
 static int g_act_swapped;                        // the player whose current slot is in the game's (his update), 0: none
 static uint64_t g_act_comp;                      // meanwhile: his current component, holding his findings
 static uint8_t g_act_own[ACT_RES];               // ... whose own findings (Player 1's) go back after
-RT_ON_RESET(coop_act_reset) {
+// (the other players' slots hold the game's weak pointers to components, copied: a level's components are gone with
+// it, so the slots are emptied as play ends and at every level change - swapped back in later, one held the old level's)
+static void act_forget(void) {
     memset(g_act, 0, sizeof g_act);
     g_act_calls = g_act_swapped = 0;
     g_act_comp = 0;
 }
+RT_ON_RESET(coop_act_reset) { act_forget(); }
 
 static void slot_swap(uint64_t slot, uint8_t *mine) {
     uint8_t t[16];
@@ -1872,8 +1911,9 @@ static void res_put(uint64_t p, const uint8_t *res, uint8_t *keep) {
     memcpy((void *)(uintptr_t)(p + ACT_RES_AT), res, ACT_RES);
 }
 
-// A DoAction component's update (x0 the component): once for each other player who can act, "Link" being him, then for
-// Player 1 into the game's own slot. (In an enemy's update the player slot holds the Link it targets: put back after.)
+// A DoAction component's update (x0 the component): once for each other player who can act, "Link" being him (for the
+// game's reads: rt_coop_player), then for Player 1 into the game's own slot. (In an enemy's update "Link" is the Link
+// it goes for: that again after.)
 static int doaction_each(Cpu *c) {
     uint64_t gm = LD64(GA(GAME_MGR));
     if (g_act_calls || !gm || !GA(DOACTION_PENDING)) return 0;
@@ -1882,12 +1922,12 @@ static int doaction_each(Cpu *c) {
         if (!said++) LOG("[coop] a DoAction component checked off the game thread: Player 1 only\n");
         return 0;
     }
-    uint64_t own = LD64(gm + 0x4b8), p1 = host_player(), comp = c->x[0], args[8];
+    uint64_t as = atomic_load_explicit(&g_as_link, memory_order_relaxed), comp = c->x[0], args[8];
     memcpy(args, c->x, sizeof args);
     g_act_calls = 1;
     for (int i = 1; i < g_n; i++) {
         if (!collision_of(g_extra[i]) || coop_player_down(i)) continue;
-        ST64(gm + 0x4b8, g_extra[i]);
+        atomic_store_explicit(&g_as_link, g_extra[i], memory_order_relaxed);
         slot_swap(GA(DOACTION_PENDING), g_act[i]);
         uint64_t pend = slot_live(GA(DOACTION_PENDING));  // (his best so far: his findings in it for the comparison)
         uint8_t keep[ACT_RES];
@@ -1899,10 +1939,10 @@ static int doaction_each(Cpu *c) {
             memcpy(g_act_res[i][0], (const void *)(uintptr_t)(comp + ACT_RES_AT), ACT_RES);
         slot_swap(GA(DOACTION_PENDING), g_act[i]);
     }
-    ST64(gm + 0x4b8, p1);
+    atomic_store_explicit(&g_as_link, 0, memory_order_relaxed);  // (Player 1: the slot's own)
     memcpy(c->x, args, sizeof args);
     guest_call(c, GA(COOP_DOACTION_SITE));
-    ST64(gm + 0x4b8, own);
+    atomic_store_explicit(&g_as_link, as, memory_order_relaxed);
     g_act_calls = 0;
     return 2;  // (to its ret)
 }
@@ -2280,14 +2320,30 @@ static bool gone_check(Cpu *c, uint64_t actor) {
 }
 
 // The screens kept around Player 1 (main+0x85c280's box, 90 x 72, grown by g_box: COOP_KEEP_BOX_SITE) lose their
-// objects once outside it. A screen at least one screen inside it keeps them: an object dying there was destroyed.
+// objects once outside it, and come back fresh - their cut grass and broken rocks whole - when the box takes them in
+// again. Alone that is a screen well behind Link. With co-op it was centred on Player 1 only: what another player cut
+// came back by him once Player 1 had walked off and back. So with co-op on the Field it reaches every other player and
+// the screen around him (keep_reach), each way, up to the largest box the zoom makes (BOX_MAX): the screens around any
+// player keep what was done in them, as Link's do alone.
 #define KEEP_W 90.0f
 #define KEEP_D 72.0f
+static void keep_reach(float *rx, float *rz) {  // (how far the kept box must reach from Player 1, across and deep; 0: no further)
+    float p1[3], p[3];
+    *rx = *rz = 0;
+    if (!rt_coop_on() || !on_field() || !player_pos(host_player(), p1) || (fabsf(p1[0]) < 1 && fabsf(p1[2]) < 1)) return;
+    for (int i = 1; i < g_n; i++) {
+        if (!player_pos(coop_player(i), p) || p[1] < -500.0f) continue;  // (taken off the map)
+        float dx = fabsf(p[0] - p1[0]) + SCREEN_W, dz = fabsf(p[2] - p1[2]) + SCREEN_D;
+        if (dx > KEEP_W * BOX_MAX / 2 || dz > KEEP_D * BOX_MAX / 2) continue;  // (far off: bring-back takes him back)
+        *rx = fmaxf(*rx, dx), *rz = fmaxf(*rz, dz);
+    }
+}
 static bool gone_kept_screen(const float at[3]) {
-    float p1[3];
+    float p1[3], rx, rz;
     if (!player_pos(host_player(), p1)) return false;
+    keep_reach(&rx, &rz);
     float sx = SCREEN_W * floorf(at[0] / SCREEN_W), sz = SCREEN_D * floorf(at[2] / SCREEN_D);  // (its screen's corner)
-    float hx = KEEP_W * g_box / 2 - SCREEN_W, hz = KEEP_D * g_box / 2 - SCREEN_D;
+    float hx = fmaxf(KEEP_W * g_box / 2, rx) - SCREEN_W, hz = fmaxf(KEEP_D * g_box / 2, rz) - SCREEN_D;
     return sx + SCREEN_W > p1[0] - hx && sx < p1[0] + hx && sz + SCREEN_D > p1[2] - hz && sz < p1[2] + hz;
 }
 
@@ -2448,9 +2504,20 @@ int rt_coop_hook(Cpu *c, int which) {
         return 1;
     }
     case 7: {  // COOP_COLOR_SITE - blr x8 with s0 = the tunic frame (0 green, 1 red, 3 blue)
-        if (!coop_colours()) return 0;
         float f;
         memcpy(&f, &c->v[0], 4);
+        if (!coop_colours()) {  // (no co-op tunic file: the game's own three - each other player's colour if it is
+            // green, red or blue, else one of those by his number; Player 1 keeps his own)
+            int i = coop_index(c->x[19]);
+            if (!rt_coop_on() || i <= 0) return 0;
+            static const float k_game_frame[3] = {0, 1, 3};
+            int set = g_settings.coop_colour[i];
+            f = k_game_frame[set >= 0 && set < 3 ? set : i % 3];
+            __uint128_t v = 0;
+            memcpy(&v, &f, 4);
+            c->v[0] = v;
+            return 0;
+        }
         // (the coop Playerlink.bfres: 3 frames per colour set, all in that set's colour - 0-2 green, 3-5 red, 6-8 blue
         // ...; co-op turned off since the game started, the file still in: the game's own tunic, its set)
         int t = f >= 2.5f ? 2 : f >= 0.5f ? 1 : 0;
@@ -2571,6 +2638,15 @@ int rt_coop_hook(Cpu *c, int which) {
               // box of screens whose objects are kept
         if (g_back_on && g_box != 1.0f)
             for (int r = 0; r < 4; r++) scale_s(c, r, g_box);
+        {
+            float rx, rz;
+            keep_reach(&rx, &rz);
+            for (int r = 0; r < 4 && (rx > 0 || rz > 0); r++) {
+                float h;
+                memcpy(&h, &c->v[r], 4);
+                set_s(c, r, fmaxf(h, r < 2 ? rx : rz));
+            }
+        }
         return 0;
     case 35:  // COOP_ACTIVE_BOX_SITE - fsub s8, s0, s3: s3 x s4 the half sizes of the box of active screens, s5 its
               // offset deep - grown to take in every player
@@ -2589,9 +2665,20 @@ int rt_coop_hook(Cpu *c, int which) {
         return 1;
     case 40: case 41: case 42: case 43: case 44: case 45: case 46: case 47: case 48:  // COOP_LIKELIKE_SITE_0..8
         return likelike_player(c, which - 40);  // (ldr: "Link" for a Like Like, x19)
-    case 49:  // COOP_DAMAGE_HALVED_SITE - ldrh w8, [x8, #0x84]: an enemy's hit (w20), after the game halved it or not
-        c->x[20] = (uint32_t)rt_coop_damage(c, (int32_t)c->x[20]);
+    case 49: {  // COOP_DAMAGE_HALVED_SITE - ldrh w8, [x8, #0x84]: an enemy's hit (w20), after the game halved it or not
+        // The game goes on to take w20 off its hearts (x8: PlayerStatus) and, only for a hit of 1 or more
+        // (main+0xd4c788), runs what follows a hit for the Link hit (x21): his controller's rumble and the time he
+        // can't be hit again (his +0x1e80). Another player's hit, off his own hearts, was 0 to it: the same contact hit
+        // him again on the next frames - one hit came off his hearts two to four times (user 2026-11-01; HURT_GAP hid
+        // it). So it stays a hit for the game, which takes nothing off: its hearts are read as that much more.
+        int32_t dmg = (int32_t)c->x[20], got = rt_coop_damage_of(c, dmg, c->x[21]);
+        if (got == 0 && g_hit_own && dmg > 0) {
+            c->x[8] = (uint32_t)(LD16(c->x[8] + 0x84) + dmg);
+            return 1;
+        }
+        c->x[20] = (uint32_t)got;
         return 0;
+    }
     }
     return 0;
 }
@@ -2605,7 +2692,8 @@ RT_ON_RESET(coop_files_reset) { g_coop_dir = g_colours = -1, g_indexed = false; 
 
 bool coop_romfs_override(const char *path, char *out, size_t cap) {
     g_indexed = true;
-    if (!rt_coop_on()) return false;
+    // (that one file only: other game files copied there from the mod's own romfs - its whole set - aren't served)
+    if (!rt_coop_on() || strcmp(path, "region_common/actor/Playerlink.bfres")) return false;
     extern const char *rt_data_root(void);
     const char *root = rt_data_root();
     if (!root) return false;
@@ -2716,6 +2804,7 @@ static void play_ended(void) {
     memset(g_sleep_anim, 0, sizeof g_sleep_anim);
     hold_forget();  // (play ended from the pause menu: the next file's Links aren't held, and nothing is written back)
     lost_forget();
+    act_forget();
     g_p1_event = g_p1_walk_in = false, g_talking = false, g_talker = 0;
 }
 
@@ -2729,6 +2818,7 @@ void coop_level_change(const char *level, const char *locator) {
     g_level_changed = renderer_present_count();
     if (g_held_at) hold_release();  // (a warp while paused: the others back where they were, in this level still)
     g_hold_next = false;
+    if (!g_act_calls && !g_act_swapped) act_forget();  // (the old level's components: none of the slots' any more)
     if (!rt_coop_on() || !game_in_play()) return;
     const char *lv = chaos_current_level();
     char line[600];
@@ -2747,6 +2837,11 @@ void coop_level_change(const char *level, const char *locator) {
 // Once per frame on the game thread (runtime/hle/input.c, npad 1's poll).
 void coop_tick(Cpu *c) {
     g_game_thread = pthread_self(), g_game_thread_known = true;
+    if (g_as_on) {  // (no update runs as the frame starts: an update whose end went unseen leaves "Link" no one's)
+        static int said;
+        if (!said++) LOG("[coop] an enemy's update ended unseen: \"Link\" back to the game's\n");
+        g_as_on = false, atomic_store_explicit(&g_as_link, 0, memory_order_relaxed);
+    }
     camera_back_undo();
     extern int game_in_play(void);
     static bool in_play;

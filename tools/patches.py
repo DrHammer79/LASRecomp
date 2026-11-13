@@ -214,8 +214,8 @@ def _damage_fixed(gen, a):
     w = struct.unpack_from('<I', gen.nso.image, a - gen.base)[0]
     assert (w & 0xffe00c00) == 0x1a800000 and (w & 31) == 20, hex(w)  # csel w20, ...
     return ('{ extern int32_t rt_damage(int32_t, int32_t); extern int rt_hero_mode(void); '
-            'extern int32_t rt_coop_damage(Cpu *, int32_t); '
-            'c->x[20] = (uint32_t)(-rt_coop_damage(c, rt_damage(2, rt_hero_mode()))); }'
+            'extern int32_t rt_coop_damage_of(Cpu *, int32_t, uint64_t); '
+            'c->x[20] = (uint32_t)(-rt_coop_damage_of(c, rt_damage(2, rt_hero_mode()), c->x[19])); }'
             f'  /* {a:#x}: csel w20, -4, -2 (fixed damage) */')
 
 
@@ -1233,3 +1233,38 @@ _COOP_HOOKS = {
     A.COOP_DAMAGE_HALVED_SITE: (0x79410908, (), 'ldrh w8, [x8, #0x84]: an enemy\'s hit (w20), after its halving'),
 }
 HOOKS.update({a: h for a, h in _COOP_HOOKS.items() if a})
+
+
+# ---- local co-op: "Link" for an enemy. The game's code reads "Link" from its game manager's player slot (+0x4b8);
+# with co-op an enemy goes for the player nearest it, so while one updates its reads have to give that player. Each
+# `ldr xT, [xN, #0x4b8]` of the main program (runtime/game_addresses/coop_player_reads_<version>.txt, made by
+# tools/coop_player_reads.py) is rt_coop_player(xN) (runtime/hle/coop.c), which loads it - or gives the Link to use: with co-op off, off the game
+# thread, outside an enemy's update or for another object's +0x4b8 (it checks xN is the game manager), what the slot
+# holds. The slot itself is never written. Not the sites that are hooks already (the Like Like's, the collapse tile's,
+# the placement's: those decide for themselves).
+def _player_read(gen, a):
+    w = struct.unpack_from('<I', gen.nso.image, a - gen.base)[0]
+    assert w == _PLAYER_READS[a], f'{a:#x}: instruction {w:#010x}, expected {_PLAYER_READS[a]:#010x}'
+    rt, rn = w & 31, (w >> 5) & 31
+    return (f'{{ extern uint64_t rt_coop_player(uint64_t); c->x[{rt}] = rt_coop_player(c->x[{rn}]); }}'
+            f'  /* {a:#x}: ldr x{rt}, [x{rn}, #0x4b8] ("Link") */')
+
+
+def _player_reads():
+    import game_addresses
+    if not A.COOP_ACTOR_EXEC_SITE:  # (a version without co-op: no list)
+        return {}
+    # (beside the address tables: in the repository, or bundled with the generator - game_addresses.TABLE_DIR)
+    path = game_addresses.TABLE_DIR / f'coop_player_reads_{game_addresses.SELECTED}.txt'
+    reads = {}
+    for line in open(path):  # (missing: an error - without it the enemies would all go for Player 1, silently)
+        if line.strip() and not line.startswith('#'):
+            a, w = line.split()[:2]
+            reads[int(a, 16)] = int(w, 16)
+    assert reads, f'{path}: no reads listed'
+    return reads
+
+
+_PLAYER_READS = {a: w for a, w in _player_reads().items() if a not in HOOKS and a not in PATCHES}
+for _a in _PLAYER_READS:
+    PATCHES[_a] = _player_read
