@@ -260,7 +260,7 @@ drop starts (main+0xb005b0). `COOP_TILE_PLAYER_SITE` (the job's
 `ldr x8, [x20, #0x4b8]`) gives it the player nearest it instead (`tile_player`;
 knocked-out players and ones away from the map aren't taken), and the game's own
 check goes by him. The job's earlier check of the player's state (main+0x3ed00,
-then his +0x1568) is still Player 1's. `build/floor.sh`: Player 2 put on a
+then his +0x1568) is still Player 1's. `tools/coop_tests/floor.sh`: Player 2 put on a
 Catfish's Maw tile falls through it within a second and comes back up at the
 pit's edge; before, he stood on it, and walked over one, and it held. The same
 in the user's cave (Player 2 put on the tile at 68.25, 21.75). Player 1 on a
@@ -320,14 +320,14 @@ clung to him, then went over to its target. So do the Zols (`EnemyZolRed`,
 Player 2 on the way and was on Player 1 the next moment (user 2026-10-30).
 Going for the nearest wasn't enough: a Zol hops a set length, so hopping from
 right on Player 2 it landed past him, by Player 1 beside him, who was the
-nearest by then (user 2026-10-31; `build/zol.sh` with Player 2 held 3 units
+nearest by then (user 2026-10-31; `tools/coop_tests/zol.sh` with Player 2 held 3 units
 off). A player it lands on (within `CLING_REACH`, 0.5, on the ground with it)
 is its target, kept while he is up and within `TARGET_ENGAGE`; past that,
 another player has to be clearly nearer (1.5x). A Zol's or a Gel's reaction
 component goes by that target too, not the nearest: it steers the hops, and
 each hit on Player 2 knocked him back past Player 1, the nearest then - the
 Zol went for Player 1 (user 2026-10-31, "always going on p1 when hitting p2";
-`build/zolhit.sh`: real hits - `build/zol.sh` has infinite hearts, so none of
+`tools/coop_tests/zolhit.sh`: real hits - `tools/coop_tests/zol.sh` has infinite hearts, so none of
 the Zols' hits landed). So a hit from another player knocks it back as from its
 target's side. The rules for other enemies:
 - An enemy targets the nearest player who is up.
@@ -337,7 +337,7 @@ target's side. The rules for other enemies:
   (`TARGET_MELEE`, 2.5 units) and clearly nearer (1.5x). The Armos Knight's
   room is smaller than 6 units across: he kept the player he picked first, in
   the doorway he can't step into, hopping on the floor's edge while the
-  players hitting him went ignored (`build/armos.sh`, `build/armos_fight.sh`;
+  players hitting him went ignored (`tools/coop_tests/armos.sh`, `tools/coop_tests/armos_fight.sh`;
   `LARECOMP_COOP_TRACE=EnemyDeguArmos` logs where he goes). Alone he follows
   Link, stops 1 to 1.5 units off him and slams every 10 s or so.
 - A player away from the map for a moment (y below -500: fallen through it,
@@ -369,7 +369,7 @@ flies east (before: north, Player 1's way); Player 1 the same: east, as before.
 main+0x4ab1d0, x19 the Like Like), which run outside its update, where "Link"
 is its target. One that went for Player 2 hit him, and at the catch
 (main+0x4a9810) flew in a straight line onto Player 1, 18 units off, in about
-15 frames; Player 2 wasn't caught (user 2026-10-30; `build/likelike.sh`, Player
+15 frames; Player 2 wasn't caught (user 2026-10-30; `tools/coop_tests/likelike.sh`, Player
 2 put a unit from one at Goponga Swamp's phone booth). Its nine reads of the
 game manager's player (`COOP_LIKELIKE_SITE_0..8`, `likelike_player`) now get
 the player it goes for (`kept_target`: `enemy_target`'s, read only), with
@@ -586,7 +586,7 @@ up each time it was the view again. They are put back as each frame starts
 the moved values it settled short of where it eased them to every frame. An
 event waiting for the camera to get there waited for ever: at the ghost's
 grave the owl flew off, the camera came back to Player 1 and he stayed in the
-event (user 2026-10-30; replayed from the user's save, `build/grave.sh`:
+event (user 2026-10-30; replayed from the user's save, `tools/coop_tests/grave.sh`:
 stuck at zoom 1.5 every time, finished at 1 and with this).
 
 A view matrix the game hasn't set again since it was moved isn't moved again
@@ -596,7 +596,7 @@ it was, and moved again each frame it went (zoom - 1) x 24.8 further back a
 frame - 12 units at 1.5, thousands by the time a file was loaded from the
 menu, and the game hung (user 2026-10-30, File 3). Unseen until then: the menu
 covers the view, and closing it sets the matrix again. As old as the camera
-moved back (the build before the grave's fix did the same: `build/ic.sh` with
+moved back (the build before the grave's fix did the same: `tools/coop_tests/ic.sh` with
 "2400:PLUS:8", the `[coop] frame` lines' view depth).
 
 **The shadow map's box** (`COOP_SHADOW_BOX_SITE`, `shadow_box`). The game
@@ -716,7 +716,7 @@ clear, no band.
 "Indoor zoom" (`coop_zoom_indoor`, Normal by default), without fit. The game
 draws only the room its camera frames, one screen: zoomed out, every dungeon
 room and house sat small in black, most houses with their backdrop's glow a hard
-circle (`build/zoom_audit.sh`, 2.0 at 40 places). The interior backdrop
+circle (`tools/coop_tests/zoom_audit.sh`, 2.0 at 40 places). The interior backdrop
 (`BACKDROP_HASHES`) is stretched by the zoom both ways, so a raised Indoor zoom
 shows the game's own soft glow out to the edges. Options weighed for indoors:
 - **A, the game's view (the default):** rooms are framed to fit the screen.
@@ -772,7 +772,7 @@ fallen through the ground, loaded with Link falling forever at the map's origin
 presses + or −, every copy of the other Links' positions that their components
 keep (`k_pos_copies`, found by value) is set to Player 1's for the pause, their
 updates skipped meanwhile, and put back once Player 1's update runs again after
-the pause (or 8 frames on, if no menu came). Checked with `build/savetest.sh`:
+the pause (or 8 frames on, if no menu came). Checked with `tools/coop_tests/savetest.sh`:
 saved with Player 2 9 units away, the file holds Player 1's spot, and after the
 menu closes Player 2 is back on his own spot, walking.
 - The Links left over (parked below the map, co-op off too) are held as well:
@@ -877,8 +877,9 @@ Address tables: `python tools/test_game_addresses.py`, and with game files
 `--game v1_0_1=<extracted>` checks every hook's instruction word. It also checks
 that a version with co-op has every `COOP_*` address (one left at 0 drops its
 hook), and `tools/version_map.py` keeps the 1.0.1 tables' own values for what
-1.0.0 doesn't have (0 there). The `build/*.sh` scripts named below are local
-(`build/` isn't in the repository); they come with the co-op developer package.
+1.0.0 doesn't have (0 there). The scripted runs named below are in
+`tools/coop_tests/` (its README: the save seed they start from, hiding real
+controllers); their logs and frames go to `build/`.
 
 Test switches (environment):
 
@@ -893,7 +894,7 @@ Test switches (environment):
 | `LARECOMP_COOP_AT=<frame>:<n>` | the player count changed to n at that frame, as from the menu (late controllers) |
 | `LARECOMP_INPUT_P2..P8=<frame>:<button>:<frames>,...` | scripted input for players 2..8, as `LARECOMP_INPUT` |
 | `LARECOMP_COOP_MOVE=<frame>:<p>:<x>:<y>:<z>[:hold]` | player p put there at that frame (left far away); `:hold` keeps him there |
-| `LARECOMP_COOP_ZOOM=<factor>` | the camera zoom forced (`build/zoom_audit.sh`) |
+| `LARECOMP_COOP_ZOOM=<factor>` | the camera zoom forced (`tools/coop_tests/zoom_audit.sh`) |
 | `LARECOMP_COOP_TRACE=<name prefix>[,<another>...]` | `[trace]` lines: each actor so named, its position every 30 frames (a part's: its owner's), and the player it goes for whenever that changes (alone too); an enemy and its parts: `EnemyZolRed,ZolRed:` |
 | `LARECOMP_COOP_TRACE_EVERY=<n>` | with `LARECOMP_COOP_TRACE`: every n frames instead |
 | `LARECOMP_NO_ZOOM_STRETCH=1` | camera-attached effects not stretched by the zoom (to see what it fixes) |
@@ -917,7 +918,7 @@ What was checked on 1.0.1, mostly with the test inputs above and
   first; a field warp hole and a dungeon warp hole with Player 2 on it, then
   Player 1.
 - **Enemies:** spear Moblins changing targets only after their lock.
-- **This round** (`build/full_check.sh` runs the triggers, doors, A-button,
+- **This round** (`tools/coop_tests/full_check.sh` runs the triggers, doors, A-button,
   side-view and HUD checks in turn):
   - Tail Cave loaded twice: one set of extras, no copies.
   - Players turned on at the start screen (`LARECOMP_COOP_AT`): every Link
@@ -933,7 +934,7 @@ What was checked on 1.0.1, mostly with the test inputs above and
     enemy near stays where he is (no longer "put on Player 1"). The revive
     prompt is under the knocked-out player.
 - **Saves and lost players** (2026-10-28):
-  - `build/savetest.sh` saves through the pause menu in a scratch save folder
+  - `tools/coop_tests/savetest.sh` saves through the pause menu in a scratch save folder
     (`LARECOMP_SAVE_DIR`): with Player 2 away, the file holds Player 1's spot,
     and it loads with Link standing there.
   - A player in an area that isn't loaded falls and is put back on Player 1
@@ -957,7 +958,7 @@ them right at the frame's end, and they're logged (`imgui_errors_logged`, for
 both contexts). One check was seen with co-op on, in the Controls tab:
 `IsNamedKey(key)` in `GetKeyData` (a key code that isn't one); every key the
 runtime gives the menus was checked and is valid, so its cause isn't known yet.
-- **A-button actions** (`build/interact_check.sh`): Player 2 lifting and
+- **A-button actions** (`tools/coop_tests/interact_check.sh`): Player 2 lifting and
   throwing a rock and a pot, opening a chest (the seashell at Field 07M),
   reading a sign (Field 04P),
   Player 1 lifting with co-op on and off, two players pressing A together
@@ -1002,15 +1003,15 @@ runtime gives the menus was checked and is valid, so its cause isn't known yet.
   stands across the shop. Player 2 stays where he is, and still comes in
   with Player 1 through the door.
 - **Co-op off:** unchanged with "Zoom out" at With co-op (the default).
-- **"Zoom out"** (`build/zoom_solo.sh`, frame 2600 of the save seed's Tal Tal
+- **"Zoom out"** (`tools/coop_tests/zoom_solo.sh`, frame 2600 of the save seed's Tal Tal
   Heights and Marin and Tarin's house): alone at With co-op the game's own
   view, alone at Always the Field as co-op's Out 50%, two players at Off the
   game's own view, alone at Always with Indoor zoom Out 30% the room zoomed
   out (its backdrop stretched), and at With co-op the game's own room. Alone
-  at Always and Out 60% (`build/zoom_solo_grass.sh`), spin attacks in tall
+  at Always and Out 60% (`tools/coop_tests/zoom_solo_grass.sh`), spin attacks in tall
   grass south of Mabe Village and a walk away and back: what he cut is noted,
   nothing came back in view.
-- **The boulder carried past a screen's edge** (`build/rock_run.sh`, the
+- **The boulder carried past a screen's edge** (`tools/coop_tests/rock_run.sh`, the
   user's "picking up the boulder and running past slightly" 2026-10-29): at
   Tal Tal Heights' start, two players and alone at Always, Player 1 lifts the
   boulder, runs east past the edge and back: it isn't made again, and none of
@@ -1024,7 +1025,7 @@ runtime gives the menus was checked and is valid, so its cause isn't known yet.
   open), a quick tap on Player 2's pad, and player 2's rumble on his own pad
   (mounted only while he has one).
 - **The evening round** (user playtest 2026-10-28):
-  - Revive prompts (`build/hud_pair.sh`): 4 players on one spot, Player 2
+  - Revive prompts (`tools/coop_tests/hud_pair.sh`): 4 players on one spot, Player 2
     knocked out, the others stepping round him, at the user's 3840x2071 window:
     three prompts stacked, presenting to the end. (The old loop's rounding was
     shown in a test program - at 3840x2071 it trips for about 7% of prompt
@@ -1049,7 +1050,7 @@ runtime gives the menus was checked and is valid, so its cause isn't known yet.
   - A copy of the user's File 3 loaded with 4 players: all stand, no
     allocation failure.
   - The follow-up checks, each also run on the build before the round
-    (`EXE=` in `build/run_test.sh`): Angler's Tunnel's spikes (above); the
+    (`EXE=` in `tools/coop_tests/run_test.sh`): Angler's Tunnel's spikes (above); the
     Angler Fish's room - Player 3 held 4 below a knocked-out Player 2: no
     prompt; beside him: the prompt; a side-view room with collision on,
     Player 2 dropped onto Player 1's head: through to the floor at once (the
@@ -1102,11 +1103,11 @@ runtime gives the menus was checked and is valid, so its cause isn't known yet.
   whose chasing is in a component not named `...React...` or `...PlayerComp`
   would still go to Player 1. Bosses other than the Armos Knight weren't
   checked, and the Armos Knight only in scripted fights
-  (`build/armos_fight.sh`). A Like Like's grab is checked (`build/likelike.sh`)
+  (`tools/coop_tests/armos_fight.sh`). A Like Like's grab is checked (`tools/coop_tests/likelike.sh`)
   on the Field only (Eagle's Tower's weren't tried).
 - **Other crumbling floors** (`AC_FLOOR`: Catfish's Maw's broken floor, a
   house's collapse tiles, the Face Shrine's falling floor) weren't checked in
-  the game; the collapse tiles are (`build/floor.sh`).
+  the game; the collapse tiles are (`tools/coop_tests/floor.sh`).
 - **Controller rows** (`coop_pad_path_N`) have no test: whether a real pad's
   SDL path stays the same across restarts and reconnects wasn't checked.
 - **Red Zols "jumping only for Player 1"** (user 2026-11-01, Catfish's Maw)
