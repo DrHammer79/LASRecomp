@@ -30,6 +30,7 @@
 #include "../hle.h"
 #include "../input_bind.h"
 #include "../settings.h"
+#include "../cosmetic_colour.h"
 
 #define COOP_MAX 8
 
@@ -221,13 +222,11 @@ int rt_coop_hook(Cpu *c, int which) {
     case 7: {  // COOP_COLOR_SITE - blr x8 with s0 = the tunic frame (0 green, 1 red, 3 blue)
         float f;
         memcpy(&f, &c->v[0], 4);
-        if (!coop_colours()) {  // (no co-op tunic file: the game's own three - each other player's colour if it is
-            // green, red or blue, else one of those by his number; Player 1 keeps his own)
+        if (!coop_colours()) {  // (no co-op tunic file: every other player in the game's green tunic, coloured as he is
+            // drawn - coop_tunic_tint; Player 1 keeps his own, the Red or Blue Mail too)
             int i = coop_index(c->x[19]);
             if (!rt_coop_on() || i <= 0) return 0;
-            static const float k_game_frame[3] = {0, 1, 3};
-            int set = g_settings.coop_colour[i];
-            f = k_game_frame[set >= 0 && set < 3 ? set : i % 3];
+            f = 0;
             __uint128_t v = 0;
             memcpy(&v, &f, 4);
             c->v[0] = v;
@@ -402,15 +401,14 @@ int rt_coop_hook(Cpu *c, int which) {
     return 0;
 }
 
-// The mod's tunic colours need its Playerlink.bfres (24 colour frames: 3 per player): served from
-// <data root>/coop/romfs while co-op is on (runtime/services/fs.c).
+// The mod's Playerlink.bfres (24 colour frames: 3 per player), if someone has it: served from <data root>/coop/romfs
+// while co-op is on (runtime/services/fs.c), its colour sets then picked by COOP_COLOR_SITE. Not needed: without it the
+// tunics are coloured as they are drawn (coop_tunic_tint, below).
 static int g_coop_dir = -1;  // (<data root>/coop/romfs there: looked at once a boot, the romfs index asks per file)
 static int g_colours = -1;   // (the colour file served: fixed for the boot, as the romfs index)
-static bool g_indexed;       // (this boot's romfs index is made: the game has started)
-RT_ON_RESET(coop_files_reset) { g_coop_dir = g_colours = -1, g_indexed = false; }
+RT_ON_RESET(coop_files_reset) { g_coop_dir = g_colours = -1; }
 
 bool coop_romfs_override(const char *path, char *out, size_t cap) {
-    g_indexed = true;
     // (that one file only: other game files copied there from the mod's own romfs - its whole set - aren't served)
     if (!rt_coop_on() || strcmp(path, "region_common/actor/Playerlink.bfres")) return false;
     extern const char *rt_data_root(void);
@@ -438,22 +436,46 @@ bool coop_romfs_override(const char *path, char *out, size_t cap) {
 // 1's tunic - until then.
 bool coop_colours(void) { return g_colours > 0; }
 
-// For the menu: 0 the colours are in (or come as the game starts: not started yet), 1 they come once the game starts
-// again (co-op turned on since it started), 2 there is no coop/romfs Playerlink.bfres.
-const char *coop_colours_path(void);
-int coop_colours_state(void) {
-    if (g_colours > 0) return 0;
-    struct stat sb;
-    return stat(coop_colours_path(), &sb) != 0 ? 2 : g_indexed ? 1 : 0;
+// ---- Tunic colours as the Links are drawn (no edited game file: upstream's review, item 7). Without the co-op
+// Playerlink.bfres every other player wears the game's green tunic (COOP_COLOR_SITE), and the renderers ask, for each
+// draw sampling a tunic map (runtime/nvn/texpatch.c texpatch_tunic_kind), whose Link it is: a Link's draws carry his
+// bone matrices (uniform buffer 3), the first one's translation his position (seen 2026-11-13: within 0.05 of it).
+// That player's colour then comes from the per-draw HSV tint the Cosmetics tab's live recolours use
+// (runtime/nvn/recolour.c): the green tunic's hue window moved to his colour, the shading kept - the leather, skin
+// and hair outside the window stay. Player 1's tunic is tinted only when he chose another colour than Green (his Red
+// or Blue Mail lies outside the window: it stays). The players' positions are taken as each frame starts (game
+// thread) for the render thread.
+#define TUNIC_NEAR 0.75f
+static float g_tunic_at[COOP_MAX][3];
+static _Atomic int g_tunic_n;
+static void tunic_tick(void) {
+    int n = 0;
+    for (int i = 0; i < g_n && i < COOP_MAX; i++) {
+        float p[3];
+        if (player_pos(coop_player(i), p)) memcpy(g_tunic_at[i], p, sizeof p);
+        else g_tunic_at[i][1] = -1e9f;
+        n = i + 1;
+    }
+    atomic_store_explicit(&g_tunic_n, rt_coop_on() && !coop_colours() ? n : 0, memory_order_release);
 }
-
-// Where the colour file goes, for the menu's "Not installed" note: <data root>/coop/romfs/region_common/actor/.
-const char *coop_colours_path(void) {
-    extern const char *rt_data_root(void);
-    static char p[1200];
-    const char *root = rt_data_root();
-    snprintf(p, sizeof p, "%s/coop/romfs/region_common/actor/Playerlink.bfres", root ? root : ".");
-    return p;
+void recolour_pack(float tint[8], float shift, float sat, float val, float centre, float width, float min_sat,
+                   float spread);
+void coop_tunic_tint(const float *bones, uint32_t size, float tint[8]) {
+    int n = atomic_load_explicit(&g_tunic_n, memory_order_acquire);
+    if (!n || !bones || size < 48) return;
+    float at[3] = {bones[3], bones[7], bones[11]}, bd = TUNIC_NEAR * TUNIC_NEAR;
+    int who = -1;
+    for (int i = 0; i < n; i++) {
+        float dx = g_tunic_at[i][0] - at[0], dy = g_tunic_at[i][1] - at[1], dz = g_tunic_at[i][2] - at[2];
+        if (dx * dx + dy * dy + dz * dz < bd) bd = dx * dx + dy * dy + dz * dz, who = i;
+    }
+    if (who < 0 || g_settings.coop_colour[who] == 0) return;  // (Green: the tunic as it is)
+    // the green tunic's typical colour - or the Cosmetics tab's tunic colour, the green map recoloured to it on upload
+    float h, sv, v, shift, sat, val;
+    uint32_t cos;
+    col_hsv(col_target(&g_settings.tunic, COL_SLOT_TUNIC, &cos) ? cos : coop_colour_rgb_of(0), &h, &sv, &v);
+    col_mapping(h, sv, v, coop_colour_rgb(who), &shift, &sat, &val);
+    recolour_pack(tint, shift, sat, val, h, 0.09f, 0.18f, 1.0f);
 }
 
 // The game's countdown (timed challenges: Dg_TimeCount in region_common/ui/Game.arc) sits in the bottom left, where
@@ -553,6 +575,7 @@ void coop_level_change(const char *level, const char *locator) {
 // Once per frame on the game thread (runtime/hle/input.c, npad 1's poll).
 void coop_tick(Cpu *c) {
     g_game_thread = pthread_self(), g_game_thread_known = true;
+    tunic_tick();
     if (g_as_on) {  // (no update runs as the frame starts: an update whose end went unseen leaves "Link" no one's)
         static int said;
         if (!said++) LOG("[coop] an enemy's update ended unseen: \"Link\" back to the game's\n");
