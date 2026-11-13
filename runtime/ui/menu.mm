@@ -268,10 +268,11 @@ static int g_kbd_max = 8;
 static bool capturing() { return g_open.load() || g_kbd.load() == 1; }
 
 // Each controller's sticks and triggers are kept apart (SDL_EVENT_GAMEPAD_AXIS_MOTION), and the menu gets, for each
-// direction, the furthest any controller pushes it: with co-op's controllers all sending, one resting stick's noise
-// set a direction another was holding back to nothing, and a stick resting near the old 0.3 went on and off by itself
-// (user 2026-11-01: "menu freaks out randomly with no one doing controllers on it"). A direction counts from PAD_ON
-// and stops below PAD_OFF.
+// direction, the furthest any controller pushes it. Every controller's axis events set the same keys: with several
+// connected (five, in a co-op fork's playtest) one resting stick's noise set a direction another was holding back to
+// nothing, and a stick resting near the old 0.3 went on and off by itself ("menu freaks out randomly with no one doing
+// controllers on it", 2026-11-01). A direction counts from PAD_ON and stops below PAD_OFF. The axes are kept with the
+// menu closed too (a stick let go meanwhile isn't still held when it opens), and a controller's go with it.
 #define PAD_SLOTS 8
 #define PAD_ON 0.5f
 #define PAD_OFF 0.35f
@@ -378,17 +379,37 @@ bool menu_handle_event(const SDL_Event *e) {
         if (k != ImGuiKey_None) { QEvent q = {}; q.kind = QEvent::KEY; q.key = k; q.down = down; push(q); }
         return true;
     }
+    case SDL_EVENT_GAMEPAD_REMOVED: {  // (its axes go: a stick held as it was unplugged doesn't stay held)
+        for (int s = 0; s < PAD_SLOTS; s++)
+            if (g_axis_pad[s] == e->gdevice.which) g_axis_pad[s] = 0;
+        if (capturing()) {  // (the menu's keys again, from the controllers left)
+            static const ImGuiKey dir_key[6] = {ImGuiKey_GamepadLStickLeft, ImGuiKey_GamepadLStickRight,
+                                                ImGuiKey_GamepadLStickUp, ImGuiKey_GamepadLStickDown,
+                                                ImGuiKey_GamepadRStickUp, ImGuiKey_GamepadRStickDown};
+            static const int dir_axis[6] = {SDL_GAMEPAD_AXIS_LEFTX, SDL_GAMEPAD_AXIS_LEFTX, SDL_GAMEPAD_AXIS_LEFTY,
+                                            SDL_GAMEPAD_AXIS_LEFTY, SDL_GAMEPAD_AXIS_RIGHTY, SDL_GAMEPAD_AXIS_RIGHTY};
+            QEvent q = {};
+            q.kind = QEvent::ANALOG;
+            for (int d = 0; d < 6; d++) {
+                q.key = dir_key[d], q.value = dir_value(d, dir_axis[d], d % 2 ? 1 : -1);
+                push(q);
+            }
+            q.key = ImGuiKey_GamepadL2, q.value = axis_max(SDL_GAMEPAD_AXIS_LEFT_TRIGGER, 1); push(q);
+            q.key = ImGuiKey_GamepadR2, q.value = axis_max(SDL_GAMEPAD_AXIS_RIGHT_TRIGGER, 1); push(q);
+        }
+        return false;  // (input.c's too)
+    }
     case SDL_EVENT_GAMEPAD_AXIS_MOTION: {
-        if (!capturing()) return false;
         int axis = e->gaxis.axis, s = 0;
-        if (axis < 0 || axis >= SDL_GAMEPAD_AXIS_COUNT) return true;
+        if (axis < 0 || axis >= SDL_GAMEPAD_AXIS_COUNT) return capturing();
         while (s < PAD_SLOTS && g_axis_pad[s] != e->gaxis.which) s++;
-        if (s == PAD_SLOTS) {  // (a controller not seen yet: a free slot, or the first one's)
+        if (s == PAD_SLOTS) {  // (a controller not seen yet: a free slot, or the last one's)
             for (s = 0; s < PAD_SLOTS - 1 && g_axis_pad[s]; s++) {}
             g_axis_pad[s] = e->gaxis.which;
             memset(g_axis[s], 0, sizeof g_axis[s]);
         }
         g_axis[s][axis] = e->gaxis.value / 32767.0f;
+        if (!capturing()) return false;
         QEvent q = {};
         q.kind = QEvent::ANALOG;
         switch (axis) {
