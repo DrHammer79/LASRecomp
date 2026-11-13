@@ -27,7 +27,9 @@ a = Analysis(
     datas=[(os.path.join(TOOLS, 'rando', 'patch_variants.json'), 'rando'),
            (os.path.join(TOOLS, '..', 'runtime', 'game_addresses', 'versions.h'), 'runtime/game_addresses')]
           + [(p, 'runtime/game_addresses')  # (every game version's patch table: gen.py picks one by build ID)
-             for p in sorted(glob.glob(os.path.join(TOOLS, '..', 'runtime', 'game_addresses', 'patches_v*.h')))],
+             for p in sorted(glob.glob(os.path.join(TOOLS, '..', 'runtime', 'game_addresses', 'patches_v*.h')))]
+          + [(p, 'runtime/game_addresses')  # (co-op: the game's reads of "Link" per version, tools/patches.py)
+             for p in sorted(glob.glob(os.path.join(TOOLS, '..', 'runtime', 'game_addresses', 'coop_player_reads_v*.txt')))],
     hiddenimports=collect_submodules('unicorn') + ['patches'],  # (unicorn imports its arch modules by name at run time; gen.py imports patches once the version is known)
     excludes=['tkinter', 'pydoc', 'doctest', 'unittest', 'pdb', 'IPython', 'numpy', 'setuptools', '_distutils_hack',
               'pkg_resources', 'ssl', '_ssl', '_hashlib', '_multibytecodec', '_codecs_cn', '_codecs_hk',

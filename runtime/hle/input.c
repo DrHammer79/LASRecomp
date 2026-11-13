@@ -289,12 +289,28 @@ static void coop_recompute(int i) {
     coop_axis[i][3] = -SDL_GetGamepadAxis(g, SDL_GAMEPAD_AXIS_RIGHTY);
 }
 
-// The player a controller was assigned to (settings coop_pad_path_N: SDL's device path - for an Xbox-type pad its XInput
-// slot, the quadrant its ring lights), or -1. (input_assign_begin, below)
+// What a controller is remembered by for co-op (settings coop_pad_path_N): on the desktop SDL's device path - for an
+// Xbox-type pad its XInput slot, the quadrant its ring lights, a USB port or Bluetooth address for the others. On a
+// phone or tablet (PLAT_TOUCH: iOS, Android), or with no path, its GUID ("guid:<hex>"): the kind of controller - two of
+// the same kind aren't told apart there, and the first to connect goes to the first player it was assigned to.
+static const char *pad_key(SDL_JoystickID id, char *buf, size_t n) {
+    const char *path = PLAT_TOUCH ? NULL : SDL_GetGamepadPathForID(id);
+    if (path && *path) return path;
+    char g[64];
+    SDL_GUIDToString(SDL_GetGamepadGUIDForID(id), g, sizeof g);
+    snprintf(buf, n, "guid:%s", g);
+    return buf;
+}
+
+// The player a controller was assigned to (pad_key), or -1. (input_assign_begin, below) Only with co-op on: alone, Player 1's
+// controller is whichever one is used, as upstream's (#455), whatever was assigned for co-op.
 static int pad_saved_player(SDL_JoystickID id) {
-    const char *path = SDL_GetGamepadPathForID(id);
-    for (int k = 0; path && *path && k < 8; k++)
-        if (!strcmp(path, g_settings.coop_pad_path[k])) return k;
+    extern int coop_players_now(void);
+    if (coop_players_now() < 2) return -1;
+    char buf[80];
+    const char *key = pad_key(id, buf, sizeof buf);
+    for (int k = 0; *key && k < 8; k++)
+        if (!strcmp(key, g_settings.coop_pad_path[k])) return k;
     return -1;
 }
 // (a slot whose player's assigned controller is connected: kept for it)
@@ -304,8 +320,8 @@ static bool slot_kept(int slot) {
     bool kept = false;
     SDL_JoystickID *ids = *want ? SDL_GetGamepads(&n) : NULL;
     for (int i = 0; ids && i < n && !kept; i++) {
-        const char *p = SDL_GetGamepadPathForID(ids[i]);
-        kept = p && !strcmp(p, want);
+        char buf[80];
+        kept = !strcmp(pad_key(ids[i], buf, sizeof buf), want);
     }
     SDL_free(ids);
     return kept;
@@ -671,8 +687,9 @@ static void assign_pad(int player, SDL_JoystickID id) {
     LOG("[input] Player %d's controller: %s\n", player + 1, SDL_GetGamepadName(g));
     for (int p = 0; p < 8; p++) {
         SDL_Gamepad *h = p == 0 ? pad : p <= COOP_PADS ? coop_pad[p - 1] : NULL;
-        const char *path = h ? SDL_GetGamepadPath(h) : NULL;
-        snprintf(g_settings.coop_pad_path[p], sizeof g_settings.coop_pad_path[p], "%s", path ? path : "");
+        char buf[80];
+        snprintf(g_settings.coop_pad_path[p], sizeof g_settings.coop_pad_path[p], "%s",
+                 h ? pad_key(SDL_GetGamepadID(h), buf, sizeof buf) : "");
     }  // (saved by the menu, as the row stops waiting)
 }
 bool input_assign_event(const SDL_Event *e) {

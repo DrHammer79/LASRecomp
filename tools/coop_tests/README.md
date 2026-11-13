@@ -9,7 +9,7 @@ they answer and what to expect.
 They are Windows-only as they stand (MSYS2 UCRT64 shell: `run_test.sh` stops the game with PowerShell and `cygpath`),
 and run the checkout's own build (`make gen`, `make`). Outputs go to `build/` (git-ignored): the log of a run as
 `build/run_<id>.log`, game frames in `build/frames/`, each run's settings file in `build/test_ini/<id>.ini` (made
-empty, so the defaults, when missing). Your own settings and saves aren't touched.
+empty, so the defaults, when missing). They play in the checkout: its own `save/save_0/` is replaced by the seed's files on each run (keep no save of your own there), and at the end of a run every LAS Recomp started from the checkout is stopped. A game installed elsewhere - its settings and saves - isn't touched.
 
 ## Setup
 
