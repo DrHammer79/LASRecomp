@@ -7,7 +7,10 @@ LA_Coop_ExactStack_360 (the "8 Players" build, game 1.0.1). It works with game
 versions 1.0.1 and 1.1.0 (address table `v1_0_1`). Version 1.0.0 has every
 `COOP_*` address at 0x0, so co-op stays off there and its option is greyed out.
 
-Everything is in `runtime/hle/coop.c` (game logic), `runtime/ui/coop_hud.mm`
+Everything is in `runtime/hle/coop.c` (game logic: laid out in parts,
+`runtime/hle/coop/*.inc` - hearts, camera, players, targets, spawn, events,
+field - included by it in order as one translation unit, since they share the
+players' state and each other's helpers), `runtime/ui/coop_hud.mm`
 (the other players' hearts, the "Zzz" bubbles) and hook sites in
 `tools/patches.py` (`_COOP_HOOKS`). Co-op is off by default: with
 `coop_players = 1`, every hook returns 0 and runs its own instruction, so the
