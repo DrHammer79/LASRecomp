@@ -412,4 +412,3 @@ static void hearts_tick(Cpu *c) {
         if (g_revive[i] >= 1) revive(i, "by another player");
     }
 }
-
