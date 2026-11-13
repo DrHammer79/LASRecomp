@@ -1,8 +1,8 @@
 // Local co-op: 2-8 Links on one screen, Player 1 on the keyboard / first controller and each other player on a
 // controller of his own (setting coop_players; runtime/hle/input.c gives npad 2..8 their pads).
 //
-// A port of the community Link's Awakening co-op mod (an exlaunch "pxtch" module for 1.0.1, its subsdk9 patch table
-// read 2026-10-27) onto the hook sites of tools/patches.py (COOP_*): the game makes one Link per player through its
+// A port of the community Link's Awakening co-op mod LA_Coop_ExactStack_360 (its "8 Players" build: an exlaunch
+// "pxtch" module for 1.0.1, its subsdk9 patch table read 2026-10-27) onto the hook sites of tools/patches.py (COOP_*): the game makes one Link per player through its
 // own player creator, places all of them on every spawn point, gives each the controller of his npad and a tunic
 // colour set of his own (the mod's Playerlink.bfres, served from <data root>/coop/romfs: coop_romfs_override). Unlike
 // the mod: the players' indices live here, not past the end of the Link object (the mod grew the allocation by 4 and
