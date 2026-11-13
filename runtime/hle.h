@@ -40,7 +40,7 @@ typedef void (*ResetFn)(void);
 #define RT_ON_RESET(fn)                                                                     \
     static void fn(void);                                                                   \
     __attribute__((used, section(RESET_SECTION))) static const ResetFn                      \
-        HLE_CAT(reset_entry_, __LINE__) = fn;                                               \
+        HLE_CAT(reset_entry_, fn) = fn;  /* (by its function: unique, where a line number isn't in a unit made of parts) */ \
     static void fn(void)
 
 #define RES_OK 0u
