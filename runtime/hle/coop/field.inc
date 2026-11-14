@@ -99,25 +99,24 @@ static void active_box(Cpu *c) {
     set_s(c, 3, hx), set_s(c, 4, (z1 - z0) / 2), set_s(c, 5, (z0 + z1) / 2);
 }
 
-// The shadow map's light box (COOP_SHADOW_BOX_SITE): the game fits its one 2048 x 2048 shadow map to a world box around
-// Player 1 (the view's +0x200 min, +0x210 max: about 34 x 16 x 33 on the Field, set again each frame). Zoomed out the
-// view reached past it: the shadows at its edge ran on as dark diagonal stripes across the far ground (user 2026-10-29,
-// past 2.3 in a wide window), and past it nothing cast one. Grown across and deep by the zoom, as much as the view
-// grows, the map's texels cover as much of the screen as at 1. It costs nothing measurable: the game draws every
-// caster into the map anyway (draws the same, GPU time within 0.2 ms either way at 2.0, 2.6 and 3.0).
-// (what we left in it: a second fit in the same frame, the game not having set it since, doesn't grow it again)
-static uint64_t g_shadow_view;
-static float g_shadow_grown[8];
-static void shadow_box(uint64_t view) {
-    if (g_zoom <= 1.0f || !heap_ptr(view)) return;
-    float *b = (float *)(uintptr_t)(view + 0x200);  // (min x y z, max x y z: each 4 floats)
-    if (view == g_shadow_view && !memcmp(b, g_shadow_grown, sizeof g_shadow_grown)) return;
+// The shadow map's box (COOP_SHADOW_BOX_SITE): the game fits its one 2048 x 2048 shadow map to a world box around
+// Player 1 (main+0x10540, each frame: his position plus a box kept relative to him, about 34 x 16 x 33 on the Field,
+// stored at the view's +0x200 min, +0x210 max). Zoomed out the view reached past it: the shadows at its edge ran on as
+// dark diagonal stripes across the far ground (user 2026-10-29, past 2.3 in a wide window), and past it nothing cast
+// one. Grown across and deep by the zoom, as much as the view grows, the map covers what the view shows. It is grown
+// as it is stored, before anything reads it. Grown later, only where the light's projection is fitted
+// (main+0x100a460), the map no longer matched it: the casters sat off-centre in it, cut off on the light's side, and
+// from 2x most of the ground lost its shadows (user 2026-11-14: "they start drawing wrongly then settle weird"; the
+// map read back at 3x). It costs nothing measurable: the game draws every caster into the map anyway.
+static void shadow_box(Cpu *c) {
+    if (g_zoom <= 1.0f) return;
+    float lo[4], hi[4];  // (q1: min x y z, q0: max)
+    memcpy(lo, &c->v[1], sizeof lo), memcpy(hi, &c->v[0], sizeof hi);
     for (int i = 0; i < 3; i += 2) {  // (across and deep: its height as it is)
-        float mid = (b[i] + b[4 + i]) * 0.5f, half = (b[4 + i] - b[i]) * 0.5f * g_zoom;
-        b[i] = mid - half, b[4 + i] = mid + half;
+        float mid = (lo[i] + hi[i]) * 0.5f, half = (hi[i] - lo[i]) * 0.5f * g_zoom;
+        lo[i] = mid - half, hi[i] = mid + half;
     }
-    g_shadow_view = view;
-    memcpy(g_shadow_grown, b, sizeof g_shadow_grown);
+    memcpy(&c->v[1], lo, sizeof lo), memcpy(&c->v[0], hi, sizeof hi);
 }
 
 // LARECOMP_TRACK_RESPAWN=1 (diagnostic): a rock or grass actor made again under the same name - one that came back -

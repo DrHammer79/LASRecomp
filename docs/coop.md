@@ -684,18 +684,27 @@ moved back (the build before the grave's fix did the same: `tools/coop_tests/ic.
 **The shadow map's box** (`COOP_SHADOW_BOX_SITE`, `shadow_box`). The game
 draws one 2048 x 2048 shadow map a frame (a depth-only pass), and a
 screen-space pass (704 x 396) looks each pixel up in it through a matrix in
-the scene's constants. main+0x100a460 fits the map: it takes a world box
-around Player 1 from the view (`+0x200` min, `+0x210` max: about 34 x 16 x 33
-on the Field, set again each frame), turns its corners into the light's space
-and makes their bounds the light's projection; main+0x1009f30 then makes the
-lookups' matrix from it (the renderer's "View" `+0x2a0`). Zoomed out, the view
+the scene's constants. main+0x10540 makes a world box around Player 1 each
+frame (his position plus a box kept relative to him: about 34 x 16 x 33 on
+the Field; or the union of a list of objects' boxes) and stores it in the view
+(`+0x200` min, `+0x210` max; the same values to a second view at
+main+0x11228). main+0x100a460 fits the map to it: it turns its corners into
+the light's space and makes their bounds the light's projection;
+main+0x1009f30 then makes the lookups' matrix from it (the renderer's "View" `+0x2a0`). Zoomed out, the view
 reached past the box: the shadows at its edge ran on as dark diagonal stripes
 across the far ground (user 2026-10-29, past about 2.3 in a 3840x2071 window),
-and past it nothing cast one. The hook (on the fit's first instruction, for
-cascade 0, the only one fitted) grows the box across and deep by `g_zoom`, as
-much as the view grows, so the map's texels cover as much of the screen as at
-1 (its height stays). A second fit in the same frame, the game not having set
-the box since, doesn't grow it again. It costs nothing measurable: the game
+and past it nothing cast one. The hook (on main+0x109b8, the store) grows the
+box across and deep by `g_zoom` as it is made, as much as the view grows, so
+the map covers what the view shows (its height stays). Until 2026-11-14 the
+box was grown at the fit's first instruction instead, after it had been
+stored: the map then didn't match the fit - read back at 3x, its casters sat
+off-centre, cut off on the light's side and most of the map left empty - and
+from 2x most of the ground lost its shadows, worst while moving (user
+2026-11-14: "they start drawing wrongly then settle weird"). Grown where it is
+stored, everything that reads it has the same box: at 3x the map holds the
+whole view's casters at a third of the scale (its depth 0.04 to 0.82 of the
+range), the trees by the players cast their shadows again and they stay put
+from frame to frame while walking. It costs nothing measurable: the game
 draws every caster into the map anyway (checked 2026-10-30 at Martha's Bay,
 1920x1035: the same draws a frame with and without it at 2.0, 2.6 and 3.0,
 GPU time within 0.2 ms either way, 60 fps). Checked clean at 1.6, 2.0, 2.3,
@@ -982,7 +991,7 @@ the game's reads of it by the RomFS index's patch list, while co-op is on
 | COOP_KEEP_BOX_SITE | 0x700085c628 | ld1 {v0.s}[1], [x23] | the box whose screens are kept, the same (34) |
 | COOP_ACTIVE_BOX_SITE | 0x700085c848 | fsub s8, s0, s3 | the active screens' box takes in every player (35) |
 | COOP_WARP_OBJ_TOUCH / LEAVE_SITE | 0x7000cbd42c / d290 | ldrb w8, [x8, #0x43] | the overworld's warp hole objects (36, 37) |
-| COOP_SHADOW_BOX_SITE | 0x700100a460 | cbnz w1 | the shadow map's box grown with the zoom (38) |
+| COOP_SHADOW_BOX_SITE | 0x70000109b8 | stp q1, q0, [x8, #0x200] | the shadow map's box grown with the zoom as it is stored (38) |
 | COOP_TILE_PLAYER_SITE | 0x7000b01c70 | ldr x8, [x20, #0x4b8] | a collapse tile measures the player nearest it (39) |
 | COOP_LIKELIKE_SITE_0..8 | 0x70004a65f4, a7040, a7fb8, a89f4, a8ce8, a9400, a9898, aac54, ab1f0 | ldr x22/x21/x9/x8, [x20 or x21, #0x4b8] | a Like Like's "Link" is the player it goes for (40-48) |
 | COOP_DAMAGE_HALVED_SITE | 0x7000d4c750 | ldrh w8, [x8, #0x84] | an enemy's hit split after the game halves it (49) |
