@@ -34,7 +34,7 @@ int game_in_play(void) { abort(); }
 int cheats_link_health(int *max) { abort(); }
 int bind_label_family(void) { abort(); }
 int16_t g_bind_pad[BIND_PAD_COUNT], g_bind_key[BIND_KEY_COUNT];  // (A on the bottom button, as by default)
-int bind_pad_host(int slot) { return g_bind_pad[slot]; }  // (by position: "Buttons match labels" off)
+int bind_pad_host(int slot) { return g_bind_pad[slot]; }  // (by position: Button layout "Switch")
 pthread_mutex_t g_klock = PTHREAD_MUTEX_INITIALIZER;
 static int players = 1;  // (local co-op's player count: runtime/hle/coop.c)
 int coop_players_setting(void) { return players; }
