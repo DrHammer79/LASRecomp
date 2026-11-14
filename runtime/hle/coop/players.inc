@@ -154,6 +154,11 @@ bool coop_revive_prompt(int i, float w, float h, float *sx, float *sy) {
 
 // Player i (0: Player 1) holds A beside a knocked-out player: his stick and d-pad don't move him.
 int coop_reviving(int i) { return own_hearts() && i >= 0 && i < COOP_MAX && g_reviving[i] != 0; }
+// ... and player i is beside a knocked-out player, or holds an A the revive took: his A is the revive's, not the game's
+// (g_revive_reach, g_revive_a)
+int coop_revive_reach(int i) {
+    return own_hearts() && i >= 0 && i < COOP_MAX && (g_revive_reach[i] || g_revive_a[i]);
+}
 
 // The HUD (runtime/ui/coop_hud.mm): each player's hearts, maximum, knocked out / revive progress and colour.
 typedef struct { int hp, max, down; float revive; uint32_t rgb; } CoopHudRow;
