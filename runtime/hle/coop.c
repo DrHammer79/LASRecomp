@@ -170,6 +170,7 @@ static bool alone_hook(int which) {
     case 17: return zoom_on() || g_back != 0;
     case 33: case 34: case 35: return g_back_on;
     case 38: return g_zoom > 1.0f;
+    case 58: return g_back != 0;
     case 10: return g_pad_limit != 1;
     }
     return false;
@@ -394,6 +395,9 @@ int rt_coop_hook(Cpu *c, int which) {
         actor_made(c->x[reg[which - 53]], 0, 0, true);
         return 0;
     }
+    case 58:  // COOP_CULL_SITE - ldr s10, [x27, #0x568]: the culling pass reads the view camera (x27)
+        camera_cull(c);
+        return 0;
     }
     return 0;
 }
