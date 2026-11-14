@@ -69,8 +69,16 @@ Link). A spawn check whose object is gone with more Links is skipped
 **Controllers.** `runtime/hle/input.c` opens the second, third... SDL gamepads
 for players 2.. (npad ids 1..7, `GetNpadStyleSet` reports them as FullKey).
 `COOP_CTRL_SITE` gives each Link his own entry of the npad list.
-`COOP_PAD_STATE_SITE` and `COOP_APPLET_*` keep the controller manager polling
-and tell the controller applet it has that many players. A knocked-out player's
+The controller manager's player limit is the player count (`COOP_PAD_STATE_SITE`,
+in its update: its `+0x4e8`, the controller applet's `+0x1c8`, which the game
+makes 1 at `main+0x881d8c`; back to 1 with co-op off). With more controllers
+connected than that, it asks for the Switch's controller applet
+(`main+0x16038`), which LAS Recomp doesn't show: the game would wait for it
+for good. The mod let the manager poll whatever its state instead, so the
+request it made at every co-op boot waited, and was carried out once co-op was
+turned off - a Game Over's Continue stopped there (until 2026-11-14).
+`COOP_APPLET_*` still give the applet's arguments the player count, should it
+be shown. A knocked-out player's
 input is blocked. Both sticks pressed in (L3+R3) puts a player on Player 1.
 Player 1's own controller follows the one in use (#455: a press, or a stick
 pushed while his rests, on another pad makes it his), but never one that
@@ -904,7 +912,7 @@ the game's reads of it by the RomFS index's patch list, while co-op is on
 | COOP_COLOR_SITE | 0x7000d35760 | blr x8 | tunic frame per player (7) |
 | COOP_ENTER_SITE | 0x7000dd4950 | sub sp, sp, #0xa0 | Player 1's walk-in, the others ride (8) |
 | COOP_SCROLL_SITE | 0x70000bc628 | str x8, [sp] | left as it is (9) |
-| COOP_PAD_STATE_SITE | 0x7000015e5c | b.ne | controllers polled (10) |
+| COOP_PAD_STATE_SITE | 0x7000015e5c | b.ne | the controller manager's player limit (10) |
 | COOP_APPLET_SITE / _SINGLE | 0x7000881ebc / ee4 | strb | applet player count (11, 12) |
 | COOP_CCT_SWEEP_SITE_0 / _1 | 0x70012a88c8 / 89d0 | cbz x8 | Link capsules skipped (13, 14) |
 | COOP_ACTOR_EXEC_SITE / _DONE | 0x7000facbf8 / bfc | blr x9 / ldr x8, [sp, #8] | enemy targets, sleep pose (15, 16) |
@@ -1169,18 +1177,6 @@ Enter) didn't make the check fail, so the fix isn't confirmed by one.
 
 ## Not done or not checked
 
-- **Co-op turned off at a Game Over** (the count lowered to Off, then
-  Continue) stops the game: it waits in `nn::hid::ShowControllerSupport`, the
-  Switch's controller applet, which LAS Recomp doesn't show. Found 2026-11-13,
-  not fixed. The game's controller manager (state at `+0x4e0`: 1 normal, 2
-  "show the applet", `main+0x16968` / `main+0x173fc`) asks for it as soon as
-  the game boots with co-op on: the style it reads for the Handheld npad
-  (`0x20`, `+0x2e4`) is 0, which a solo boot never reaches. With co-op on,
-  `COOP_PAD_STATE_SITE` keeps the manager on its normal path, so the request
-  waits; once co-op is off it is carried out (`main+0x881e60`) and blocks.
-  Before 2026-11-13 the same steps crashed earlier, in the creator (see
-  "Making the Links"). Quitting to the start screen (a new boot) before
-  turning co-op off avoids it.
 - **Only the screens around Player 1 are made** on the Field (see "The screens
   around Player 1"). Another player who walks past them falls through and is
   put back on Player 1 (`lost_tick`): he's out of view by then.
