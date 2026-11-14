@@ -284,7 +284,7 @@ static bool doaction_can(uint64_t comp) {  // (the getter's own check: main+0xe8
 // and was left holding them. So the goods (ObjShopItem) are nothing to the other players' A.
 static bool shop_item(uint64_t comp) {
     uint64_t owner = LD64(comp + 0x48);
-    return heap_ptr(owner) && !strncmp((const char *)(uintptr_t)(owner + 0x18), "ObjShopItem", 11);
+    return heap_ptr(owner) && g_type_shop_item >= 0 && actor_type(owner) == g_type_shop_item;
 }
 
 static int doaction_get(Cpu *c) {
