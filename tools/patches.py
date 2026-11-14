@@ -1240,6 +1240,19 @@ _COOP_HOOKS = {
     # save's restart point (main+0xdfc710 -> main+0xdfcb90, file +0x559c). Every Link did, so it was the last one
     # updated - the first one made. Only Player 1's finds the object.
     A.COOP_RESTART_SITE: (0xf9425681, (), 'ldr x1, [x20, #0x4a8]: a Link\'s update looks up the player entity (its restart point)'),
+    # The actor base class: its constructor (main+0x1bdb0, from every actor class's) copies the spawn info's key and type
+    # into the actor (+0x98, +0xa0), its destructor (main+0xfa7970) ends it. Co-op tells actors apart by the type they
+    # were made as (runtime/hle/coop/targets.inc: actor_made, actor_gone).
+    A.COOP_ACTOR_TYPE_SITE: (0x79014268, (), 'strh w8, [x19, #0xa0]: an actor made - kept with its type'),
+    A.COOP_ACTOR_GONE_SITE: (0xa9bd57f6, (), 'stp x22, x21, [sp, #-0x30]!: an actor\'s base destructor - forgotten'),
+    # An enemy's parts that go by "Link": its reaction component (base class constructor main+0x12fae0 - the enemies',
+    # the objects', the NPCs' - destructor main+0xeb410) and its effect player (TailorPlayer: built in place twice,
+    # destructor main+0xe3b510), each kept from storing its class to its destructor.
+    A.COOP_PART_SITE_0: (0xf9000268, (), 'str x8, [x19]: a reaction component stores its class - kept'),
+    A.COOP_PART_SITE_1: (0xf9000288, (), 'str x8, [x20]: an effect player component stores its class - kept'),
+    A.COOP_PART_SITE_2: (0xf90002c8, (), 'str x8, [x22]: an effect player component stores its class - kept'),
+    A.COOP_PART_GONE_SITE_0: (0xd100c3ff, (), 'sub sp, sp, #0x30: a reaction component\'s destructor - forgotten'),
+    A.COOP_PART_GONE_SITE_1: (0xd100c3ff, (), 'sub sp, sp, #0x30: an effect player\'s destructor - forgotten'),
 }
 HOOKS.update({a: h for a, h in _COOP_HOOKS.items() if a})
 

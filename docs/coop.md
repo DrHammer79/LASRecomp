@@ -316,10 +316,9 @@ The levels name their objects cut short, not by kind: a Catfish's Maw tile is
 fix (2026-10-30) matched the kinds' full names and never fired; it also swapped
 "Link" during the tile's update, which the tile doesn't read.
 
-**Other floors that crumble** (`AC_FLOOR`: level names starting
-`ObjHouseColl`, `ObjKataKataFl`, `ObjMatFaceFa`, `ObjBrokenFlo` - prefixes only
-one kind has; `ObjKataKata-` in Turtle Rock could also be the lava button block
-`ObjKataKataLava`, so it isn't one) keep the enemies' swap: while one updates
+**Other floors that crumble** (`AC_FLOOR`: the types `ObjHouseCollapseTile`,
+`ObjKataKataFloor`, `ObjMatFaceFallFloor`, `ObjBrokenFloorLv5` - see "What an
+actor is") keep the enemies' swap: while one updates
 with another player on it (within 1 unit of its middle across, a step up or
 down) and Player 1 not, the game manager's player is that player
 (`floor_player`), logged once a floor. Not checked in the game.
@@ -379,10 +378,9 @@ in its update they give its target; they never ran in the tests.
 Its components update on their own (the owner at `+0x48`). The one it
 reacts to the player with keeps "Link" (`Zombie:ReactionComp +0x278`), and a
 zombie walked to Player 1 whoever it targeted. So the swap also covers its
-reaction component (the game's `EnemyReactionComponent`: `...ReactionComp`,
-`...ReactComp`, and for 28 kinds - Zols, Armos, Pokey, Togezo, Ghini... -
-`...ReactionCom`: missed, red Zols hopped at Player 1 whoever they targeted)
-and its player follower (`TailorPlayerComp`), not the others
+reaction component (its life and reaction: upstream's `ENEMY_LIFE_VTABLE` and
+its kin, whatever its name - `...ReactionComp`, `...ReactComp`,
+`...ReactionCom`) and its effect player (see "What an actor is"), not the others
 (collision, animation): Player 1's sword hits it whoever it targets. Checked
 with the graveyard zombies by Marin and Tarin's house, and a Moblin and a red
 Zol west of it with Player 1 17 units away: each goes for the player it
@@ -756,11 +754,52 @@ through the ground and was taken off the map. With co-op on the Field:
 The dark ovals still seen far out at Ukuku Prairie are holes in its ground:
 they're there at the normal view.
 
+**What an actor is** (`runtime/hle/coop/targets.inc`, 2026-11-14). An actor
+is told apart by the type it was made as, an enemy's part by its class, both
+kept as they are made:
+- Every actor class's constructor goes through the actor base class's
+  (`main+0x1bdb0`, 349 callers), which copies its spawn info's key and type
+  into it (`+0x98`, `+0xa0`). `COOP_ACTOR_TYPE_SITE`, its store of the type,
+  keeps the actor with both; the actor base class's destructor
+  (`main+0xfa7970`: `COOP_ACTOR_GONE_SITE`) forgets it. This covers every
+  actor however it is made: the factory's, and the bosses and mini-bosses
+  their builders make outside the factory's own call (Master Stalfos, Gohma,
+  Hooker in Catfish's Maw; Rola, Hiploop, Dodongo, the Tail Cave boss) -
+  hooks at the factory (`main+0x8f64d8`) or at the actor manager's add
+  (`main+0xfab540`) missed those. A lookup checks the actor's own key and type
+  still match.
+- The kinds come from the game's own type table (`ACTOR_TYPES`,
+  `main+0x1bcc898`: 0x58 bytes a type, `+0x50` its name, read once): the
+  `Enemy...` types are enemies, `EnemyZolGreen`, `EnemyZolRed` and
+  `EnemyMiniZol` cling, the four floors above crumble, `ObjBladeTrap` is a
+  trap, and the Like Like and the shop goods are their types.
+- An enemy's parts that go by "Link" are its reaction component - every one,
+  an enemy's, an object's (a Blade Trap's), an NPC's, is built through one
+  base class constructor (`main+0x12fae0`: `COOP_PART_SITE_0`, as it stores
+  its class) and ends in one destructor (`main+0xeb410`:
+  `COOP_PART_GONE_SITE_0`) - and its effect player (`TailorPlayer`: built in
+  place twice, `COOP_PART_SITE_1` / `_2`; destructor `main+0xe3b510`:
+  `COOP_PART_GONE_SITE_1`), whose "Link" read (`main+0xe4ffa4`) compares
+  Link's zone with its owner's to decide whether its effects play. Only one
+  whose owner is an enemy or a trap counts.
+- The table is started afresh when the player count changes: with co-op off
+  these hooks don't run.
+Until then it was worked out from each actor's own name (`EnemyZolRed-...`,
+prefixes, "React", "PlayerComp"): upstream's review - a kind with an
+unexpected name went to Player 1. Checked in fifteen areas (the Field, a
+room in each dungeon, the Wind Fish's Egg) against the name rule, actor by
+actor: every one comes out the same but for three, each the name rule's
+mistake - the Stalfos's and the final boss's shadow parts (`...:Shadow`,
+`EnemyShadow`), which it took for enemies; the final boss's forms
+(`Lv9EnemyShadowGanon-...`, named for the level), which it missed: they went
+after Player 1 only; and the effect players named `ActorTailorPlayer`, which
+it missed beside the `...:TailorPlayerComp` of the same class.
+
 **The co-op hooks' own cost.** The actor update hooks (`COOP_ACTOR_EXEC_*`)
 run for every actor and component every frame, about 21,000 a frame with the
 screens made out far. Reading each name there cost the game thread about 2 ms
-a frame; what an actor is now is worked out once (`actor_class`, a 4-way table
-by address and the name's start), the grass and rocks' check only for names
+a frame; what an actor is is now kept as it is made (`actor_made`, a 4-way
+table by address, its key and type checked), the grass and rocks' check only for names
 starting `Obj`, the game thread check once per thread: 1.5 ms left at 2.5
 (with the hooks off, measured: 11.1 ms; on, 12.6).
 
@@ -933,6 +972,10 @@ the game's reads of it by the RomFS index's patch list, while co-op is on
 | COOP_LIKELIKE_SITE_0..8 | 0x70004a65f4, a7040, a7fb8, a89f4, a8ce8, a9400, a9898, aac54, ab1f0 | ldr x22/x21/x9/x8, [x20 or x21, #0x4b8] | a Like Like's "Link" is the player it goes for (40-48) |
 | COOP_DAMAGE_HALVED_SITE | 0x7000d4c750 | ldrh w8, [x8, #0x84] | an enemy's hit split after the game halves it (49) |
 | COOP_RESTART_SITE | 0x7000d35778 | ldr x1, [x20, #0x4a8] | a Link's update looks up the player entity, for the save's restart point: only Player 1's finds it (50) |
+| COOP_ACTOR_TYPE_SITE | 0x700001be64 | strh w8, [x19, #0xa0] | an actor made: kept with its type (51) |
+| COOP_ACTOR_GONE_SITE | 0x7000fa7970 | stp x22, x21, [sp, #-0x30]! | an actor's base destructor: forgotten (52) |
+| COOP_PART_SITE_0..2 | 0x700012fb5c, 0x7000c53ac0, 0x7000e24c1c | str x8, [x19 / x20 / x22] | a reaction component, an effect player made: kept (53-55) |
+| COOP_PART_GONE_SITE_0 / _1 | 0x70000eb410 / 0x7000e3b510 | sub sp, sp, #0x30 | their destructors: forgotten (56, 57) |
 
 Runtime constants: `PLAYER_VTABLE`, `PLAYER_MAX_HEALTH`, `PLAY_ANIMATION`,
 `DOACTION_CURRENT` / `_PENDING` / `_COOLDOWN` (the slots), `DOACTION_TAKE_RET` /
@@ -1180,18 +1223,6 @@ Enter) didn't make the check fail, so the fix isn't confirmed by one.
   seed: the test save is a vanilla save and doesn't load into a seed's game
   (2026-11-14: no level, with co-op off as well), so a seeded run needs a new
   file. A seed's patches loaded with co-op on without complaint.
-- **Actors by type, not name** (upstream's review): looked at 2026-11-14 and
-  not done. Every actor carries its spawn info (`+0x98` its key, `+0xa0` its
-  type), and the game's type table (`main+0x1bcc898`: 0x58 bytes a type,
-  `+0x50` its name) gives each type's kind; the enemies' parts are a few
-  classes (`ENEMY_LIFE_VTABLE`, the player follower `0x7001c26068`, a Blade
-  Trap's `0x7001b5ed60`, another reaction part `0x7001bde7d0`). Classed by
-  the type kept as the actor manager adds an actor (`main+0xfab540`), the
-  regular enemies, floors and traps came out as by name, but the bosses and
-  mini-bosses (Master Stalfos, Gohma, Hooker, Rola, Dodongo, Hiploop, the
-  Tail Cave boss) aren't added there nor in the factory's map
-  (`main+0x1cb2d00`): they'd have gone after Player 1 only. Until their
-  creation path is found, actors are still classed by name.
 - **Only the screens around Player 1 are made** on the Field (see "The screens
   around Player 1"). Another player who walks past them falls through and is
   put back on Player 1 (`lost_tick`): he's out of view by then.
@@ -1222,10 +1253,10 @@ Enter) didn't make the check fail, so the fix isn't confirmed by one.
   Links "stuck above the door frame" (not reproduced at Angler's Tunnel's
   doors), the camera zooming in and out fast (not reproduced; no snap in
   play logged frame by frame).
-- **Enemy kinds** besides zombies, Moblins and Zols weren't checked. One
-  whose chasing is in a component not named `...React...` or `...PlayerComp`
-  would still go to Player 1. Bosses other than the Armos Knight weren't
-  checked, and the Armos Knight only in scripted fights
+- **Enemy kinds** besides zombies, Moblins and Zols weren't checked in a
+  fight. One whose chasing is in a component other than its reaction
+  component or effect player would still go to Player 1. Bosses other than
+  the Armos Knight weren't checked, and the Armos Knight only in scripted fights
   (`tools/coop_tests/armos_fight.sh`). A Like Like's grab is checked (`tools/coop_tests/likelike.sh`)
   on the Field only (Eagle's Tower's weren't tried).
 - **Other crumbling floors** (`AC_FLOOR`: Catfish's Maw's broken floor, a
