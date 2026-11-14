@@ -46,6 +46,7 @@ static int g_n = -1;                // players (rt_coop_players; read again out 
 static uint64_t g_extra[COOP_MAX];  // players 2..8: their Link actors ([0] unused: Player 1 is the game's own)
 static int g_creating = -1;         // the player coop_create is making a Link for (-1: none)
 static int g_placing = -1;          // the player coop_place is placing (-1: none)
+static uint32_t g_pad_limit = 1;    // the controller manager's player limit as last set (COOP_PAD_STATE_SITE)
 static int g_entering;              // inside coop_enter's own call of the walk-in
 static uint64_t g_placed_frame;     // when the players were last put on a spawn point (renderer frame)
 static uint64_t g_lost_until[COOP_MAX];  // a player lost below the world: put on Player 1 at this frame (0: he isn't;
@@ -55,6 +56,7 @@ RT_ON_RESET(coop_reset) {
     g_n = -1;
     memset(g_extra, 0, sizeof g_extra);
     g_creating = g_placing = -1;
+    g_pad_limit = 1;
     g_entering = 0;
     g_placed_frame = 0;
 }
@@ -161,7 +163,8 @@ static void ride_on_host(int i) {
 // Alone (no co-op) only these run: the zoom's, with the zoom on - the camera (and once more as it goes off: the camera's
 // own values back), the Field's boxes of screens, the shadow map's box, and on the Field the actors' updates for the
 // cut grass and thrown rocks kept gone in view (zoomed out, the screen Player 1 just left is still in view); this
-// boot's co-op tunic file's (the game's own tunic frames in it: COOP_COLOR_SITE).
+// boot's co-op tunic file's (the game's own tunic frames in it: COOP_COLOR_SITE); and the controller manager's update
+// until its player limit is the game's 1 again (COOP_PAD_STATE_SITE).
 bool coop_colours(void);
 static bool alone_hook(int which) {
     switch (which) {
@@ -170,6 +173,7 @@ static bool alone_hook(int which) {
     case 17: return zoom_on() || g_back != 0;
     case 33: case 34: case 35: return g_back_on;
     case 38: return g_zoom > 1.0f;
+    case 10: return g_pad_limit != 1;
     }
     return false;
 }
@@ -246,8 +250,19 @@ int rt_coop_hook(Cpu *c, int which) {
         // entry) and the Switch catches the event system's "not found" throw further up; recompiled code can't
         // unwind (fatal: tested 2026-10-27). Left as it is: it plays as without co-op.
         return 0;
-    case 10:  // COOP_PAD_STATE_SITE - b.ne: controllers polled whatever the manager's state
-        return 1;
+    case 10:  // COOP_PAD_STATE_SITE - b.ne: the controller manager's (x19) update, its state (+0x4e0) not "polling"
+        // The manager's player limit (+0x4e8, its controller applet's +0x1c8: 1, as the game makes it - main+0x881d8c)
+        // is the player count. With more controllers connected than that it asks for the applet (main+0x16038: its
+        // state 2, then nn::hid::ShowControllerSupport, which LAS Recomp doesn't show - the game waits for good). The
+        // mod let the manager poll whatever its state instead, and the request it made at every co-op boot waited:
+        // with co-op turned off it was carried out (a Game Over's Continue stopped there, 2026-11-13). Back to 1 with
+        // co-op off (alone_hook: until it is).
+        g_pad_limit = (uint32_t)rt_coop_players();
+        if (LD32(c->x[19] + 0x4e8) != g_pad_limit) {
+            LOG("[coop] the controller manager takes %u players\n", g_pad_limit);
+            ST32(c->x[19] + 0x4e8, g_pad_limit);
+        }
+        return 0;
     case 11:  // COOP_APPLET_SITE - strb w20, [sp, #0x11]: the controller applet's player count
         ST8(c->sp + 0x10, g_n);
         ST8(c->sp + 0x11, g_n);
