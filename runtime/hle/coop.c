@@ -8,7 +8,7 @@
 // A port of that mod's build LA_Coop_ExactStack_360 (the "8 Players" one: an exlaunch
 // "pxtch" module for 1.0.1, its subsdk9 patch table read 2026-10-27) onto the hook sites of tools/patches.py (COOP_*): the game makes one Link per player through its
 // own player creator, places all of them on every spawn point, gives each the controller of his npad and a tunic
-// colour set of his own (the mod's Playerlink.bfres, served from <data root>/coop/romfs: coop_romfs_override). Unlike
+// colour set of his own (the mod's edited Playerlink.bfres - here the tunics are coloured as drawn instead). Unlike
 // the mod: the players' indices live here, not past the end of the Link object (the mod grew the allocation by 4 and
 // wrote 8 bytes there); a door's walk-in runs for Player 1 only and the others ride on him (the mod ran the one shared
 // walk-in once per player, which left the last player behind in the doorway - and out of the room again).
@@ -162,13 +162,10 @@ static void ride_on_host(int i) {
 
 // Alone (no co-op) only these run: the zoom's, with the zoom on - the camera (and once more as it goes off: the camera's
 // own values back), the Field's boxes of screens, the shadow map's box, and on the Field the actors' updates for the
-// cut grass and thrown rocks kept gone in view (zoomed out, the screen Player 1 just left is still in view); this
-// boot's co-op tunic file's (the game's own tunic frames in it: COOP_COLOR_SITE); and the controller manager's update
-// until its player limit is the game's 1 again (COOP_PAD_STATE_SITE).
-bool coop_colours(void);
+// cut grass and thrown rocks kept gone in view (zoomed out, the screen Player 1 just left is still in view); and the
+// controller manager's update until its player limit is the game's 1 again (COOP_PAD_STATE_SITE).
 static bool alone_hook(int which) {
     switch (which) {
-    case 7: return coop_colours();
     case 15: case 16: return ENV("LARECOMP_COOP_TRACE") || ENV("LARECOMP_TRACK_RESPAWN");  // (test logs, alone too)
     case 17: return zoom_on() || g_back != 0;
     case 33: case 34: case 35: return g_back_on;
@@ -221,24 +218,10 @@ int rt_coop_hook(Cpu *c, int which) {
         }
         return 1;
     }
-    case 7: {  // COOP_COLOR_SITE - blr x8 with s0 = the tunic frame (0 green, 1 red, 3 blue)
-        float f;
-        memcpy(&f, &c->v[0], 4);
-        if (!coop_colours()) {  // (no co-op tunic file: every other player in the game's green tunic, coloured as he is
-            // drawn - coop_tunic_tint; Player 1 keeps his own, the Red or Blue Mail too)
-            int i = coop_index(c->x[19]);
-            if (!rt_coop_on() || i <= 0) return 0;
-            f = 0;
-            __uint128_t v = 0;
-            memcpy(&v, &f, 4);
-            c->v[0] = v;
-            return 0;
-        }
-        // (the coop Playerlink.bfres: 3 frames per colour set, all in that set's colour - 0-2 green, 3-5 red, 6-8 blue
-        // ...; co-op turned off since the game started, the file still in: the game's own tunic, its set)
-        int t = f >= 2.5f ? 2 : f >= 0.5f ? 1 : 0;
-        int set = rt_coop_on() ? g_settings.coop_colour[coop_index(c->x[19])] : t;
-        f = (float)((set >= 0 && set < COOP_COLOURS ? set : 0) * 3 + (rt_coop_on() ? t : 0));
+    case 7: {  // COOP_COLOR_SITE - blr x8 with s0 = the tunic frame (0 green, 1 red, 3 blue): every other player in the
+        // game's green tunic, coloured as he is drawn (coop_tunic_tint); Player 1 keeps his own, the Red or Blue Mail too
+        if (coop_index(c->x[19]) <= 0) return 0;
+        float f = 0;
         __uint128_t v = 0;
         memcpy(&v, &f, 4);
         c->v[0] = v;
@@ -402,41 +385,6 @@ int rt_coop_hook(Cpu *c, int which) {
     return 0;
 }
 
-// The mod's Playerlink.bfres (24 colour frames: 3 per player), if someone has it: served from <data root>/coop/romfs
-// while co-op is on (runtime/services/fs.c), its colour sets then picked by COOP_COLOR_SITE. Not needed: without it the
-// tunics are coloured as they are drawn (coop_tunic_tint, below).
-static int g_coop_dir = -1;  // (<data root>/coop/romfs there: looked at once a boot, the romfs index asks per file)
-static int g_colours = -1;   // (the colour file served: fixed for the boot, as the romfs index)
-RT_ON_RESET(coop_files_reset) { g_coop_dir = g_colours = -1; }
-
-bool coop_romfs_override(const char *path, char *out, size_t cap) {
-    // (that one file only: other game files copied there from the mod's own romfs - its whole set - aren't served)
-    if (!rt_coop_on() || strcmp(path, "region_common/actor/Playerlink.bfres")) return false;
-    extern const char *rt_data_root(void);
-    const char *root = rt_data_root();
-    if (!root) return false;
-    if (g_coop_dir < 0) {
-        snprintf(out, cap, "%s/coop/romfs", root);
-        struct stat sb;
-        g_coop_dir = stat(out, &sb) == 0 && S_ISDIR(sb.st_mode);
-    }
-    if (!g_coop_dir) return false;
-    snprintf(out, cap, "%s/coop/romfs/%s", root, path);
-    FILE *f = fopen(out, "rb");
-    if (!f) return false;
-    fclose(f);
-    if (!strcmp(path, "region_common/actor/Playerlink.bfres")) {  // (the RomFS index serves it: this boot's colours)
-        g_colours = 1;
-        LOG("[coop] player colours: %s\n", out);
-    }
-    return true;
-}
-
-// The players' colours are in this boot's Playerlink.bfres only when co-op was on as the game started (the RomFS index
-// is made as it boots, again after Quit to Start Screen): otherwise the game's own frames stay - every Link in Player
-// 1's tunic - until then.
-bool coop_colours(void) { return g_colours > 0; }
-
 // ---- Tunic colours as the Links are drawn (no edited game file: upstream's review, item 7). Without the co-op
 // Playerlink.bfres every other player wears the game's green tunic (COOP_COLOR_SITE), and the renderers ask, for each
 // draw sampling a tunic map (runtime/nvn/texpatch.c texpatch_tunic_kind), whose Link it is: a Link's draws carry his
@@ -457,7 +405,7 @@ static void tunic_tick(void) {
         else g_tunic_at[i][1] = -1e9f;
         n = i + 1;
     }
-    atomic_store_explicit(&g_tunic_n, rt_coop_on() && !coop_colours() ? n : 0, memory_order_release);
+    atomic_store_explicit(&g_tunic_n, rt_coop_on() ? n : 0, memory_order_release);
 }
 void recolour_pack(float tint[8], float shift, float sat, float val, float centre, float width, float min_sat,
                    float spread);

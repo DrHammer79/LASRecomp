@@ -16,9 +16,9 @@ players' state and each other's helpers), `runtime/ui/coop_hud.mm`
 `coop_players = 1`, every hook returns 0 and runs its own instruction, so the
 game plays exactly as without the feature - unless "Zoom out" is set to
 Always, when the zoom's own hooks run alone (`alone_hook`, under "Camera
-zoom"), or after a session with co-op this boot: the tunic file still in
-("Colours"). The other players' Links don't outlive the session ("Making the
-Links").
+zoom"), or right after a session with co-op this boot, until the controller
+manager's player limit is back to 1 ("Controllers"). The other players' Links
+don't outlive the session ("Making the Links").
 
 ## How it works
 
@@ -154,14 +154,10 @@ tinted only when he chose another colour than Green. Checked with 8 players
 purple, pink, black and white tunics, each shaded as the game's.
 - The players' positions for it are taken as each frame starts (game thread,
   `tunic_tick`); a draw goes to the nearest within 0.75.
-- The co-op mod's `Playerlink.bfres` (24 colour frames, 3 per colour set) is
-  still used if it's there (`<data root>/coop/romfs/region_common/actor/`,
-  `coop_romfs_override`, picked up as the RomFS is indexed: as the game boots,
-  again after Quit to Start Screen): `COOP_COLOR_SITE` then picks each Link's
-  set, and nothing is tinted. Only that file is served from there. It isn't
-  needed, and the repository doesn't ship it (an edit of a game file). Co-op's
-  RomFS files go before a randomizer seed's (an older seed's tunic
-  `Playerlink.bfres`).
+- The co-op mod's edited `Playerlink.bfres` (24 colour frames) isn't used:
+  until 2026-11-14 it was served from `<data root>/coop/romfs` if someone had
+  it, ahead of a randomizer seed's own `Playerlink.bfres` (upstream's review:
+  no edited game files, and a seed's file kept).
 Red is a deeper crimson (0x8b1a2b) than the game's heart red, so a red
 player's hearts don't read as the game's own.
 
@@ -972,10 +968,10 @@ only with "Zoom out" Always). On, four headings:
 | | Enemies target the nearest player | coop_targets | 1 | enemies go after the nearest player |
 | | Players block each other | coop_collision | 0 | the Links block each other |
 
-The tunic colours are fixed when the game boots (the RomFS index): after
-turning co-op on, Quit to Start Screen and play again (checked: the colours
-load). Turned off, every Link wears the game's own tunic from the file until
-then, and the countdown is back in its corner.
+The tunic colours follow the setting as the Links are drawn. The countdown's
+place (`coop_romfs_patch`, a few bytes of the game's own `Game.arc` while
+co-op is on) is fixed when the game boots: after turning co-op on or off, it
+moves at the next Quit to Start Screen.
 
 ## Tests
 
@@ -1246,8 +1242,8 @@ Enter) didn't make the check fail, so the fix isn't confirmed by one.
     frames after the buffer gets the game's memory again: a list recorded there
     and kept to be called or sent again later would read freed memory. The
     game's own memory is reused the same way, so none is expected.
-  - The co-op `Game.arc` patch and `Playerlink.bfres` are chosen as the RomFS is
-    indexed (boot, Quit to Start Screen); the countdown's patch follows co-op
-    on and off after that only where the game reads the file again.
+  - The co-op `Game.arc` patch is chosen as the RomFS is indexed (boot, Quit
+    to Start Screen); the countdown's patch follows co-op on and off after
+    that only where the game reads the file again.
   - `COOP_SCROLL_SITE` is placed and does nothing (removing it renumbers the
     sites after it).
