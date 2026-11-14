@@ -1173,6 +1173,25 @@ Enter) didn't make the check fail, so the fix isn't confirmed by one.
 
 ## Not done or not checked
 
+- **The randomizer's hearts** (upstream's review): co-op takes the maximum
+  from the game itself (`PLAYER_MAX_HEALTH`, every half second), so a seed's
+  starting hearts, heart pieces and containers count for every player as they
+  do for Player 1 (each player who is up gets the new heart). Not run with a
+  seed: the test save is a vanilla save and doesn't load into a seed's game
+  (2026-11-14: no level, with co-op off as well), so a seeded run needs a new
+  file. A seed's patches loaded with co-op on without complaint.
+- **Actors by type, not name** (upstream's review): looked at 2026-11-14 and
+  not done. Every actor carries its spawn info (`+0x98` its key, `+0xa0` its
+  type), and the game's type table (`main+0x1bcc898`: 0x58 bytes a type,
+  `+0x50` its name) gives each type's kind; the enemies' parts are a few
+  classes (`ENEMY_LIFE_VTABLE`, the player follower `0x7001c26068`, a Blade
+  Trap's `0x7001b5ed60`, another reaction part `0x7001bde7d0`). Classed by
+  the type kept as the actor manager adds an actor (`main+0xfab540`), the
+  regular enemies, floors and traps came out as by name, but the bosses and
+  mini-bosses (Master Stalfos, Gohma, Hooker, Rola, Dodongo, Hiploop, the
+  Tail Cave boss) aren't added there nor in the factory's map
+  (`main+0x1cb2d00`): they'd have gone after Player 1 only. Until their
+  creation path is found, actors are still classed by name.
 - **Only the screens around Player 1 are made** on the Field (see "The screens
   around Player 1"). Another player who walks past them falls through and is
   put back on Player 1 (`lost_tick`): he's out of view by then.
