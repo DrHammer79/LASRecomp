@@ -407,10 +407,7 @@ static void rom_index(void) {
     // (in a copy) to point them at data appended past the end of the image; reads there go to host files.
     for (int i = 0; i < rom_nfiles; i++) {
         char host[1200];
-        // (local co-op's first: its Playerlink.bfres over an older seed's tunic one - its colours need its own)
-        extern bool coop_romfs_override(const char *path, char *out, size_t cap);  // (runtime/hle/coop.c)
-        if (!coop_romfs_override(rom_files[i].path, host, sizeof host) &&
-            !rando_romfs_override(rom_files[i].path, host, sizeof host)) continue;
+        if (!rando_romfs_override(rom_files[i].path, host, sizeof host)) continue;
         struct stat sb;
         if (stat(host, &sb)) continue;
         if (!ov_meta) {

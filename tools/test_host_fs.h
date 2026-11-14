@@ -57,8 +57,7 @@ void weather_cycle_save_written(const char *p, uint64_t a, int64_t o, int64_t n)
 void dpad_items_save_read(const char *p, uint64_t a, int64_t o, int64_t n) {}  // (runtime/hle/dpad_items.c)
 void dpad_items_save_written(const char *p, uint64_t a, int64_t o, int64_t n) {}
 void pace_hitch(const char *why) {}  // (runtime/nvn/pace.c: a save commit is a stall)
-// local co-op (runtime/hle/coop.c): its RomFS files and patch (not indexed here), and the frame of a save's commit
-bool coop_romfs_override(const char *p, char *out, size_t n) { abort(); }
+// local co-op (runtime/hle/coop.c): its RomFS patch (not indexed here), and the frame of a save's commit
 bool coop_romfs_patch(const char *p, uint64_t off, uint64_t size, ssize_t (*rd)(void *, uint64_t, uint64_t),
                       uint64_t *at, uint32_t *val) { abort(); }
 int rt_coop_on(void) { return 0; }
