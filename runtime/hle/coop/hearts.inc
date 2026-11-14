@@ -22,6 +22,12 @@ static bool g_can_revive[COOP_MAX];  // knocked-out players with a player who is
 // go of it (revive_hit; user 2026-10-31).
 static uint32_t g_reviving[COOP_MAX];  // (whom he holds A beside: a bit per player)
 static bool g_revive_hit[COOP_MAX];    // (hit while reviving, A not let go since)
+// Beside a knocked-out player, a player's A is the revive's: the game doesn't get it (coop_revive_reach:
+// runtime/hle/input.c), and the revive reads his A as held on his controller. An A the revive took stays its own until
+// it is let go (g_revive_a): the revive done, or the player stepped away, the game would take it for a new press - a
+// boulder beside him lifted the moment the revive ended (2026-11-14). Until 2026-11-14 the game got it all along: held
+// beside a rock, it lifted the rock as the revive went on.
+static bool g_revive_reach[COOP_MAX], g_revive_a[COOP_MAX];
 static int g_game_hp = -1;       // the game's hearts last frame (for what it gained)
 static int g_max_hp;             // the maximum (main+0xdf8260, every half second and whenever the hearts change)
 static int g_heal_pending;       // hearts healed this frame before the game's maximum capped them (COOP_HEAL_SITE_*)
@@ -30,6 +36,8 @@ static void hearts_forget(void) {  // (a new boot / back at the title: everyone 
     for (int i = 0; i < COOP_MAX; i++) g_hp[i] = -1, g_down[i] = false, g_revive[i] = 0, g_safe_until[i] = 0;
     memset(g_reviving, 0, sizeof g_reviving);
     memset(g_revive_hit, 0, sizeof g_revive_hit);
+    memset(g_revive_reach, 0, sizeof g_revive_reach);
+    memset(g_revive_a, 0, sizeof g_revive_a);
     g_game_hp = -1;
     g_max_hp = 0;
     g_heal_pending = 0;
@@ -359,13 +367,14 @@ static void hearts_tick(Cpu *c) {
     }
     // Revives: another player who is up, within 1.6 of him (height too), holding A. Not during the pause menu's hold:
     // everyone is on Player 1's spot then - A held in the menu revived a player lying far away.
-    extern uint64_t input_coop_buttons(int player);
+    extern uint64_t input_coop_held(int player);
     extern uint64_t input_buttons_now(void);
     float step = 1.0f / (60.0f * (float)(g_settings.coop_revive_s > 0 ? g_settings.coop_revive_s : 4));
     memset(g_can_revive, 0, sizeof g_can_revive);
     memset(g_reviving, 0, sizeof g_reviving);
+    memset(g_revive_reach, 0, sizeof g_revive_reach);
     for (int j = 0; j < g_n; j++)
-        if (g_revive_hit[j] && !((j ? input_coop_buttons(j) : input_buttons_now()) & 1)) g_revive_hit[j] = false;
+        if (g_revive_hit[j] && !((j ? input_coop_held(j) : input_buttons_now()) & 1)) g_revive_hit[j] = false;
     for (int i = 1; i < g_n; i++) {
         if (!g_down[i]) continue;
         float pi[3];
@@ -378,8 +387,8 @@ static void hearts_tick(Cpu *c) {
                 // 2026-10-28)
                 float dx = pj[0] - pi[0], dy = pj[1] - pi[1], dz = pj[2] - pi[2];
                 if (dx * dx + dy * dy + dz * dz >= 1.6f * 1.6f) continue;
-                near = true;
-                uint64_t b = j ? input_coop_buttons(j) : input_buttons_now();
+                near = true, g_revive_reach[j] = true;
+                uint64_t b = j ? input_coop_held(j) : input_buttons_now();
                 if (!(b & 1) || g_revive_hit[j]) continue;  // (bit 0: A)
                 helped = true;
                 g_reviving[j] |= 1u << i;
@@ -387,5 +396,9 @@ static void hearts_tick(Cpu *c) {
         g_can_revive[i] = near && !helped;  // (his prompt: runtime/ui/coop_hud.mm)
         g_revive[i] = helped ? g_revive[i] + step : g_revive[i] > step ? g_revive[i] - step : 0;
         if (g_revive[i] >= 1) revive(i, "by another player");
+    }
+    for (int j = 0; j < g_n; j++) {  // (an A pressed beside a knocked-out player: the revive's until let go)
+        bool a = (j ? input_coop_held(j) : input_buttons_now()) & 1;
+        g_revive_a[j] = a && (g_revive_a[j] || g_revive_reach[j]);
     }
 }

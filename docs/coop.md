@@ -522,7 +522,15 @@ and zoomed out the view had reached past the screens made.
   1.6, height too: in a side view a player swimming above him had the prompt)
   for `coop_revive_s` seconds revives him with 30% of the maximum and 2 s
   of no damage (`REVIVE_SAFE`). A player holding A there stands still (his
-  stick and d-pad read 0: `coop_reviving`). A hit on him stops it
+  stick and d-pad read 0: `coop_reviving`), and beside a knocked-out player
+  his A is the revive's, not the game's (`coop_revive_reach`; the revive reads
+  it as held on his controller): until 2026-11-14 the game got it too, and
+  beside a boulder the revive lifted it. An A the revive took stays its own
+  until let go: the revive done with A still held, the game took it for a
+  new press and lifted the boulder then. Checked at Field_08F's boulders:
+  Player 1 holding A beside a knocked-out Player 2 revives him and lifts
+  nothing, A held on after the revive lifts nothing, a new press lifts. A
+  hit on him stops it
   (`revive_hit`): the progress is lost, and his A counts again only once he
   lets go of it. An "(A) Revive" prompt shows under the knocked-out player
   while someone who is up is beside him and nobody holds A
@@ -1276,9 +1284,9 @@ Enter) didn't make the check fail, so the fix isn't confirmed by one.
   (nothing comes off); it isn't moved off.
 - **The top of the map zoomed out:** the user saw "slight texture glitching"
   there (2026-10-31); not reproduced at Field_01K_a up to 3x, panning.
-- **Holding A to revive** also does the game's A action (beside a rock, the
-  rock is lifted). The revive goes on.
-- **Shared hearts:** stacked Links hit by one attack each cost hearts.
+- **Shared hearts:** stacked Links hit by one attack each cost hearts: each
+  Link hit is a hit, as for separate players (left as it is: which hits are
+  "one attack" isn't known where the hearts are taken).
 - **The moved countdown** was checked by its bytes, not seen in a timed
   challenge.
 - **Not played with extras:** minigames (the Trendy Game's crane, the Rapids
