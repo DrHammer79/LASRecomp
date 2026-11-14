@@ -835,6 +835,13 @@ change to every hook, upstream's `tools/gen.py`): not done. The zoom is the larg
 default fit is now 2x (Out 100%). Not measured on a weaker machine (an M1
 Air, a phone) as upstream's review asked: none was at hand.
 
+Measured once more on 2026-11-14, after actors came to be told apart by type
+(the same place, frames 2,400 to 3,400 of each run) - with other programs
+keeping the CPU about half busy, so every figure is higher, solo too: alone
+2.25 ms, 4 players at zoom 1, 2, 3: 2.93, 4.32, 6.47 ms. Against alone, the
+same as before or less: 1.30, 1.92 and 2.88 times (2026-11-13: 1.29, 2.17,
+3.54).
+
 Effects drawn as a mesh around the camera, sized for the game's own view, showed
 their edge once the view was wider: the Mysterious Woods fog as a hard-edged
 oval. `widescreen_effect_stretch` already widened their viewport for wide
