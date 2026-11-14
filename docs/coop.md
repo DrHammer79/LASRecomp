@@ -17,7 +17,8 @@ players' state and each other's helpers), `runtime/ui/coop_hud.mm`
 game plays exactly as without the feature - unless "Zoom out" is set to
 Always, when the zoom's own hooks run alone (`alone_hook`, under "Camera
 zoom"), or after a session with co-op this boot: the tunic file still in
-("Colours") and the Links left over from it ("Making the Links").
+("Colours"). The other players' Links don't outlive the session ("Making the
+Links").
 
 ## How it works
 
@@ -35,30 +36,30 @@ scene's camera is the last Link made's. Made first, he got the save right (see
 "The pause menu" below) but the camera showed the ground somewhere else.
 
 The creator can run again for one area: a dungeon loaded fresh, a door's
-failed entry. The extras it made the first time were still alive, so every run
-added another set: copies of a player standing about, moving with his
-controller. Each Link the creator makes is remembered (`g_made`). A run takes
-back a live one that no player holds before making a new one. One that is left
-over anyway is put out of the way (under the map) and its update is skipped
-(`COOP_ACTOR_EXEC_SITE`). That goes on with co-op turned off too (`g_leftover`:
-the game keeps the Links through a Game Over's Continue and a return to the
-title, and they copied Player 1), and they don't keep the save's restart point
-(see "The save's restart point"). Taking them away instead - the game's own
-kill (`ACTOR_KILL`), as a session ends - was looked at on 2026-11-13 and not
-done: the player entity (the game manager's `+0x4a8`) holds three references
-to the first Link made (`+0x208`, `+0x2e8`, `+0x3c8`, each with that Link's
-control block next to it). They are the owners of named component records the
-entity keeps (0xe0 apart, each with its name inline - `..._DamageColorComp` -
-then `{Link, control block}`): the entity is in effect the first Link's
-component registry, the game expecting one Link. No load reads them with the
-entity as its base (all 2,178 loads at those offsets, logged in an instrumented
-build through play, the pause menu, a save and a level change: none), so the
-game reaches them through each record. Killing the first Link made while it is
-left over would leave the entity's records to a dead Link; the other Links
-left over aren't in them. Two ways on (not done): make Player 1 the first Link
-made - the entity his - which needs the creator's camera and the game
-manager's player slot kept on Player 1 (they go to the last Link made); or
-kill every Link left over but the entity's.
+failed entry. A player whose Link is alive keeps it (the run makes only the
+missing ones). When play ends - a Game Over, the game's return to its title:
+the game manager lets its player go, `game_in_play` - the game kills its own
+Link, and the next file's creator makes him again (seen 2026-11-13 at a Game
+Over's Continue: Player 1's Link a new one). The other players' Links are
+killed with his (`play_ended`, the game's own `ACTOR_KILL`, on the game
+thread as `pets.c` kills a follower), and the creator makes theirs again too:
+none is left over, with fewer players or co-op turned off. Checked: 3 players,
+a Game Over with the count lowered to 2 (`LARECOMP_COOP_AT`): both Links
+killed as play ended, Player 2's made again, he moves, no copies, play goes on.
+
+Until 2026-11-13 they lived on: the next file's players took them back (any
+seen updating in the last 2 s), and one not taken back was parked under the
+map, its update skipped, with co-op off too (`g_leftover`); one not taken back
+in time copied Player 1. And with co-op turned off at a Game Over, the game's
+own creator made no Link (a crash just after it, `main+0x83a5a4`). A note on
+what was looked at first: the player entity (the game manager's `+0x4a8`)
+seemed to hold three references to the first Link made (`+0x208`, `+0x2e8`,
+`+0x3c8`). It doesn't: those lie in other objects (each with its vtable and a
+pointer to itself at `+0x1c0`, `+0x2a0`, `+0x380`: that Link's own
+components, `Bow_DamageColorComp`, `Player:LadderInfo`...) which the heap put
+after the entity; after a Game Over the same places hold others. No load reads
+them with the entity as its base (2,178 loads at those offsets logged in an
+instrumented build: none).
 
 **Spawns.** A placement at a spawn point (`COOP_PLACE_SITE`) is run for each
 player on the same spot, Player 1 last (`COOP_PLACE_PLAYER_SITE` picks the
@@ -872,8 +873,7 @@ on 2026-11-13, as upstream's review (item 2) asked:
   the first one made (Player 1's is made last). Found by watching the save
   buffer's `+0x559c` being written (`LARECOMP_WATCH_ADDR`), then the object's
   `+0x680`.
-- At `COOP_RESTART_SITE` another player's Link (or one left over, co-op off
-  too) finds no entity, and the game's own path for no object (`cbz` at
+- At `COOP_RESTART_SITE` another player's Link finds no entity, and the game's own path for no object (`cbz` at
   `main+0xd35788`) skips that part of his update: only Player 1's keeps the
   restart point, as alone. Checked with `tools/coop_tests/savetest.sh`: 2
   players, Player 1 at 197.62 and Player 2 9 units away: the file holds
@@ -1169,6 +1169,18 @@ Enter) didn't make the check fail, so the fix isn't confirmed by one.
 
 ## Not done or not checked
 
+- **Co-op turned off at a Game Over** (the count lowered to Off, then
+  Continue) stops the game: it waits in `nn::hid::ShowControllerSupport`, the
+  Switch's controller applet, which LAS Recomp doesn't show. Found 2026-11-13,
+  not fixed. The game's controller manager (state at `+0x4e0`: 1 normal, 2
+  "show the applet", `main+0x16968` / `main+0x173fc`) asks for it as soon as
+  the game boots with co-op on: the style it reads for the Handheld npad
+  (`0x20`, `+0x2e4`) is 0, which a solo boot never reaches. With co-op on,
+  `COOP_PAD_STATE_SITE` keeps the manager on its normal path, so the request
+  waits; once co-op is off it is carried out (`main+0x881e60`) and blocks.
+  Before 2026-11-13 the same steps crashed earlier, in the creator (see
+  "Making the Links"). Quitting to the start screen (a new boot) before
+  turning co-op off avoids it.
 - **Only the screens around Player 1 are made** on the Field (see "The screens
   around Player 1"). Another player who walks past them falls through and is
   put back on Player 1 (`lost_tick`): he's out of view by then.

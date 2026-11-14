@@ -15,8 +15,8 @@
 //
 // Laid out in parts (runtime/hle/coop/*.inc), included below in order as one translation unit: they share the players'
 // state, the actor classes and each other's helpers, which stay static to co-op rather than being exported from it.
-// Here: the players (who is who, their positions), then hearts, camera, players (left behind, lost, left over, the
-// pause hold), targets, spawn, events, field; then the hook sites' switch (rt_coop_hook), the co-op RomFS files and
+// Here: the players (who is who, their positions), then hearts, camera, players (left behind, lost, the HUD's
+// questions), targets, spawn, events, field; then the hook sites' switch (rt_coop_hook), the co-op RomFS files and
 // the per-frame tick.
 #include <math.h>
 #include <pthread.h>
@@ -161,17 +161,15 @@ static void ride_on_host(int i) {
 // Alone (no co-op) only these run: the zoom's, with the zoom on - the camera (and once more as it goes off: the camera's
 // own values back), the Field's boxes of screens, the shadow map's box, and on the Field the actors' updates for the
 // cut grass and thrown rocks kept gone in view (zoomed out, the screen Player 1 just left is still in view); this
-// boot's co-op tunic file's (the game's own tunic frames in it: COOP_COLOR_SITE); and the actors' updates while Links
-// made for other players are left over (parked, as with fewer players: they copied Player 1).
+// boot's co-op tunic file's (the game's own tunic frames in it: COOP_COLOR_SITE).
 bool coop_colours(void);
 static bool alone_hook(int which) {
     switch (which) {
     case 7: return coop_colours();
-    case 15: case 16: return g_leftover || ENV("LARECOMP_COOP_TRACE") || ENV("LARECOMP_TRACK_RESPAWN");  // (alone too)
+    case 15: case 16: return ENV("LARECOMP_COOP_TRACE") || ENV("LARECOMP_TRACK_RESPAWN");  // (test logs, alone too)
     case 17: return zoom_on() || g_back != 0;
     case 33: case 34: case 35: return g_back_on;
     case 38: return g_zoom > 1.0f;
-    case 50: return g_leftover;  // (a Link left over can be the one updated last)
     }
     return false;
 }
@@ -263,22 +261,10 @@ int rt_coop_hook(Cpu *c, int which) {
         if (!on_game_thread()) return 0;
         uint64_t a = heap_ptr(c->x[0]) ? LD64(c->x[0] + 8) : 0;
         g_updating = heap_ptr(a) ? a : 0;
-        // A Link's (only Links are lost or made: another actor made where a Link was isn't one of them): off the map
-        // after falling through it (lost_tick)
-        bool link = g_updating && LD64(g_updating) == GA(PLAYER_VTABLE) && (rt_coop_on() || g_leftover);
-        if (link && lost_away(g_updating)) return skip_update(c);
-        int made = link ? made_index(g_updating) : -1;
-        if (made >= 0) {
-            g_made[made].seen = renderer_present_count();
-            if (!coop_index(g_updating) && g_updating != host_player() && g_creating < 0) {  // (left over: parked)
-                uint64_t p = collision_of(g_updating);
-                if (p && LD32(p + 0x84) != 0xc47a0000u) {  // (y -1000)
-                    CLOG("[coop] Link %#llx left over: parked\n", (unsigned long long)g_updating);
-                    ST32(p + 0x84, 0xc47a0000u);
-                }
-                return skip_update(c);
-            }
-        }
+        // A Link's (only Links are lost: another actor made where a Link was isn't one of them): off the map after
+        // falling through it (lost_tick)
+        if (rt_coop_on() && g_updating && LD64(g_updating) == GA(PLAYER_VTABLE) && lost_away(g_updating))
+            return skip_update(c);
         if (heap_ptr(g_updating)) respawn_track(g_updating), trace_actor(g_updating);
         if (!rt_coop_on()) return 0;  // (alone: alone_hook)
         if (heap_ptr(g_updating)) down_enemy_note(g_updating);
@@ -391,10 +377,10 @@ int rt_coop_hook(Cpu *c, int which) {
         // to 0.75; +0x690 the facing; +0x694 set), which each Link's update writes (main+0xd355c0) - every Link's, so it
         // was the last one updated, the first one made: a save with him away restarted Player 1 on his spot, and one with
         // him fallen through the ground had Link falling forever (user 2026-10-28). The save copies it (main+0xdfc710 ->
-        // main+0xdfcb90, file +0x559c). Another player's Link (or one left over) finds no entity there, the game's own
-        // path for that (main+0xd35788 cbz): only Player 1's keeps the restart point, as alone. (Until 2026-11-13 the
-        // others' 19 position copies were held on Player 1's spot while the pause menu was open.)
-        if (c->x[19] == host_player() || (!coop_index(c->x[19]) && made_index(c->x[19]) < 0)) return 0;
+        // main+0xdfcb90, file +0x559c). Another player's Link finds no entity there, the game's own path for that
+        // (main+0xd35788 cbz): only Player 1's keeps the restart point, as alone. (Until 2026-11-13 the others' 19
+        // position copies were held on Player 1's spot while the pause menu was open.)
+        if (!coop_index(c->x[19])) return 0;
         c->x[1] = 0;
         return 1;
     }
@@ -532,9 +518,24 @@ bool coop_romfs_patch(const char *path, uint64_t off, uint64_t size, ssize_t (*r
     return ok;
 }
 
-// Play ended (back at the title / file select): the Links, the enemies' targets, the cameras are gone with the level -
-// nothing of them is kept.
-static void play_ended(void) {
+// Play ended (a game over, back at the title / file select: the game manager let its Link go - game_in_play): the
+// Links, the enemies' targets, the cameras are gone with the level - nothing of them is kept. The game kills its Link
+// then, and the next file's creator makes him again (seen 2026-11-13: a game over's Continue); the others' Links are
+// killed with his, as the game kills an actor (ACTOR_KILL), and the creator makes theirs again too. Left alive they
+// went on into the next file: until 2026-11-13 they were parked under the level and taken back by its players, and
+// one that wasn't (fewer players, co-op turned off) copied Player 1 - with co-op off, the game's own creator would find
+// one of them for its "a Link exists already" check (COOP_DUP_SITE) and make no Link.
+static void play_ended(Cpu *c) {
+    for (int i = 1; i < COOP_MAX; i++) {
+        if (!g_extra[i] || LD64(g_extra[i]) != GA(PLAYER_VTABLE)) continue;
+        CLOG("[coop] play ended: player %d's Link %#llx killed\n", i + 1, (unsigned long long)g_extra[i]);
+        uint64_t saved[31], sp = c->sp, pc = c->pc;
+        memcpy(saved, c->x, sizeof saved);
+        c->x[0] = g_extra[i];
+        guest_call(c, GA(ACTOR_KILL));
+        memcpy(c->x, saved, sizeof saved);
+        c->sp = sp, c->pc = pc;
+    }
     memset(g_extra, 0, sizeof g_extra);
     targets_forget();
     camera_back_put();  // (the camera can go on into the next file: its own values, not the moved-back ones)
@@ -585,7 +586,7 @@ void coop_tick(Cpu *c) {
     extern int game_in_play(void);
     static bool in_play;
     bool play = game_in_play();
-    if (in_play && !play) play_ended();
+    if (in_play && !play) play_ended(c);
     in_play = play;
     zoom_tick(play);
     if (!play && GA(COOP_CREATE_SITE)) {  // (out of play: the player count for the next file - its Links come as it loads)
@@ -598,7 +599,6 @@ void coop_tick(Cpu *c) {
         }
     }
     g_hud_host = host_player(), g_hud_cam = view_camera();  // (for the HUD: as the frame starts)
-    g_leftover = made_spare(0) >= 0;
     if (!rt_coop_on()) return;
     p1_event_tick();
     a_press_tick(renderer_present_count());
