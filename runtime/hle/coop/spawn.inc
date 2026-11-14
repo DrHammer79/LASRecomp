@@ -2,8 +2,8 @@
 // the parts share the players' state and each other's helpers (coop.c's head says how it is laid out).
 
 // The player creator (an event action, main+0x83a470): the game makes its Link (the manager's +0x4b8). With co-op
-// it is run once for each other player first - their Links stay from then on, as the mod's - then for Player 1, so
-// the manager ends up holding his, as without co-op. (The Links it made: g_made, above.)
+// it is run once for each other player first - their Links stay while play lasts - then for Player 1, so
+// the manager ends up holding his, as without co-op. (When play ends they are killed with his: play_ended.)
 
 // The creator, once for each other player, then for Player 1 - last: the scene's camera is the last Link's (made first,
 // the camera wasn't his), and it leaves the game manager's player (+0x4b8) on him. (Each Link's update writes the
@@ -13,17 +13,12 @@ static int coop_create(Cpu *c) {
     uint64_t args[8];
     memcpy(args, c->x, sizeof args);
     for (int i = g_n - 1; i >= 0; i--) {
-        if (i > 0 && g_extra[i] && LD64(g_extra[i]) == GA(PLAYER_VTABLE)) continue;
-        if (i > 0 && (g_extra[i] = made_take_back())) {
-            LOG("[coop] player %d: Link %#llx (taken back)\n", i + 1, (unsigned long long)g_extra[i]);
-            continue;
-        }
+        if (i > 0 && g_extra[i] && LD64(g_extra[i]) == GA(PLAYER_VTABLE)) continue;  // (run again in play: his stays)
         g_creating = i;
         memcpy(c->x, args, sizeof args);
         guest_call(c, GA(COOP_CREATE_SITE));
         if (i > 0) {
             g_extra[i] = host_player();
-            made_add(g_extra[i]);
             LOG("[coop] player %d: Link %#llx\n", i + 1, (unsigned long long)g_extra[i]);
         }
     }
