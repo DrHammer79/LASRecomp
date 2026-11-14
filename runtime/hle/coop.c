@@ -346,9 +346,9 @@ int rt_coop_hook(Cpu *c, int which) {
         return warp_hole(c, true);
     case 37:  // COOP_WARP_OBJ_LEAVE_SITE - ldrb w8, [x8, #0x43]: ... stepped out of it
         return warp_hole(c, false);
-    case 38:  // COOP_SHADOW_BOX_SITE - cbnz w1: the shadow map's light box (cascade w1: only 0 is fitted) fitted to the
-              // view x2's world box around Player 1 - grown with the zoom
-        if (!(uint32_t)c->x[1]) shadow_box(c->x[2]);
+    case 38:  // COOP_SHADOW_BOX_SITE - stp q1, q0, [x8, #0x200]: the shadow map's world box around Player 1 (q1 min,
+              // q0 max) stored in the view - grown with the zoom
+        shadow_box(c);
         return 0;
     case 39:  // COOP_TILE_PLAYER_SITE - ldr x8, [x20, #0x4b8]: the Link a collapse tile (x19) measures
         c->x[8] = tile_player(c->x[19], LD64(c->x[20] + 0x4b8));
