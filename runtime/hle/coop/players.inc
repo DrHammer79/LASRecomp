@@ -1,4 +1,4 @@
-// Local co-op, players left behind (bring-back), lost below the world, Links left over, the pause menu's hold, the HUD's questions. A part of runtime/hle/coop.c: included there, in this order, as one translation unit -
+// Local co-op, players left behind (bring-back), lost below the world, the HUD's questions. A part of runtime/hle/coop.c: included there, in this order, as one translation unit -
 // the parts share the players' state and each other's helpers (coop.c's head says how it is laid out).
 
 // A player out of the camera's view (zoomed out as far as it goes) for LEASH_FRAMES is put back on Player 1 (setting
@@ -106,45 +106,6 @@ static void lost_tick(void) {
 }
 static bool lost_away(uint64_t actor) { int i = coop_index(actor); return i && g_lost_until[i] && g_lost_parked[i]; }
 RT_ON_RESET(coop_lost_reset) { lost_forget(); }
-
-// The Links made for the other players (coop_create) outlive a game over and a return to the title (the game keeps
-// them, as Player 1's): play_ended forgets which player is which, and the next file's players take these back - any
-// seen updating in the last MADE_ALIVE frames - rather than getting new ones beside them (left over, they copied Player
-// 1). One that isn't taken back (fewer players now - co-op turned off too) is parked: out of sight below the level, its
-// update skipped (rt_coop_hook; g_leftover).
-#define MADE_MAX 32
-#define MADE_ALIVE 120
-static struct { uint64_t actor, seen; } g_made[MADE_MAX];
-static bool g_leftover;  // (one of them lives that no player holds: the actors' updates are looked at, co-op off too)
-RT_ON_RESET(coop_made_reset) { memset(g_made, 0, sizeof g_made), g_leftover = false; }
-
-static int made_index(uint64_t actor) {
-    for (int k = 0; k < MADE_MAX; k++)
-        if (actor && g_made[k].actor == actor) return k;
-    return -1;
-}
-
-static void made_add(uint64_t actor) {
-    int k = made_index(actor), old = 0;
-    for (int j = 0; k < 0 && j < MADE_MAX; j++)
-        if (!g_made[j].actor) k = j;
-        else if (g_made[j].seen < g_made[old].seen) old = j;
-    k = k < 0 ? old : k;
-    g_made[k].actor = actor, g_made[k].seen = renderer_present_count();
-}
-
-// A live Link made earlier (seen updating in the last MADE_ALIVE frames) that no player holds now, from slot k on;
-// -1: none.
-static int made_spare(int k) {
-    uint64_t now = renderer_present_count();
-    for (; k < MADE_MAX; k++) {
-        uint64_t a = g_made[k].actor;
-        if (!a || coop_index(a) || a == host_player() || now - g_made[k].seen > MADE_ALIVE) continue;
-        if (LD64(a) == GA(PLAYER_VTABLE)) return k;
-    }
-    return -1;
-}
-static uint64_t made_take_back(void) { int k = made_spare(0); return k < 0 ? 0 : g_made[k].actor; }
 
 // A knocked-out player hit again and again (down_hit) goes onto Player 1's spot as one fallen through the world does
 // (lost_tick): standing still (his state kind 0), he's taken off the map, his update not running, then put on Player
