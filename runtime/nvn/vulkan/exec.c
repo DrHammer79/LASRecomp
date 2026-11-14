@@ -5626,20 +5626,67 @@ static void iv_note(uint64_t addr, uint64_t size) {  // (the frame: a copy for i
     if (iv_n == iv_cap) { iv_cap = iv_cap ? iv_cap * 2 : 1024; iv_log = realloc(iv_log, sizeof *iv_log * iv_cap); }
     iv_log[iv_n++] = (IvRec){addr, size, o, ci};
 }
+// A replay's bind takes the frame's copy of the same range. The replay mostly binds in the frame's order (iv_rp, the
+// next copy in it), but not always: as play starts after a load the in-betweens bound ranges hundreds of copies ahead
+// of or behind where the frame had bound them, and a search 32 copies on from iv_rp missed them - those draws read
+// the game's memory in place, which the game may have rewritten for its next frame by then (hundreds of such misses
+// in each 2 s as play started, none once settled; the water flickered in those first seconds, user 2026-11-14,
+// local co-op zoomed out at 120 Hz). Out of order, the copy is
+// found by its range (iv_index: each range's copies in the frame's order); a range bound more often in the replay
+// than in the frame (a bind the frame's state tracking skipped) takes its last copy again - the same bytes.
+static uint32_t *iv_next, *iv_gen, iv_next_cap, iv_replay_gen;  // (per copy: the next copy of its range; the replay it was taken by)
+static struct { uint64_t addr, size; uint32_t first, last; } *iv_map;
+static uint32_t iv_map_cap, iv_index_n;
+static uint64_t iv_index_serial = ~0ull;
+static uint32_t iv_hash(uint64_t addr, uint64_t size) { return (uint32_t)(((addr ^ size * 0x9E3779B97F4A7C15ull) * 0xBF58476D1CE4E5B9ull) >> 32); }
+static void iv_index(void) {  // (the frame's copies by range: built as its first replay starts)
+    if (iv_index_serial == iv_serial && iv_index_n == iv_n) return;
+    iv_index_serial = iv_serial, iv_index_n = iv_n;
+    if (iv_n > iv_next_cap) {
+        iv_next_cap = iv_cap;
+        iv_next = realloc(iv_next, sizeof *iv_next * iv_next_cap);
+        iv_gen = realloc(iv_gen, sizeof *iv_gen * iv_next_cap);
+    }
+    uint32_t want = 64;
+    while (want < iv_n * 2) want *= 2;
+    if (want > iv_map_cap) iv_map_cap = want, iv_map = realloc(iv_map, sizeof *iv_map * iv_map_cap);
+    memset(iv_map, 0, sizeof *iv_map * iv_map_cap);
+    for (uint32_t j = 0; j < iv_n; j++) {
+        iv_next[j] = ~0u, iv_gen[j] = 0;
+        uint32_t h = iv_hash(iv_log[j].addr, iv_log[j].size) & (iv_map_cap - 1);
+        while (iv_map[h].size && (iv_map[h].addr != iv_log[j].addr || iv_map[h].size != iv_log[j].size)) h = (h + 1) & (iv_map_cap - 1);
+        if (!iv_map[h].size) iv_map[h].addr = iv_log[j].addr, iv_map[h].size = iv_log[j].size, iv_map[h].first = j;
+        else iv_next[iv_map[h].last] = j;
+        iv_map[h].last = j;
+    }
+}
+static void iv_replay_start(void) {  // (each replay: its takes counted afresh; the frame's index made once)
+    iv_rp = 0;
+    if (!++iv_replay_gen) iv_replay_gen = 1;
+    if (interp_frame_serial() == iv_serial) iv_index();
+}
+static bool iv_take(uint32_t j, VkBuffer *buf, VkDeviceSize *off) {
+    IvChunk *c = &ivc[iv_log[j].chunk];
+    if (c->serial != iv_serial) return false;
+    iv_gen[j] = iv_replay_gen;
+    c->seq = vk_pending_seq();  // (kept until this replay's submission is done)
+    *buf = c->buf, *off = iv_log[j].off;
+    iv_binds++;
+    return true;
+}
 static bool iv_find(uint64_t addr, uint64_t size, VkBuffer *buf, VkDeviceSize *off) {  // (a replay: the frame's copy)
-    if (interp_frame_serial() != iv_serial) return false;
-    for (uint32_t j = iv_rp; j < iv_n && j < iv_rp + 32; j++)
-        if (iv_log[j].addr == addr && iv_log[j].size == size) {
-            iv_rp = j + 1;
-            IvChunk *c = &ivc[iv_log[j].chunk];
-            if (c->serial != iv_serial) return false;
-            c->seq = vk_pending_seq();  // (kept until this replay's submission is done)
-            *buf = c->buf, *off = iv_log[j].off;
-            iv_binds++;
-            return true;
-        }
-    iv_missed++;
-    return false;
+    if (interp_frame_serial() != iv_serial || iv_index_serial != iv_serial || iv_index_n != iv_n) return false;
+    if (iv_rp < iv_n && iv_log[iv_rp].addr == addr && iv_log[iv_rp].size == size && iv_gen[iv_rp] != iv_replay_gen) {
+        uint32_t j = iv_rp++;  // (in the frame's order)
+        return iv_take(j, buf, off);
+    }
+    uint32_t h = iv_hash(addr, size) & (iv_map_cap - 1);
+    while (iv_map[h].size && (iv_map[h].addr != addr || iv_map[h].size != size)) h = (h + 1) & (iv_map_cap - 1);
+    if (!iv_map[h].size) { iv_missed++; return false; }  // (no copy of it: a static mesh, read in place)
+    uint32_t j = iv_map[h].first;
+    while (iv_gen[j] == iv_replay_gen && iv_next[j] != ~0u) j = iv_next[j];  // (its next copy not taken yet, else its last)
+    iv_rp = j + 1;
+    return iv_take(j, buf, off);
 }
 
 static bool guest_direct_(int kind, uint64_t addr, uint64_t size, VkBuffer *buf, VkDeviceSize *off);
@@ -8810,7 +8857,7 @@ void renderer_interp_replay(void) {
     bool log = g_interp_log;
     st = st_frame_begin;
     g_interp_log = true;
-    iv_rp = 0;
+    iv_replay_start();
     interp_replay_begin();
     for (uint32_t i = 0; i < n; i++) exec_list(h[i], 0);
     vk_end_pass();
