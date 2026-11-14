@@ -189,6 +189,31 @@ static void camera_back(Cpu *c) {
     g_m14_wrote = m[14], g_copy14_wrote = copy[14];
 }
 
+// The culling pass (COOP_CULL_SITE: main+0x8529b0, as it reads the view camera x27) builds its view from the camera's
+// eye and far plane. It runs once per world step, the move above once per drawn frame (main+0x10540, the view's
+// set-up), and each controller read - once per step - takes the move off (camera_back_undo). At 60 fps the pass runs
+// after the set-up and sees the move. In the game's 30 fps mode (two steps a frame: the frame pacer holds it there on
+// a machine at the edge) the first step's pass ran before it, with the eye and the far plane as the game left them:
+// zoomed out it culled for the view the game would have without the zoom, and enemies and objects past it flickered or
+// stayed gone (user 2026-11-14: 2 controller reads, 1 move, the first pass at the game's eye; at 3x, 1,960 draws a
+// frame where 60 fps drew 2,580). So the pass gets the same move: the kept values as last moved, the eye moved back
+// along the view's back axis by g_back - taken off again by the next step's read, as the set-up's is.
+static void camera_cull(Cpu *c) {
+    uint64_t cam = c->x[27], node;
+    if (cam != g_back_cam || g_back == 0 || cam != view_camera() || !heap_ptr(node = LD64(cam + 0x510))) return;
+    if (g_eye_node && g_eye_node != node) return;  // (another node moved and not taken off yet: left to the set-up)
+    for (int k = 0; k < 4; k++) {
+        float *f = (float *)(uintptr_t)(cam + k_back_keep[k]);
+        if (*f == g_back_orig[k]) *f = g_back_wrote[k];
+    }
+    float *eye = (float *)(uintptr_t)(node + 0xb0);
+    if (g_eye_node == node && !memcmp(eye, g_eye_wrote, sizeof g_eye_wrote)) return;  // (moved already: 60 fps)
+    const float *m = (const float *)(uintptr_t)(cam + 0x580);
+    for (int k = 0; k < 3; k++) g_eye_moved[k] = g_back * m[2 + 4 * k], eye[k] += g_eye_moved[k];
+    memcpy(g_eye_wrote, eye, sizeof g_eye_wrote);
+    g_eye_node = node;
+}
+
 // The zoom at which a point is inside frac of the view, the camera moved back (1: in it now, or nearer). From the
 // view before the move (the matrix holds it moved by g_back): x across, y up, depth d. Moved back by B = (Z - 1) d0,
 // it is in when |x| <= frac (d + B) tan(fovy / 2) aspect, and as much for y.
