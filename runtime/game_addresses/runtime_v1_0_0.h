@@ -100,3 +100,6 @@ GA_ADDR(DOACTION_COOLDOWN,                0x0)
 GA_ADDR(DOACTION_TAKE_RET,                0x0)
 GA_ADDR(DOACTION_CHECK_RET,               0x0)
 GA_ADDR(DOACTION_TRIGGER,                 0x0)
+// Local co-op (runtime/hle/coop/targets.inc; 0 = not in this version): the actor factory's type table (0x58 bytes a
+// type, +0x50 its name)
+GA_ADDR(ACTOR_TYPES,                      0x0)

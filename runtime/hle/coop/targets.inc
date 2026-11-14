@@ -153,85 +153,131 @@ static bool on_game_thread(void) {  // (per call of the actor hooks: pthread_sel
     return g_game_thread_known && pthread_equal(self, g_game_thread);
 }
 
-// What an actor is, from its name (+0x18), worked out once: the update hooks (COOP_ACTOR_EXEC_*) run for every actor and
-// component every frame - about 21,000 a frame with the screens made out to a far zoom - and reading each name there
-// (snprintf, strstr; the grass and rocks' name hashed twice) cost the game thread about 2 ms a frame. Kept by the
-// actor's address and its name's first 24 bytes, folded (another actor made at the same address is worked out
-// again), in a table of 2 MB (cleared only once used: g_ac_used).
-// An enemy's components update on their own (the owner at +0x48). The one it reacts to the player with
-// (EnemyReactionComponent: "<kind>:ReactionComp", "...ReactComp") keeps "Link" (Zombie:ReactionComp +0x278: Player 1's) -
-// a zombie walked to Player 1 whoever it targeted (tested 2026-10-28) - and its player follower (TailorPlayerComp):
-// these see its target as "Link" too (AC_ENEMY_PART). Not the others (collision, animation...): Player 1's sword hits it
-// whoever it targets.
+// What an actor is, by the type it was made as - kept as it is made (COOP_ACTOR_TYPE_SITE: actor_made) - or, for an
+// enemy's part, its class. Until 2026-11-14 it was worked out from the actor's name (prefixes and "React", "PlayerComp"...):
+// upstream's review - a kind with an unexpected name went to Player 1.
+// An enemy's components update on their own (the owner at +0x48). The one it reacts to the player with - its life and
+// reaction component (ENEMY_LIFE_VTABLE: "Zombie:ReactionComp", "ZolRed:EnemyReactionCom"... one class) - keeps "Link"
+// (Zombie:ReactionComp +0x278: Player 1's) - a zombie walked to Player 1 whoever it targeted (tested 2026-10-28) - and
+// so does its effect player (TailorPlayer: "<kind>:TailorPlayerComp", "ActorTailorPlayer" - its "Link" read,
+// main+0xe4ffa4, compares Link's zone, +0xb0, with its owner's: whether its effects play): these see its target as
+// "Link" too (AC_ENEMY_PART). Not the others (collision, animation...): Player 1's sword hits it whoever it targets.
+// (A part counts only for an owner that is an enemy or a trap.)
 // A Gel (EnemyMiniZol) goes for the player it is on, not one it was after (AC_ENEMY_NEAREST: clinger_target): one that
 // jumped at its target and landed on another player clung to him, then went over to its target (user 2026-10-28). So
 // do the Zols, red and green, which cling as well: one hopping after Player 1 landed on Player 2 on the way, latched
 // on, and was on Player 1 the next moment (user 2026-10-30, red ones: "latches to p2 and then teleports to p1").
 // A floor that crumbles under Link (AC_FLOOR: the rattling floor, a house's collapse tiles...) looks for "Link" on it:
 // another player standing on it is its "Link" for its update, while Player 1 isn't (not checked in the game). The
-// levels name their objects cut short, not by their kind: "ObjBrokenFlo-..." is the ObjBrokenFloorLv5 (Catfish's Maw)
-// - the kinds' full names matched none of them. So the prefixes are those only one kind starts with ("ObjKataKata-",
-// Turtle Rock's, could be ObjKataKata or ...Lava as well: a lava block with a button). The dungeons' collapse tiles
-// ("ObjDungeonCo-...") measure the player in a job of their own instead: tile_player.
-#define AC_SETS 16384
-#define AC_WAYS 4  // (an actor's set of four: the one seen longest ago makes way)
+// dungeons' collapse tiles measure the player in a job of their own instead: tile_player.
+// The kinds by type come from the game's own actor table (ACTOR_TYPES: 0x58 bytes a type, +0x50 its name), read once:
+// its enemy types ("Enemy..."), and the few kinds named below.
 enum { AC_OTHER, AC_ENEMY, AC_ENEMY_NEAREST, AC_ENEMY_PART, AC_FLOOR, AC_TRAP };
-static bool floor_name(const char *name) {
-    static const char *const kinds[] = {"ObjHouseColl", "ObjKataKataFl", "ObjMatFaceFa", "ObjBrokenFlo"};
-    for (size_t i = 0; i < sizeof kinds / sizeof *kinds && !strncmp(name, "Obj", 3); i++)
-        if (!strncmp(name, kinds[i], strlen(kinds[i]))) return true;
-    return false;
+#define AT_TYPES 1024
+#define AT_SETS 32768
+#define AT_WAYS 4
+static uint8_t g_type_kind[AT_TYPES];
+static int g_types_n = -1, g_type_likelike = -1, g_type_shop_item = -1;
+typedef struct { _Atomic uint64_t actor; uint64_t key; uint16_t type; bool part; } ActorType;
+#define AT_PART 0x10000  // (actor_type: an enemy's part - a reaction or effect player component)
+static ActorType g_at[AT_SETS][AT_WAYS];
+static bool g_at_used;
+static pthread_mutex_t g_at_lock = PTHREAD_MUTEX_INITIALIZER;  // (writers: actors are made on loading threads too)
+static void actor_types_forget(void) {
+    pthread_mutex_lock(&g_at_lock);
+    if (g_at_used) memset(g_at, 0, sizeof g_at);
+    g_at_used = false;
+    pthread_mutex_unlock(&g_at_lock);
 }
-typedef struct {
-    uint64_t actor, name;  // (its name's first 24 bytes, folded)
-    uint32_t seen;         // (the frame it was last looked up in)
-    uint8_t what;
-} ActorClass;
-static ActorClass g_ac[AC_SETS][AC_WAYS];
-static bool g_ac_used;  // (an entry made since it was cleared: every level change clears it, with co-op off too)
-static void actor_class_forget(void) {
-    if (g_ac_used) memset(g_ac, 0, sizeof g_ac);
-    g_ac_used = false;
-}
-static ActorClass *actor_class(uint64_t actor) {
-    const char *nm = (const char *)(uintptr_t)(actor + 0x18);
-    uint64_t tag = LD64(actor + 0x18) ^ LD64(actor + 0x20) ^ LD64(actor + 0x28);
-    uint32_t now = (uint32_t)renderer_present_count();
-    // (the set: a multiplicative hash's top bits - actors sit on 4 KB boundaries, and the low bits used 64 sets of them)
-    ActorClass *set = g_ac[(uint32_t)(((actor >> 4) * 0x9E3779B97F4A7C15ull) >> 50) & (AC_SETS - 1)], *e = set;
-    for (int w = 0; w < AC_WAYS; w++) {
-        if (set[w].actor == actor && set[w].name == tag) return set[w].seen = now, &set[w];
-        if (set[w].seen < e->seen) e = &set[w];
-    }
-    e->seen = now, g_ac_used = true;
-    char name[64];
-    snprintf(name, sizeof name, "%.63s", nm);
-    e->actor = actor, e->name = tag;
-    // (the reaction part is "...ReactionComp" or, for 28 kinds - Zols, Armos, Pokey, Togezo... - "...ReactionCom": red
-    // Zols hopped at Player 1 whoever they targeted, user 2026-10-28)
-    e->what = strstr(name, "React") || strstr(name, "PlayerComp") ? AC_ENEMY_PART
-              : floor_name(name)                                     ? AC_FLOOR
-              : !strncmp(name, "ObjBladeTrap", 12)                   ? AC_TRAP
-              : strstr(name, "Comp") || strncmp(name, "Enemy", 5) ? AC_OTHER
-              : !strncmp(name, "EnemyMiniZol", 12) || !strncmp(name, "EnemyZolRed", 11) || !strncmp(name, "EnemyZolGreen", 13)
-                  ? AC_ENEMY_NEAREST
-                  : AC_ENEMY;
-    // (each kind of an enemy's parts once: which ones go by "Link" - and the others, which don't: a Like Like caught
-    // the player it went for by Player 1's "Link", user 2026-10-30)
-    uint64_t owner = strchr(name, ':') && ENV("LARECOMP_COOP_LOG") ? LD64(actor + 0x48) : 0;
-    const char *of = heap_ptr(owner) ? (const char *)(uintptr_t)(owner + 0x18) : NULL;
-    if (of && !strncmp(of, "Enemy", 5) && (e->what == AC_ENEMY_PART || e->what == AC_OTHER)) {
-        static uint64_t said[256];
-        static int nsaid;
-        bool known = false;
-        for (int k = 0; k < nsaid && !known; k++) known = said[k] == tag;
-        if (!known && nsaid < 256) {
-            said[nsaid++] = tag;
-            LOG("[coop] %.40s: an enemy part%s (its owner %.40s)\n", name,
-                e->what == AC_ENEMY_PART ? " that goes by \"Link\"" : "", of);
+RT_ON_RESET(coop_types_reset) { actor_types_forget(), g_types_n = -1, g_type_likelike = g_type_shop_item = -1; }
+
+static void actor_types_read(void) {
+    static const struct { const char *name; uint8_t kind; } k[] = {
+        {"EnemyZolGreen", AC_ENEMY_NEAREST},      {"EnemyZolRed", AC_ENEMY_NEAREST},
+        {"EnemyMiniZol", AC_ENEMY_NEAREST},       {"ObjHouseCollapseTile", AC_FLOOR},
+        {"ObjKataKataFloor", AC_FLOOR},           {"ObjMatFaceFallFloor", AC_FLOOR},
+        {"ObjBrokenFloorLv5", AC_FLOOR},          {"ObjBladeTrap", AC_TRAP}};
+    g_types_n = 0;
+    // (some types have no entry - no name -, up to a few in a row; 40 in a row: past the table's end)
+    for (int t = 0, gap = 0; t < AT_TYPES && GA(ACTOR_TYPES) && gap < 40; t++) {
+        uint64_t nm = LD64(GA(ACTOR_TYPES) + 0x58 * (uint64_t)t + 0x50);
+        const char *s = (const char *)(uintptr_t)nm;
+        g_type_kind[t] = AC_OTHER;
+        if (nm < MAIN_BASE || nm >= GA(MAIN_IMAGE_SCAN_END) || s[0] < 'A' || s[0] > 'z') {
+            gap++;
+            continue;
         }
+        gap = 0, g_types_n = t + 1;
+        g_type_kind[t] = !strncmp(s, "Enemy", 5) ? AC_ENEMY : AC_OTHER;
+        for (size_t i = 0; i < sizeof k / sizeof *k; i++)
+            if (!strcmp(s, k[i].name)) g_type_kind[t] = k[i].kind;
+        if (!strcmp(s, "EnemyLikeLike")) g_type_likelike = t;
+        if (!strcmp(s, "ObjShopItem")) g_type_shop_item = t;
     }
-    return e;
+    LOG("[coop] %d actor types read (Like Like %d, shop item %d)\n", g_types_n, g_type_likelike, g_type_shop_item);
+}
+
+static ActorType *actor_set(uint64_t actor) {  // (a multiplicative hash's top bits: actors sit on 4 KB boundaries)
+    return g_at[(uint32_t)(((actor >> 4) * 0x9E3779B97F4A7C15ull) >> 49) & (AT_SETS - 1)];
+}
+
+// A part is made: the reaction component's base class's constructor (main+0x12fae0, from the enemies', the objects' -
+// a Blade Trap's - and the NPCs': COOP_PART_SITE_0) or an effect player's (built in place: COOP_PART_SITE_1 / _2),
+// each as it stores its class; kept until their destructors (main+0xeb410, which the enemies' reaction component's
+// ends in; main+0xe3b510: COOP_PART_GONE_SITE_0 / _1). Only one whose owner (+0x48) is an enemy or a trap counts.
+// An actor is made: the actor base class's constructor (main+0x1bdb0, from every actor class's - however it is made: the
+// factory's, a mini-boss its builder wakes later, a Link) copies its spawn info's key and type into it (+0x98, +0xa0:
+// COOP_ACTOR_TYPE_SITE, as it stores the type). Kept until the actor base class's destructor (main+0xfa7970:
+// COOP_ACTOR_GONE_SITE, actor_gone). (Entries are written whole before their actor is: read without the lock.)
+static void actor_made(uint64_t actor, uint64_t key, uint32_t type, bool part) {
+    if (!heap_ptr(actor)) return;
+    pthread_mutex_lock(&g_at_lock);
+    ActorType *set = actor_set(actor), *e = NULL;
+    for (int w = 0; w < AT_WAYS && !e; w++)
+        if (atomic_load_explicit(&set[w].actor, memory_order_relaxed) == actor) e = &set[w];
+    for (int w = 0; w < AT_WAYS && !e; w++)
+        if (!atomic_load_explicit(&set[w].actor, memory_order_relaxed)) e = &set[w];
+    if (!e) {
+        static int said;
+        if (!said++) LOG("[coop] more than %d actors in one set of the actor table: one forgotten\n", AT_WAYS);
+        e = &set[0];
+    }
+    atomic_store_explicit(&e->actor, 0, memory_order_release);
+    e->key = key, e->type = (uint16_t)type, e->part = part;
+    atomic_store_explicit(&e->actor, actor, memory_order_release);
+    g_at_used = true;
+    pthread_mutex_unlock(&g_at_lock);
+}
+
+static void actor_gone(uint64_t actor) {
+    pthread_mutex_lock(&g_at_lock);
+    ActorType *set = actor_set(actor);
+    for (int w = 0; w < AT_WAYS; w++)
+        if (atomic_load_explicit(&set[w].actor, memory_order_relaxed) == actor)
+            atomic_store_explicit(&set[w].actor, 0, memory_order_release);
+    pthread_mutex_unlock(&g_at_lock);
+}
+
+static int actor_type(uint64_t actor) {  // (-1: not an actor made since co-op was on)
+    ActorType *set = actor_set(actor);
+    for (int w = 0; w < AT_WAYS; w++) {
+        if (atomic_load_explicit(&set[w].actor, memory_order_acquire) != actor) continue;
+        uint64_t key = set[w].key;
+        uint16_t type = set[w].type;
+        bool part = set[w].part;
+        // (the entry not rewritten meanwhile, and an actor still that actor: its own key and type)
+        if (atomic_load_explicit(&set[w].actor, memory_order_acquire) != actor ||
+            (!part && (LD64(actor + 0x98) != key || LD16(actor + 0xa0) != type)))
+            return -1;
+        return part ? AT_PART : type;
+    }
+    return -1;
+}
+
+static uint8_t actor_kind(uint64_t actor) {
+    if (g_types_n < 0) actor_types_read();
+    int t = actor_type(actor);
+    return t == AT_PART ? AC_ENEMY_PART : t >= 0 && t < g_types_n ? g_type_kind[t] : AC_OTHER;
 }
 
 // LARECOMP_COOP_TRACE=<name prefix>[,<another>...] (test): each such actor's position every half second
@@ -266,7 +312,7 @@ static void down_enemy_note(uint64_t actor) {  // (an enemy updating: the knocke
     for (int i = 1; i < g_n && !any; i++) any = g_down[i];
     float e[3], p[3];
     if (!any) return;
-    uint8_t what = actor_class(actor)->what;
+    uint8_t what = actor_kind(actor);
     if ((what != AC_ENEMY && what != AC_ENEMY_NEAREST) || !actor_pos(actor, e)) return;
     for (int i = 1; i < g_n; i++)
         if (g_down[i] && player_pos(g_extra[i], p) &&
@@ -296,8 +342,8 @@ static const uint8_t k_likelike_reads[][2] = {{22, 21}, {21, 20}, {9, 20}, {21, 
                                               {8, 20},  {8, 20},  {8, 21}, {21, 20}};
 static int likelike_player(Cpu *c, int k) {
     uint64_t own = LD64(c->x[k_likelike_reads[k][1]] + 0x4b8), ll = c->x[19];
-    int t = g_n > 1 && g_settings.coop_targets && heap_ptr(ll) &&
-                    !strncmp((const char *)(uintptr_t)(ll + 0x18), "EnemyLikeLike", 13)
+    int t = g_n > 1 && g_settings.coop_targets && heap_ptr(ll) && g_type_likelike >= 0 &&
+                    actor_type(ll) == g_type_likelike
                 ? kept_target(ll)
                 : -1;
     c->x[k_likelike_reads[k][0]] = t > 0 && t < g_n && collision_of(g_extra[t]) ? g_extra[t] : own;
@@ -381,7 +427,7 @@ static void actor_exec_begin(Cpu *c) {
     if (!actor) return;
     int t = carrier(actor);
     if (t) goto swap;
-    uint8_t what = actor_class(actor)->what;
+    uint8_t what = actor_kind(actor);
     if (what == AC_FLOOR) {
         static uint64_t said[4];  // (once a floor: which one, whose - the last few: one stands on two floors' edge)
         static unsigned nsaid;
@@ -398,7 +444,7 @@ static void actor_exec_begin(Cpu *c) {
         // reaction part steers its hops, and after each hit on Player 2 knocked him back, Player 1 beside him was the
         // nearest - it went for Player 1 (user 2026-10-31, "always going on p1 when hitting p2"; build/zolhit.sh).
         uint64_t owner = LD64(actor + 0x48);
-        uint8_t of = heap_ptr(owner) ? actor_class(owner)->what : AC_OTHER;
+        uint8_t of = heap_ptr(owner) ? actor_kind(owner) : AC_OTHER;
         if (of != AC_ENEMY && of != AC_ENEMY_NEAREST && of != AC_TRAP) return;
         t = of == AC_ENEMY_NEAREST ? clinger_target(owner) : of == AC_TRAP ? trap_target(owner) : nearest_player(owner);
     } else if (what == AC_TRAP)

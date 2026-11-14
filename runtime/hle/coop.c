@@ -381,6 +381,19 @@ int rt_coop_hook(Cpu *c, int which) {
         if (!coop_index(c->x[19])) return 0;
         c->x[1] = 0;
         return 1;
+    case 51:  // COOP_ACTOR_TYPE_SITE - strh w8, [x19, #0xa0]: the actor base class's constructor (x19 the actor) stores
+        // its type, its key just stored at +0x98 (actor_made)
+        actor_made(c->x[19], LD64(c->x[19] + 0x98), (uint32_t)c->x[8] & 0xffff, false);
+        return 0;
+    case 52:  // COOP_ACTOR_GONE_SITE - the actor base class's destructor (x0 the actor)
+    case 56: case 57:  // COOP_PART_GONE_SITE_0 / _1 - a reaction component's, an effect player's destructor (x0)
+        actor_gone(c->x[0]);
+        return 0;
+    case 53: case 54: case 55: {  // COOP_PART_SITE_0..2 - str x8, [xN]: a part stores its class (xN the part)
+        static const uint8_t reg[] = {19, 20, 22};
+        actor_made(c->x[reg[which - 53]], 0, 0, true);
+        return 0;
+    }
     }
     return 0;
 }
@@ -518,7 +531,6 @@ static void play_ended(Cpu *c) {
 void coop_level_change(const char *level, const char *locator) {
     extern int game_in_play(void);
     extern const char *chaos_current_level(void);  // runtime/ui/chaos_overlay.mm
-    actor_class_forget();  // (a new level: its actors' addresses are others')
     g_level_changed = renderer_present_count();
     if (!g_act_calls && !g_act_swapped) act_forget();  // (the old level's components: none of the slots' any more)
     if (!rt_coop_on() || !game_in_play()) return;
@@ -559,6 +571,7 @@ void coop_tick(Cpu *c) {
             LOG("[coop] %d players from the next file\n", n);
             g_n = n;
             input_style_changed();
+            actor_types_forget();  // (made while co-op was off, actors and parts weren't kept: start afresh)
         }
     }
     g_hud_host = host_player(), g_hud_cam = view_camera();  // (for the HUD: as the frame starts)
