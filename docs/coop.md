@@ -47,12 +47,18 @@ title, and they copied Player 1), and they don't keep the save's restart point
 kill (`ACTOR_KILL`), as a session ends - was looked at on 2026-11-13 and not
 done: the player entity (the game manager's `+0x4a8`) holds three references
 to the first Link made (`+0x208`, `+0x2e8`, `+0x3c8`, each with that Link's
-control block next to it; the counts of a Link it holds are the same as of one
-it doesn't), which can be a Link left over. Their readers weren't found: no
-read of them from the game manager's entity in the main program's code (the
-entity is passed in elsewhere), and a page watch on them made the game crawl
-(frame 1,621 in 200 s) before play. Killed with something still holding it,
-the game would use a dead Link; parked, nothing a player sees changes.
+control block next to it). They are the owners of named component records the
+entity keeps (0xe0 apart, each with its name inline - `..._DamageColorComp` -
+then `{Link, control block}`): the entity is in effect the first Link's
+component registry, the game expecting one Link. No load reads them with the
+entity as its base (all 2,178 loads at those offsets, logged in an instrumented
+build through play, the pause menu, a save and a level change: none), so the
+game reaches them through each record. Killing the first Link made while it is
+left over would leave the entity's records to a dead Link; the other Links
+left over aren't in them. Two ways on (not done): make Player 1 the first Link
+made - the entity his - which needs the creator's camera and the game
+manager's player slot kept on Player 1 (they go to the last Link made); or
+kill every Link left over but the entity's.
 
 **Spawns.** A placement at a spawn point (`COOP_PLACE_SITE`) is run for each
 player on the same spot, Player 1 last (`COOP_PLACE_PLAYER_SITE` picks the
