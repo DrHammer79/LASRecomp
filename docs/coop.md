@@ -43,7 +43,16 @@ over anyway is put out of the way (under the map) and its update is skipped
 (`COOP_ACTOR_EXEC_SITE`). That goes on with co-op turned off too (`g_leftover`:
 the game keeps the Links through a Game Over's Continue and a return to the
 title, and they copied Player 1), and they don't keep the save's restart point
-(see "The save's restart point").
+(see "The save's restart point"). Taking them away instead - the game's own
+kill (`ACTOR_KILL`), as a session ends - was looked at on 2026-11-13 and not
+done: the player entity (the game manager's `+0x4a8`) holds three references
+to the first Link made (`+0x208`, `+0x2e8`, `+0x3c8`, each with that Link's
+control block next to it; the counts of a Link it holds are the same as of one
+it doesn't), which can be a Link left over. Their readers weren't found: no
+read of them from the game manager's entity in the main program's code (the
+entity is passed in elsewhere), and a page watch on them made the game crawl
+(frame 1,621 in 200 s) before play. Killed with something still holding it,
+the game would use a dead Link; parked, nothing a player sees changes.
 
 **Spawns.** A placement at a spawn point (`COOP_PLACE_SITE`) is run for each
 player on the same spot, Player 1 last (`COOP_PLACE_PLAYER_SITE` picks the
