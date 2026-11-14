@@ -657,7 +657,7 @@ static void gen_overlay(float scale) {
     ImGui::EndPopup();
 }
 
-bool spoiler_view_draw(const std::string &seed, float scale);  // spoiler_view.mm
+int spoiler_view_draw(const std::string &seed, float scale);  // spoiler_view.mm: 0 closed, 2 took B
 static std::string g_spoiler_seed;  // seed whose spoiler page is open
 
 // ---- the tab, in two columns (as the Controls tab's Configure inputs): Seeds and the seed option categories on the
@@ -1470,13 +1470,21 @@ static void seed_sheet(float scale, const char *active) {
     GenOpts so = g_opts;  // (the seed's own options, for its room shuffle; a seed from before IDs: the rows all open)
     bool rooms = !sp || sp->id.empty() || !seed_id_decode(sp->id.c_str(), so).empty() || so.room_shuffle;
 #if PLAT_TOUCH
-    g_close_pressed = plastic_close_corner(44 * scale, scale);  // (one column: the screen's corner, as on Settings)
+    // touch: as Cosmetics and Cheats (menu.mm menu_page_head) - the X at the top right of the rows' panel with the
+    // page's name on its line, then the seed's name and ID and the rows in a list that scrolls under it. In the
+    // screen's corner the X was cut off and under the FPS counter.
+    opt_begin("##rando_sheet", scale);
+    g_close_pressed = plastic_close_pane(44 * scale, scale);
+    pane_heading("Randomizer", scale);
+    opt_list_begin();
 #endif
     ImGui::TextColored(plastic_col(plastic_theme().title), "%s", active);
     ImGui::TextDisabled(L("Seed ID: %s"), sp && !sp->id.empty() ? sp->id.c_str() : "-");
     if (sp && sp->race) ImGui::TextDisabled(L("Race mode. Seed hash: %s"), hash_names(sp->id).c_str());
     ImGui::Spacing();
+#if !PLAT_TOUCH
     opt_begin("##rando_sheet", scale);
+#endif
     row_tracker();
     row_door_letters(rooms);
     bool locked = sp && sp->race && !sp->race_done;  // (race mode: shut until the credits)
@@ -1492,6 +1500,9 @@ static void seed_sheet(float scale, const char *active) {
     else ImGui::Dummy(ImVec2(0, row_h));
     if (opt_action("Switch to vanilla", "", "Leave this seed and play the normal game. Your seed's saves stay put."))
         play_seed("");
+#if PLAT_TOUCH
+    opt_list_end();
+#endif
     opt_end();
 }
 
@@ -1500,7 +1511,9 @@ extern "C" void rando_tab_draw(float scale) {
     static bool spoiler_test;  // LARECOMP_SPOILER_TEST=<seed>: open that seed's spoiler page (test hook)
     if (!spoiler_test && getenv("LARECOMP_SPOILER_TEST")) { spoiler_test = true; g_spoiler_seed = getenv("LARECOMP_SPOILER_TEST"); }
     if (!g_spoiler_seed.empty()) {  // the spoiler page replaces the tab until Back
-        if (!spoiler_view_draw(g_spoiler_seed, scale)) g_spoiler_seed.clear();
+        int r = spoiler_view_draw(g_spoiler_seed, scale);
+        if (r != 1) g_back_frame = ImGui::GetFrameCount();  // (B was the page's: not the menu's as well)
+        if (r == 0) g_spoiler_seed.clear();
         return;
     }
     static bool opts_once;  // the options the player last set (larecomp.ini)

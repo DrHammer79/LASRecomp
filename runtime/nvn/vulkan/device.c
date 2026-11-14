@@ -1162,8 +1162,10 @@ static void create_swapchain(void) {
 // Android destroys the window's surface whenever another activity covers the app (the folder picker, the home screen)
 // and SDL makes a new one on return: the old VkSurfaceKHR is lost for good (VK_ERROR_SURFACE_LOST_KHR on every acquire,
 // a black screen). So each swapchain rebuild there makes the surface again from SDL's current window first; the old
-// swapchain belongs to the old window and can't be passed on. False: no window right now (in the background).
+// swapchain belongs to the old window and can't be passed on. False: no window right now (in the background). That
+// is tried again every frame while the app is away, so it is logged once: the first try, and the count on return.
 static bool recreate_surface(void) {
+    static unsigned misses;
     for (uint32_t i = 0; i < g_vk.sc_count; i++) vkDestroyImageView(g_vk.dev, g_vk.sc_views[i], NULL);
     g_vk.sc_count = 0;
     if (g_vk.swapchain) vkDestroySwapchainKHR(g_vk.dev, g_vk.swapchain, NULL);
@@ -1171,11 +1173,13 @@ static bool recreate_surface(void) {
     if (g_vk.surface) vkDestroySurfaceKHR(g_vk.inst, g_vk.surface, NULL);
     g_vk.surface = VK_NULL_HANDLE;
     if (!SDL_Vulkan_CreateSurface(window, g_vk.inst, NULL, &g_vk.surface)) {
-        LOG("[vk] no window surface yet: %s\n", SDL_GetError());
+        if (!misses++) LOG("[vk] no window surface yet: %s (tried again each frame, not logged)\n", SDL_GetError());
         g_vk.surface = VK_NULL_HANDLE;
         return false;
     }
-    LOG("[vk] window surface made again (the app was in the background)\n");
+    if (misses) LOG("[vk] window surface made again (the app was in the background; %u tries without a window)\n", misses);
+    else LOG("[vk] window surface made again (the app was in the background)\n");
+    misses = 0;
     return true;
 }
 #endif
@@ -1797,7 +1801,7 @@ void backend_present_now(NvnTexture *t, uint64_t frame) {
         widescreen_frame_end(frame);
         extern void widescreen_set_factor(float f);
         extern bool widescreen_allowed(void);
-        // render scale + placement in the window: runtime/nvn/output_scale.c (Video tab "Internal resolution");
+        // render scale + placement in the window: runtime/nvn/output_scale.c (Video tab "Resolution");
         // GPU time since the last frame (exec.c's GPU timer; -1 without one: dynamic resolution goes by frame times):
         // the game's submissions and the window image's (LARECOMP_DYNRES_COUNT_PRESENT=0: the game's only, as before)
         static int count_present = -1;
@@ -2056,6 +2060,22 @@ static void quick_exit_handler(void) {
 // the app in the background with the game paused (phones; runtime/kernel.c's hang watchdog asks): never here
 bool ui_in_background(void) { return false; }
 
+#ifdef __ANDROID__
+// the app may not come back from the background (the system ends it there): keep the pipeline cache and the settings
+// (options changed with the menu still open were lost). From LASRecomp-Android-Plus (MIT).
+// SDL 3 never queues the lifecycle events: they reach an event watcher only, here on the thread that pumps events
+// (ui_run's SDL_WaitEventTimeout). Issue #767.
+static bool SDLCALL background_watch(void *ud, SDL_Event *e) {
+    (void)ud;
+    if (e->type == SDL_EVENT_WILL_ENTER_BACKGROUND && g_vk.dev) {
+        vk_pipeline_cache_save();
+        settings_save();
+        LOG("[app] background: saved pipeline cache and settings\n");
+    }
+    return true;
+}
+#endif
+
 void ui_window_init(void) {
     if (window) return;
     atexit(quick_exit_handler);
@@ -2091,6 +2111,9 @@ void ui_window_init(void) {
     }
 #endif
     if (!window) FATAL("SDL_CreateWindow: %s\n", SDL_GetError());
+#ifdef __ANDROID__
+    SDL_AddEventWatch(background_watch, NULL);
+#endif
     rt_window_icon(window);
     rt_window_remember(window);
     // the Fullscreen setting applies from the start screen on (not only once the game runs); test windows stay windows
@@ -2144,14 +2167,6 @@ int ui_run(void) {
         SDL_Event e;
         while (SDL_WaitEventTimeout(&e, 16)) {
             input_rumble_poll();
-#ifdef __ANDROID__
-            // the app may not come back from the background (the system ends it there): keep the pipeline cache and
-            // the settings (options changed with the menu still open were lost). From LASRecomp-Android-Plus (MIT).
-            if (e.type == SDL_EVENT_WILL_ENTER_BACKGROUND && g_vk.dev) {
-                vk_pipeline_cache_save();
-                settings_save();
-            }
-#endif
             if (e.type == SDL_EVENT_QUIT) {
                 input_rumble_stop();
                 input_led_stop();
