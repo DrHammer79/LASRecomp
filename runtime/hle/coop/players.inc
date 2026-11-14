@@ -172,7 +172,7 @@ int coop_hud_rows(CoopHudRow *rows, int cap) {
     return n;
 }
 
-// The player who owns a colour set and its colour as drawn (hearts, the HUD): the co-op Playerlink.bfres's sets. Red
+// A player colour's RGB (the tunic tint, hearts, the HUD), by the Controls tab's choice. Red
 // is a deeper crimson than the game's own heart red, so a red player's hearts don't read as "the" hearts.
 uint32_t coop_colour_rgb_of(int colour) {  // (a colour set's, by its number)
     static const uint32_t k[COOP_COLOURS] = {0x2fa043, 0x8b1a2b, 0x2c49d6, 0xe8c11c, 0x5b2fbe, 0xd02fc4, 0x3a3a3a,
