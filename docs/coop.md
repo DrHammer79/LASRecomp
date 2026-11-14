@@ -671,6 +671,25 @@ grave the owl flew off, the camera came back to Player 1 and he stayed in the
 event (user 2026-10-30; replayed from the user's save, `tools/coop_tests/grave.sh`:
 stuck at zoom 1.5 every time, finished at 1 and with this).
 
+**The culling pass gets the move too** (`COOP_CULL_SITE`, `camera_cull`).
+The culling pass (main+0x8529b0) builds its view from the camera's eye and
+far plane and runs once per world step; the move is made once per drawn
+frame, in the view's set-up (main+0x10540, where `COOP_CAMERA_SITE` is), and
+each controller read - once per step - takes it off. At 60 fps the pass
+runs after the set-up. In the game's 30 fps mode (two steps a frame: the
+frame pacer holds it there when frames don't fit 60) the first step's pass
+ran before it, with the eye and far plane as the game left them, and culled
+for the view the game would have without the zoom: zoomed out, enemies and
+objects past it flickered or stayed gone until moving (user 2026-11-14;
+logged there: 2 controller reads and 1 move a frame, the first pass at the
+game's eye). At 3x, 30 fps drew 1,960 draws a frame at the save's start where
+60 fps drew 2,580, the tall grass and the cactus enemies missing. The hook,
+as the pass reads the camera, puts the kept values back as last moved and
+moves the eye back along the view's back axis by `g_back` when it isn't
+already (at 60 fps it is: nothing changes); the next step's read takes it
+off as it does the set-up's. With it 30 fps draws 2,577, the same scene as
+60.
+
 A view matrix the game hasn't set again since it was moved isn't moved again
 (`g_m14_wrote`): only what the frame's start took off (the eye, the kept
 values) is put back. While the pause menu is up the game leaves the matrix as
@@ -1000,6 +1019,7 @@ the game's reads of it by the RomFS index's patch list, while co-op is on
 | COOP_ACTOR_GONE_SITE | 0x7000fa7970 | stp x22, x21, [sp, #-0x30]! | an actor's base destructor: forgotten (52) |
 | COOP_PART_SITE_0..2 | 0x700012fb5c, 0x7000c53ac0, 0x7000e24c1c | str x8, [x19 / x20 / x22] | a reaction component, an effect player made: kept (53-55) |
 | COOP_PART_GONE_SITE_0 / _1 | 0x70000eb410 / 0x7000e3b510 | sub sp, sp, #0x30 | their destructors: forgotten (56, 57) |
+| COOP_CULL_SITE | 0x7000852ad8 | ldr s10, [x27, #0x568] | the culling pass reads the view camera: the move applied (58) |
 
 Runtime constants: `PLAYER_VTABLE`, `PLAYER_MAX_HEALTH`, `PLAY_ANIMATION`,
 `DOACTION_CURRENT` / `_PENDING` / `_COOLDOWN` (the slots), `DOACTION_TAKE_RET` /
