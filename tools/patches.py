@@ -1255,6 +1255,12 @@ _COOP_HOOKS = {
     A.COOP_PART_SITE_2: (0xf90002c8, (), 'str x8, [x22]: an effect player component stores its class - kept'),
     A.COOP_PART_GONE_SITE_0: (0xd100c3ff, (), 'sub sp, sp, #0x30: a reaction component\'s destructor - forgotten'),
     A.COOP_PART_GONE_SITE_1: (0xd100c3ff, (), 'sub sp, sp, #0x30: an effect player\'s destructor - forgotten'),
+    # The culling pass (main+0x8529b0, x27 the view camera) builds its view from the camera's eye (its node +0x510,
+    # +0xb0) and far plane (+0x56c), read right after this load. It runs once per world step; the camera is moved back
+    # (COOP_CAMERA_SITE) once per drawn frame, in the view's set-up (main+0x10540). In the game's 30 fps mode (two
+    # steps a frame) the first step's pass ran before it, with the camera as the game left it: zoomed out, it culled
+    # for the view the game would have without the zoom, and enemies and objects past it flickered or stayed gone.
+    A.COOP_CULL_SITE: (0xbd456b6a, (), 'ldr s10, [x27, #0x568]: the culling pass reads the view camera'),
 }
 HOOKS.update({a: h for a, h in _COOP_HOOKS.items() if a})
 
