@@ -208,12 +208,45 @@ jumping onto another stood on his head and stuck a second or two.
 **Camera areas.** Every Link gets his own camera (`actor+0x318`), and every
 camera listens to the camera-area manager, which follows Player 1. A camera
 whose `+0x515` is set answers a new scroll area with the "ZeldaScroll" event,
-which walks Player 1 on. On the Field the other players' cameras have it set.
-In front of the Trendy Game's door this turned Player 1 back on every step, so
-only Player 1's camera answers (`COOP_CAMERA_SCROLL_SITE`). The mod renamed the
-ZeldaScroll event for this. The recompiled code can't catch the game's
-"not found" throw that renaming causes, so `COOP_SCROLL_SITE` leaves the event
-alone.
+which walks Player 1 on. Indoors every camera has it set, so only Player 1's
+camera answers (`COOP_CAMERA_SCROLL_SITE`). The mod renamed the ZeldaScroll
+event for this. The recompiled code can't catch the game's "not found" throw
+that renaming causes, so `COOP_SCROLL_SITE` leaves the event alone.
+
+**The cameras' level set-up** (`camera_setup_tick`, 2026-11-15). As a level
+starts, the game sets up the camera of the game manager's Link only
+(main+0x855040): `+0x508` gets the level's kind (the Field is 3; houses, caves
+and dungeons are below), and `+0x515` is set for a kind below 3, whose areas
+scroll. The other Links' cameras kept a new camera's 0 and 1, an indoor
+camera's. Two things followed on the Field:
+- They scrolled at every camera-area line. In front of the Trendy Game's door
+  this turned Player 1 back on every step (until now the scroll hook skipped
+  it).
+- A camera of a kind up to 2 that is told of a new area (`+0x4fc`, the one
+  before at `+0x500`) tells the screen manager from its update (main+0xc7fd0,
+  run on the camera's `+0x3b0`). The screen manager (main+0x866130) then makes
+  every loaded screen outside that area fresh: a room change, where the rooms
+  left are new when you come back. Player 1's camera never does this on the
+  Field, but the others did, at every camera area Player 1 stepped into. The
+  screens of the area just left were made again in view, and what had been cut
+  or lifted there came back next to the players (user, 2026-11-15: a cut bush
+  back right beside Player 1, twice).
+
+Found from the respawn log: with 2 or 5 players, zoom on or off, a bush cut
+just south of Ukuku Prairie grew back as Player 1 stepped north into it. Alone
+it stayed cut. The new actor's constructor was traced back to the spawn queue,
+the queue to a screen reset (main+0x8e5e60), and the reset to the screen
+manager's area slot. That slot ran only with co-op, from a camera update.
+Each frame the other cameras now get Player 1's camera's `+0x508` and
+`+0x515`. On the Field they no longer scroll or reset screens. Indoors nothing
+changes: they keep the scroll flag (still skipped), and a kind up to 2 does
+what their 0 did.
+
+Found with it: the kept box's sides (`COOP_KEEP_BOX_SITE`) are offsets from
+its centre, west and north negative. `keep_reach` had raised all four to the
+reach to the other players, as if they were half sizes. That moved the west
+and north sides past the centre. They are now taken out to the reach, away
+from the centre.
 
 **A-button actions** (lifting, throwing, opening chests, talking, reading).
 - An object that can be acted on has a DoAction component. Its update

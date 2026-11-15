@@ -325,17 +325,19 @@ int rt_coop_hook(Cpu *c, int which) {
     case 33:  // COOP_LOAD_BOX_SITE - adrp x23: s1 x s2 the box of screens whose objects are made
         if (g_back_on && g_box != 1.0f) scale_s(c, 1, g_box), scale_s(c, 2, g_box);
         return 0;
-    case 34:  // COOP_KEEP_BOX_SITE - ld1 {v0.s}[1], [x23]: s0, s1 (across) and s3, s2 (deep) the half sizes of the
-              // box of screens whose objects are kept
+    case 34:  // COOP_KEEP_BOX_SITE - ld1 {v0.s}[1], [x23]: the box of screens whose objects are kept, as its sides from
+              // its centre (the width and depth times -0.5 and 0.5): s0 west and s1 east, s3 north and s2 south - s0
+              // and s3 negative. Each side is taken out to keep_reach's, if that is further. (Until 2026-11-15 all four
+              // were raised to it, as if half sizes: the west and north sides went to the other side of the centre.)
         if (g_back_on && g_box != 1.0f)
             for (int r = 0; r < 4; r++) scale_s(c, r, g_box);
         {
             float rx, rz;
             keep_reach(&rx, &rz);
             for (int r = 0; r < 4 && (rx > 0 || rz > 0); r++) {
-                float h;
-                memcpy(&h, &c->v[r], 4);
-                set_s(c, r, fmaxf(h, r < 2 ? rx : rz));
+                float side, reach = r < 2 ? rx : rz;
+                memcpy(&side, &c->v[r], 4);
+                set_s(c, r, r == 0 || r == 3 ? fminf(side, -reach) : fmaxf(side, reach));
             }
         }
         return 0;
@@ -580,6 +582,7 @@ void coop_tick(Cpu *c) {
     }
     g_hud_host = host_player(), g_hud_cam = view_camera();  // (for the HUD: as the frame starts)
     if (!rt_coop_on()) return;
+    camera_setup_tick();
     p1_event_tick();
     a_press_tick(renderer_present_count());
     if (g_p1_walk_in && !g_talking)  // (a talk walks Player 1 up to the one he talks to, a walk-in too: coop_enter)
