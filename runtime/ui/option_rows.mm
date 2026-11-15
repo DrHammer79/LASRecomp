@@ -104,7 +104,8 @@ bool opt_nav_step(int dir) {
 }
 static std::unordered_map<ImGuiID, int> g_ids;  // this page's rows so far, by id (two rows with one label)
 static bool g_held;  // the last row's left / right has been held a while (steppers go faster)
-static bool g_click_silent;  // this frame's click did nothing (a finger on a ◀ value ▶ row's body): no decide sound
+static bool g_click_silent;  // no decide sound for this frame's click / A / Enter: it does nothing (a finger on a
+                             // ◀ value ▶ row's body) or steps a value (step_sfx plays that)
 static bool g_off_press;     // this frame's click / A / Enter was on a greyed-out row: it does nothing, so no sound
 void opt_indent(int step) { g_indent = g_indent + step < 0 ? 0 : g_indent + step; }
 
@@ -258,6 +259,13 @@ static int row(const char *label, const std::string &value_en, bool changed, con
     if (!tap_steps && !arrow_under && ImGui::IsItemHovered() && ImGui::IsMouseClicked(0)) g_click_silent = true;
     if (off && ((ImGui::IsItemHovered() && ImGui::IsMouseClicked(0)) || GImGui->NavActivatePressedId == ImGui::GetItemID()))
         g_off_press = true;
+    // A value row (◀ value ▶, On / Off) only changes its value: a click, a tap, A or Enter on it plays step_sfx's tab
+    // sound, not decide - decide is for what opens something (a preview, a page, a dialog; user 2026-11-14). Silence
+    // the press frame's decide, which comes first and would drop the tab sound.
+    if (lr && !chevron && !off &&
+        (((tap_steps || arrow_under) && ImGui::IsItemHovered() && ImGui::IsMouseClicked(0)) ||
+         GImGui->NavActivatePressedId == ImGui::GetItemID()))
+        g_click_silent = true;
     int step = clicked && !off && tap_steps ? 2 : 0;
     g_held = false;
     if (foc && !off) {
@@ -412,9 +420,10 @@ void opt_child_end(void) {
     dl->PopClipRect();
 }
 
-// a value stepped with left / right: the cursor sound (A / click: menu_sfx_frame's decide)
+// a value stepped (left / right, a click, A / Enter): the tab sound, as the values scroll sideways like the tabs (user
+// 2026-11-14)
 static void step_sfx(int step) {
-    if (step == 1 || step == -1) menu_sfx_play(MENU_SFX_CURSOR);
+    if (step) menu_sfx_play(MENU_SFX_TAB);
 }
 
 bool opt_toggle(const char *label, bool *v, bool def, const char *desc) {
@@ -793,6 +802,8 @@ static bool on_scrollbar(ImGuiContext &g) {
                  g.HoveredId == ImGui::GetWindowScrollbarID(w, ImGuiAxis_X));
 }
 
+extern "C" void menu_sfx_click_silent(void) { g_click_silent = true; }
+
 extern "C" void menu_sfx_frame(bool back_ok) {
     ImGuiContext &g = *ImGui::GetCurrentContext();
     bool silent = g_click_silent, off_press = g_off_press;
@@ -805,7 +816,8 @@ extern "C" void menu_sfx_frame(bool back_ok) {
     if (!ui_text_busy() && cap < 0) {
         if (back_ok && (ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false) || ImGui::IsKeyPressed(ImGuiKey_Escape, false)))
             menu_sfx_play(MENU_SFX_CANCEL);
-        else if (!off_press && (g.NavActivatePressedId || (ImGui::IsMouseClicked(0) && g.HoveredId && !on_scrollbar(g) && !silent)))
+        else if (!off_press && !silent &&
+                 (g.NavActivatePressedId || (ImGui::IsMouseClicked(0) && g.HoveredId && !on_scrollbar(g))))
             menu_sfx_play(is_tab(g.NavActivatePressedId ? g.NavActivatePressedId : g.HoveredId) ? MENU_SFX_TAB
                                                                                                 : MENU_SFX_DECIDE);
         else if (g.NavCursorVisible && g.NavId && last && g.NavId != last)
