@@ -1110,7 +1110,8 @@ static void skip_note(int why, bool compute) {
     }
     skip_top[j].n++;
 }
-#define SKIP(why) do { stat_skipped++; if (log_skips) skip_note(why, false); } while (0)
+static bool draw_logged;  // (frame interpolation: the draw being translated was logged - a skip from here is marked)
+#define SKIP(why) do { stat_skipped++; if (draw_logged) interp_draw_skipped(), draw_logged = false; if (log_skips) skip_note(why, false); } while (0)
 #define SKIP_CS(why) do { stat_skipped++; if (log_skips) skip_note(why, true); } while (0)
 static void skip_log(void) {
     if (log_skips <= 0) return;
@@ -6880,7 +6881,31 @@ static void draw(CmdRec *r, bool indexed) {
     PROF_ADD(prof_draw);
 }
 static uint64_t prof_tp_;
+// Frame interpolation (runtime/nvn/interp.c): a draw's identity across frames - renderer.m's key
+static uint64_t draw_interp_key(const CmdRec *r, bool indexed) {
+    static int kmask = -1;  // LARECOMP_INTERP_KEY=<mask> (renderer.m)
+    if (kmask < 0) kmask = getenv("LARECOMP_INTERP_KEY") ? atoi(getenv("LARECOMP_INTERP_KEY")) : 37;
+    uint64_t args[7];
+    memcpy(args, r->x, sizeof args);
+    if (indexed && !(kmask & 2)) args[3] = 0;
+    NvnTexture *kt = st.rt.ncolor ? st.rt.color[0] : st.rt.depth;
+    uint64_t key = (kmask & 1) ? hmix(1469598103934665603ull, args, sizeof args) : 1469598103934665603ull;
+    uint64_t ids[5] = {(kmask & 4) ? st.program->stages[0].code_addr : 0, (kmask & 4) ? st.program->stages[1].code_addr : 0,
+                       (kmask & 8) ? st.vbuf[0].addr : 0, (kmask & 16) ? (uint64_t)(uintptr_t)kt : 0,
+                       (kmask & 32) && kt ? (uint64_t)kt->format << 32 | (st.rt.ncolor ? 0 : 1u << 31) | (kt->height ? kt->width * 16 / kt->height : 0) : 0};
+    return hmix(key, ids, sizeof ids);
+}
+// A draw not drawn because its program isn't ready (still being built, or failed): logged all the same, marked
+// skipped, in the frame and in its replays alike - so the two stay draw for draw (a replay whose program is ready by
+// then skips it at its record; without the record, a replay's draw took the record of the next draw of the same key -
+// the pond's water surface drawn with the river's, the river's own then skipped).
+static void draw_interp_unready(const CmdRec *r, bool indexed) {
+    if (!g_interp_log) return;
+    interp_draw(draw_interp_key(r, indexed), st.rt.ncolor == 0);
+    interp_draw_skipped();
+}
 static void draw_(CmdRec *r, bool indexed) {
+    draw_logged = false;
     if (prof) prof_tp_ = SDL_GetTicksNS();
     if (!st.program) { SKIP(SK_NO_PROGRAM); return; }
     ShaderKey vkey = {0}, fkey = {0};
@@ -6890,7 +6915,11 @@ static void draw_(CmdRec *r, bool indexed) {
     for (int i = 0; i < st.nattrib; i++) vkey.attr_kind[i] = (uint8_t)attr_kind(st.attrib[i] & 0xFF);
     for (int i = 0; i < st.rt.ncolor; i++) if (st.rt.color[i]) fkey.rt_kind[i] = (uint8_t)rt_kind(st.rt.color[i]->format);
     Prog *pr = get_program(st.program, &vkey, &fkey);
-    if (!pr || atomic_load(&pr->state) != 1) { SKIP(!pr ? SK_NO_STAGES : atomic_load(&pr->state) == 2 ? SK_PROG_FAILED : SK_PROG_BUILDING); return; }
+    if (!pr || atomic_load(&pr->state) != 1) {
+        draw_interp_unready(r, indexed);
+        SKIP(!pr ? SK_NO_STAGES : atomic_load(&pr->state) == 2 ? SK_PROG_FAILED : SK_PROG_BUILDING);
+        return;
+    }
     g_mirror_w = 0;
     extern float renderer_ao_blur_scale(NvnTexture *t);
     g_ao_taps = pr->fi->uses_ao_taps && st.rt.ncolor ? renderer_ao_blur_scale(st.rt.color[0]) : 0;
@@ -6930,22 +6959,18 @@ static void draw_(CmdRec *r, bool indexed) {
             vkey.flip_x = fkey.flip_x = true;
             wx_mirror = true;
             pr = get_program(st.program, &vkey, &fkey);
-            if (!pr || atomic_load(&pr->state) != 1) { SKIP(!pr ? SK_NO_STAGES : atomic_load(&pr->state) == 2 ? SK_PROG_FAILED : SK_PROG_BUILDING); return; }
+            if (!pr || atomic_load(&pr->state) != 1) {
+                draw_interp_unready(r, indexed);
+                SKIP(!pr ? SK_NO_STAGES : atomic_load(&pr->state) == 2 ? SK_PROG_FAILED : SK_PROG_BUILDING);
+                return;
+            }
             g_mirror_w = (float)st.rt.color[0]->width;
         }
     }
     if (g_interp_log) {  // (frame interpolation, runtime/nvn/interp.c: the draw's identity across frames - renderer.m's key)
-        static int kmask = -1;  // LARECOMP_INTERP_KEY=<mask> (renderer.m)
-        if (kmask < 0) kmask = getenv("LARECOMP_INTERP_KEY") ? atoi(getenv("LARECOMP_INTERP_KEY")) : 37;
-        uint64_t args[7];
-        memcpy(args, r->x, sizeof args);
-        if (indexed && !(kmask & 2)) args[3] = 0;
-        NvnTexture *kt = st.rt.ncolor ? st.rt.color[0] : st.rt.depth;
-        uint64_t key = (kmask & 1) ? hmix(1469598103934665603ull, args, sizeof args) : 1469598103934665603ull;
-        uint64_t ids[5] = {(kmask & 4) ? st.program->stages[0].code_addr : 0, (kmask & 4) ? st.program->stages[1].code_addr : 0,
-                           (kmask & 8) ? st.vbuf[0].addr : 0, (kmask & 16) ? (uint64_t)(uintptr_t)kt : 0,
-                           (kmask & 32) && kt ? (uint64_t)kt->format << 32 | (st.rt.ncolor ? 0 : 1u << 31) | (kt->height ? kt->width * 16 / kt->height : 0) : 0};
-        interp_draw(hmix(key, ids, sizeof ids), st.rt.ncolor == 0);
+        interp_draw(draw_interp_key(r, indexed), st.rt.ncolor == 0);
+        if (interp_replay_skip()) return;  // (a draw the frame didn't draw: interp.c interp_draw_skipped)
+        draw_logged = !g_interp_replaying;
     }
     snap_apply(0, pr->vi->ssbo_read);  // (overlap) the storage slots the shaders read: a copy where the CPU rewrites the range
     snap_apply(1, pr->fi->ssbo_read);
@@ -8803,6 +8828,41 @@ void renderer_interp_geo_stats(uint64_t *binds, uint64_t *differed, uint64_t *mi
 // it. The caller holds interp_replay_lock and has set the render scale the frame was drawn at. The replay draws into
 // the game's own targets (the frame's image is composed before, the in-between's after).
 static __typeof__(st) st_frame_begin;
+// The frame's own commands, for its replays: a frame's lists are recorded in the game's command memory (cmdbuf.c), which
+// the game reuses once the frame's fence is done - for the GPU, once the render thread has translated the frame. Its
+// in-betweens are made later, at the frame's present, and read the lists again: if the game had recorded a later frame
+// there by then, a replay ran that frame's commands - draws the frame never made, its logged uniforms, storage tables
+// and geometry not found for them, and the game's live data read instead (the water drawn with the next frame's
+// lighting, flickering for seconds after a load: the render thread behind the game, user 2026-11-14; hundreds of
+// replayed draws a second with keys the frame doesn't have, with the GPU overlap on or off). So as a logged frame runs
+// each list, its records are copied in order - jumps followed, called lists inline - and its replays run the copy.
+static uint8_t *ilist;
+static size_t ilist_n, ilist_cap;
+static bool ilist_ok;  // (the frame's lists all copied)
+static void ilist_put(const void *src, size_t n) {
+    if (ilist_n + n > ilist_cap) {
+        size_t cap = ilist_cap ? ilist_cap : (4u << 20);
+        while (ilist_n + n > cap) cap *= 2;
+        uint8_t *p = realloc(ilist, cap);
+        if (!p) { ilist_ok = false; return; }
+        ilist = p, ilist_cap = cap;
+    }
+    memcpy(ilist + ilist_n, src, n);
+    ilist_n += n;
+}
+static void ilist_copy(uint64_t p, int depth) {  // (exec_list's walk)
+    for (int guard = 0; guard < 10000000 && ilist_ok; guard++) {
+        const CmdRec *r = (const CmdRec *)(uintptr_t)p;
+        if (r->op == CMD_END) return;
+        if (r->op == CMD_JUMP) { p = r->x[0]; continue; }
+        if (r->op == CMD_CALL) {
+            const uint64_t *h = (const uint64_t *)r->extra;
+            for (uint64_t i = 0; i < r->x[0] && depth < 8; i++) ilist_copy(h[i], depth + 1);
+        } else
+            ilist_put(r, r->size);
+        p += r->size;
+    }
+}
 void renderer_interp_replay(void) {
     const uint64_t *h;
     uint32_t n = interp_handles(&h);
@@ -8812,7 +8872,14 @@ void renderer_interp_replay(void) {
     g_interp_log = true;
     iv_rp = 0;
     interp_replay_begin();
-    for (uint32_t i = 0; i < n; i++) exec_list(h[i], 0);
+    if (ilist_ok) {
+        static const CmdRec end = {.op = CMD_END, .size = sizeof(CmdRec)};
+        size_t n0 = ilist_n;
+        ilist_put(&end, sizeof end);
+        if (ilist_ok) exec_list((uint64_t)(uintptr_t)ilist, 0);
+        ilist_n = n0;  // (each replay of the frame: the same copy)
+    } else
+        for (uint32_t i = 0; i < n; i++) exec_list(h[i], 0);
     vk_end_pass();
     renderer_submit();
     interp_replay_end();
@@ -8822,7 +8889,8 @@ void renderer_interp_replay(void) {
 
 void backend_execute(uint64_t handle) {
     PROF_T0();
-    if (interp_list_submitted(handle)) st_frame_begin = st;  // (frame interpolation: the frame's first list)
+    if (interp_list_submitted(handle)) st_frame_begin = st, ilist_n = 0, ilist_ok = true;  // (frame interpolation: the frame's first list)
+    if (g_interp_log && !g_interp_replaying && ilist_ok) ilist_copy(handle, 0);  // (a logged frame's list: its replays' copy)
     exec_list(handle, 0);
     PROF_ADD(prof_exec);
     if (prof) cum_exec += SDL_GetTicksNS() - prof_t0_;
