@@ -1268,11 +1268,40 @@ bool interp_prepare(float t) {
                                      ((a[q] == 0) != (b[q] == 0) && fmaxf(fabsf(a[q]), fabsf(b[q])) > 1e-6f && !tog));
             }
         s_onoff += onoff;
+        // The toggle rule decides by rows of 4 elements - a shader reads its uniforms in such rows, and multiplies one
+        // with a vector as a whole. A row whose changes all came back (at or near - nearer than half its step - its
+        // value of two frames ago; changes of float rounding, a millionth of the row's largest value, don't count)
+        // alternates as a whole: all of it this frame's. Decided per element by exact equality, the elements that came
+        // back exactly showed this frame's value and the ones a rounding off blended: a row whose terms cancel each other
+        // (the scene block's depth rows, -9.992 z + 10.001: the camera's distance alternates in the 30 frames a second
+        // mode) came out about 3% off, and the water's soft edge, which compares its depth with the scene's, was cut
+        // straight across in the in-betweens while the co-op camera zoomed out (user 2026-11-14: the water flickering
+        // for seconds after a load and on the first zoom out). A row with an element that moves keeps the per-element
+        // rule. LARECOMP_INTERP_TOGGLE_ROWS=0: per element only (research).
+        static int toggle_rows = -1;
+        if (toggle_rows < 0) { const char *e = getenv("LARECOMP_INTERP_TOGGLE_ROWS"); toggle_rows = !e || atoi(e); }
+        static uint8_t *row_back; static uint32_t row_back_cap;
+        if (nf / 4 + 1 > row_back_cap) { row_back_cap = nf / 4 * 2 + 2; row_back = realloc(row_back, row_back_cap); }
+        memset(row_back, 0, nf / 4 + 1);
+        if (toggles && toggle_rows && a2 && !onoff)
+            for (uint32_t r = 0; r < nf / 4; r++) {
+                const float *ra = a + r * 4, *rb = b + r * 4, *r2 = a2 + r * 4;
+                float scale = 0;
+                for (int k = 0; k < 4; k++) scale = fmaxf(scale, fmaxf(fabsf(ra[k]), fabsf(rb[k])));
+                int back = 0, moved = 0;
+                for (int k = 0; k < 4; k++) {
+                    if (done[r * 4 + k] || !blendable(ra[k], rb[k])) { moved++; continue; }
+                    float step = fabsf(rb[k] - ra[k]);
+                    if (step <= 1e-6f * scale) continue;  // (rounding)
+                    if (fabsf(rb[k] - r2[k]) < 0.5f * step) back++; else moved++;
+                }
+                row_back[r] = back && !moved;
+            }
         for (uint32_t q = 0; q < nf; q++) {
             if (done[q]) continue;
             if (onoff) { out[q] = b[q]; continue; }
             float av = a[q], bv = b[q], d = bv - av;
-            bool toggle = toggles && a2 && a2[q] == bv && av != bv;
+            bool toggle = toggles && a2 && (row_back[q / 4] || (a2[q] == bv && av != bv));
             s_toggled += toggle;
             if (toggle) {  // LARECOMP_INTERP_LOG_TOGGLES=1 (debug): each toggling element (at most 400 lines a second)
                 static int lt = -1, nl;
