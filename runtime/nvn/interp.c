@@ -82,6 +82,7 @@ typedef struct {
     uint64_t obj;   // the object: the guest addresses of its per-object uniform buffers (0: none - UI); frame_end
     uint32_t oocc;  // occurrence of (obj, key) in the frame
     int32_t pair;   // the draw's partner in the frame before (-1 none; -2 UI, not blended); frame_end
+    uint8_t skipped;  // logged, then not drawn (its program or pipeline still being built): its replays skip it too
 } DrawRec;
 typedef struct { uint64_t addr, size, off; } StoRec;  // a storage range read through gmem: its bytes at the time, in `bytes`
 typedef struct {
@@ -434,7 +435,19 @@ void interp_draw(uint64_t key, bool depth_only) {
     d->depth_only = depth_only;
     d->first_cb = cur->ncbs;
     d->ncb = 0;
+    d->skipped = 0;
 }
+
+// An in-between draws what its frame drew, no more: a draw the frame skipped because its program or pipeline was still
+// being built (as play starts after a load, while the level's shaders compile) may be ready by the time the frame is
+// replayed. Drawn then, it came and went between the frame and its in-betweens, and it had no record to read the frame's
+// uniforms, storage and geometry from - the game's own, its next frame's by then (the water flickering for seconds
+// after a load, user 2026-11-14: 1,889 draws skipped in 2 s as play started, none once the shaders were built). Every
+// draw is logged, skipped ones marked (exec.c draw_interp_unready, the SKIP after interp_draw); a replay skips them.
+void interp_draw_skipped(void) {
+    if (!g_interp_replaying && frame_open && cur->ndraws) cur->draws[cur->ndraws - 1].skipped = 1;
+}
+bool interp_replay_skip(void) { return g_interp_replaying && (rp_cur < 0 || cur->draws[rp_cur].skipped); }
 
 static int32_t last_cb = -1;  // the copy interp_cbuf logged last (-1: none)
 int32_t interp_last_cb(void) { return last_cb; }
