@@ -35,10 +35,34 @@ static int contact_link(uint64_t contact) {
 // ---- Camera areas (COOP_CAMERA_SCROLL_SITE). Every Link the player creator makes has a camera of his own (+0x318),
 // and every camera listens to the camera-area manager (main+0x836270, its signal +0x750), which follows the game
 // manager's player: Player 1. When he steps into another scroll area, a camera with +0x515 set answers with the
-// "ZeldaScroll" event (main+0xbc540): Player 1 walks on into the new area while the view scrolls. On the Field Player
-// 1's camera has it clear and the other Links' cameras set (measured), so Player 1 walked a "scroll" at every
-// scroll-area line - just in front of the Trendy Game's door one turns him back down, every time. Only Player 1's
-// camera answers.
+// "ZeldaScroll" event (main+0xbc540): Player 1 walks on into the new area while the view scrolls. Indoors every
+// camera has it set (camera_setup_tick), and Player 1 walked a "scroll" for each of them - only Player 1's camera
+// answers. (On the Field the other Links' cameras had it set too, before camera_setup_tick: Player 1 walked a
+// "scroll" at every scroll-area line - just in front of the Trendy Game's door one turned him back down, every time.)
+//
+// The level's camera set-up (main+0x855040, as a level starts) is the game manager's Link's camera's only: the level's
+// kind at +0x508 (the Field 3; houses, caves and dungeons below) and +0x515 set for a kind below 3 - its areas scroll.
+// The other Links' cameras kept a new camera's 0 and 1, an indoor camera's. In a camera's update (main+0xc7fd0, run on
+// its +0x3b0) one of a kind up to 2, told of a new area (+0x4fc; the one before at +0x500), tells the screen manager
+// (main+0x866130), which makes every screen outside that area fresh - a room change: the rooms left are new when
+// Player 1 comes back. On the Field Player 1's camera never does: the others did, at every camera
+// area Player 1 stepped into, and the screens of the area just left were made again in view - what had been cut or
+// lifted there grew back beside the players (user 2026-11-15: a cut bush back right next to Player 1, twice; seen
+// with 2 players as with 5, the zoom on or off; alone it stays cut). Each frame the other cameras get Player 1's
+// camera's set-up.
+static void camera_setup_tick(void) {
+    uint64_t me = host_player(), mine = heap_ptr(me) ? LD64(me + 0x318) : 0;
+    if (!heap_ptr(mine)) return;
+    uint8_t kind = LD8(mine + 0x508), scroll = LD8(mine + 0x515);
+    for (int i = 1; i < g_n; i++) {
+        uint64_t link = coop_player(i), cam = heap_ptr(link) ? LD64(link + 0x318) : 0;
+        if (!heap_ptr(cam) || cam == mine || (LD8(cam + 0x508) == kind && LD8(cam + 0x515) == scroll)) continue;
+        CLOG("[coop] player %d's camera gets the level's set-up: kind %u, scrolls %u (was %u, %u)\n", i + 1, kind, scroll,
+             LD8(cam + 0x508), LD8(cam + 0x515));
+        ST8(cam + 0x508, kind);
+        ST8(cam + 0x515, scroll);
+    }
+}
 // Player 1 into another room (his own camera's answer: a new camera area): indoors - dungeons, houses, caves, not
 // the overworld's screens - knocked-out players are back, on him, as in a new area (coop_place).
 // The others follow him a moment later (ROOM_FOLLOW frames, once he is in the new room - stairs down into a side-view
@@ -96,7 +120,7 @@ static void room_follow_tick(void) {
 static int camera_scroll(Cpu *c) {
     uint64_t me = host_player(), mine = me ? LD64(me + 0x318) : 0, cam = c->x[19];
     if (cam && cam == mine) room_changed();
-    if (!mine || cam == mine) return 0;
+    if (!mine || cam == mine || !LD8(cam + 0x515)) return 0;  // (its areas don't scroll: the Field - camera_setup_tick)
     CLOG("[coop] camera %#llx (not Player 1's %#llx) would scroll to a new camera area: skipped (frame %llu)\n",
          (unsigned long long)cam, (unsigned long long)mine, (unsigned long long)renderer_present_count());
     c->x[8] = 0;

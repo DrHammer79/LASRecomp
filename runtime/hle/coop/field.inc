@@ -9,7 +9,10 @@
 // remembered by name and one made again in view refused at the actor factory or killed on its first update (the
 // "spawn skip"); upstream's review asked for the cause. It is the kept box, centred on Player 1 only: below, with co-op
 // it reaches every player (keep_reach), and with the zoom it grows with the view (g_box, COOP_KEEP_BOX_SITE), so no
-// screen anyone can see is let go and made fresh. (gone_key, gone_near, gone_watched, ACTOR_DEAD: for the respawn log.)
+// screen anyone can see is let go and made fresh. A screen is also made fresh when a camera of a room-changing kind is
+// told of a new camera area (the screens outside it): on the Field only the other Links' cameras were, without the
+// level's camera set-up - a cut bush grew back beside Player 1 as he stepped into another area (camera_setup_tick,
+// runtime/hle/coop/events.inc). (gone_key, gone_near, gone_watched, ACTOR_DEAD: for the respawn log.)
 #define GONE_PROBES 8
 #define GONE_NEAR 10.0f
 #define ACTOR_DEAD (1u << 30)  // (actor +0x40: killed - runtime/hle/apple_trees.c)
