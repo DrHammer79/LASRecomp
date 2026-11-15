@@ -14,6 +14,8 @@ int interp_wanted(void);
 extern bool g_interp_log, g_interp_replaying;
 bool interp_list_submitted(uint64_t handle);  // true for the frame's first list (the backend saves its state then)
 void interp_draw(uint64_t key, bool depth_only);  // depth_only: no colour target (a shadow pass)
+void interp_draw_skipped(void);  // the draw just logged isn't drawn after all (its program or pipeline still being built)
+bool interp_replay_skip(void);   // a replay: the frame didn't draw this one - skip it
 const void *interp_cbuf(int stage, int k, int slot, const void *src, uint64_t size, uint64_t used);  // used: bytes the shader reads
 // The tape (renderer.m: an in-between plays the frame's recorded Metal calls back): the copy interp_cbuf logged last
 // (-1: none), and a logged copy's blended bytes for the image being made (NULL: the frame's own are shown)
