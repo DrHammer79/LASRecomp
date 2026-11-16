@@ -154,6 +154,14 @@ Use it with `LARECOMP_INPUT` (to get into a save) and `LARECOMP_SAVE_DIR` (so th
 | `LARECOMP_MENU_BAR` | entry number | Open the menu bar alone, its cursor on that entry: `0` Settings, `1` Cosmetics, `2` Randomizer, `3` Warp, `4` Save Editor, `5` Cheats, `6` Reset, `7` Quit, `8` the close button. |
 | `LARECOMP_TOUCH_SHOW_INPUT` | 0 / 1 | iPhone, iPad and Android: show scripted input (`LARECOMP_INPUT`) on the touch controls, the buttons lit and the stick moved. |
 | `LARECOMP_UPDATE_TAGS` | `tag,tag,...` | The update check sees these release tags instead of asking GitHub (no network). |
+| `LARECOMP_UPDATE_JSON` | file | The update check reads this saved releases list instead of asking GitHub (the update dialog's changelog too). |
+| `LARECOMP_UPDATE_OPEN` | `1` / `update` | The update dialog opens as soon as the update check finds one; `update` also presses Update. |
+| `LARECOMP_UPDATE_URL` | URL | Update downloads `<URL>/<tag>/update-<platform>.txt` and the file it names from here instead of GitHub (`http://127.0.0.1:...`, `file:///...`). |
+| `LARECOMP_UPDATE_KEY` | 64 hex | With `LARECOMP_UPDATE_URL`: the public key manifests are checked with (a test key; `tools/update_sign.cpp keygen`). |
+| `LARECOMP_UPDATE_APP` | folder | Windows: the app folder Update replaces files in (default: the exe's). Linux updates `$APPIMAGE`. |
+| `LARECOMP_UPDATE_NO_RESTART` | `1` | After Update installs (or rolls back), quit instead of starting the app again. |
+| `LARECOMP_SPARKLE_FEED` | URL | macOS: Sparkle reads this appcast instead of the build's, and runs even in builds whose channel has no Update yet. |
+| `LARECOMP_SPARKLE_AUTOINSTALL` | `1` | macOS: an update Sparkle downloaded installs at once and the app restarts, as its Install and Relaunch button does (no window to click). |
 | `LARECOMP_FONT` | font file | Use this file for the system fonts the game asks for (.ttf, .otf, .ttc, .bfttf). |
 
 ## Logging and diagnostics
@@ -209,6 +217,8 @@ These work on both Metal and Vulkan unless noted.
 | `LARECOMP_NO_FRAME_CLEAR` | 1 (Vulkan: 0 / 1) | Don't clear scene render targets at their first use each frame. On Vulkan the default is no clears on integrated GPUs. |
 | `LARECOMP_TEX_FULLHASH` | 1 | Hash every texture in full each time instead of the faster partial checks. |
 | `LARECOMP_NO_WIDESCREEN` | 1 | Turn the widescreen view off (16:9 framing everywhere). |
+| `LARECOMP_HUD_EDGES` | 1 | The game's HUD at the window's edges, as General > HUD = At edges. |
+| `LARECOMP_NO_HUD_CORNERS` | 1 | Keep the game's HUD in the centred 16:9 box, whatever General > HUD says. |
 | `LARECOMP_NO_PAUSE_FILL` | 1 | Keep the pause screen's backdrop in the 16:9 box on other window shapes (the game shows around it). |
 | `LARECOMP_WIDE_TEST` | ratio | Pretend the window has this shape, relative to 16:9 (e.g. `1.3125` for 21:9). |
 
