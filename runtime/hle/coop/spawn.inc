@@ -8,21 +8,32 @@
 // The creator, once for each other player, then for Player 1 - last: the scene's camera is the last Link's (made first,
 // the camera wasn't his), and it leaves the game manager's player (+0x4b8) on him. (Each Link's update writes the
 // save's restart point into the player entity's object - only Player 1's does: COOP_RESTART_SITE.)
+//
+// With co-op on, every other player gets one - those who aren't in benched (bench: parked, switched off, their updates
+// skipped) until they join (coop_join wakes theirs): drop-in co-op's Links are made as the level loads, as the game
+// makes Links. (Made in play instead, a player's hookshot went through the enemies until the next level load: what a
+// load gives the actors made then - not found; docs/coop.md.)
 static int coop_create(Cpu *c) {
     if (g_creating >= 0) return 0;  // (our own call: the creator as it is)
     uint64_t args[8];
     memcpy(args, c->x, sizeof args);
-    for (int i = g_n - 1; i >= 0; i--) {
+    int top = coop_enabled() ? COOP_MAX : g_n;
+    for (int i = top - 1; i >= 0; i--) {
+        bool in = i == 0 || (g_joined >> i & 1);
+        if (i > 0 && !in && !coop_enabled()) continue;  // (a player who left, co-op off: none for him)
         if (i > 0 && g_extra[i] && LD64(g_extra[i]) == GA(PLAYER_VTABLE)) continue;  // (run again in play: his stays)
+        if (i > 0 && g_bench[i] && LD64(g_bench[i]) == GA(PLAYER_VTABLE)) continue;  // (... benched, too)
         g_creating = i;
         memcpy(c->x, args, sizeof args);
         guest_call(c, GA(COOP_CREATE_SITE));
         if (i > 0) {
             g_extra[i] = host_player();
-            LOG("[coop] player %d: Link %#llx\n", i + 1, (unsigned long long)g_extra[i]);
+            LOG("[coop] player %d: Link %#llx%s\n", i + 1, (unsigned long long)g_extra[i], in ? "" : " (benched)");
         }
     }
     g_creating = -1;
+    for (int i = 1; i < COOP_MAX; i++)  // (those not in: benched as made - after Player 1's, the scene's own)
+        if (g_extra[i] && !(g_joined >> i & 1)) bench(c, i, g_extra[i]), g_extra[i] = 0;
     CLOG("[coop] creator: player 1 Link %#llx\n", (unsigned long long)host_player());
 
     return 2;  // (to the creator's ret)

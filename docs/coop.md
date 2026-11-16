@@ -14,7 +14,8 @@ players' state and each other's helpers), `runtime/ui/coop_hud.mm`
 (the other players' hearts, the "Zzz" bubbles) and hook sites in
 `tools/patches.py` (`_COOP_HOOKS`). Co-op is off by default: with
 `coop_players = 1`, every hook returns 0 and runs its own instruction, so the
-game plays exactly as without the feature - unless "Zoom out" is set to
+game plays exactly as without the feature. Turned on, it stays dormant - the
+same - while Player 1 plays alone (until someone joins: "Drop-in") - unless "Zoom out" is set to
 Always, when the zoom's own hooks run alone (`alone_hook`, under "Camera
 zoom"), or right after a session with co-op this boot, until the controller
 manager's player limit is back to 1 ("Controllers"). The other players' Links
@@ -61,6 +62,92 @@ after the entity; after a Game Over the same places hold others. No load reads
 them with the entity as its base (2,178 loads at those offsets logged in an
 instrumented build: none).
 
+**Drop-in.** With co-op on, a file starts with Player 1 alone; the others join
+and leave in play with their controllers (user 2026-11-15: "players fire up the
+controller, and press start to join ... a way for them to exit the game easily
+too"). There is no player count to set: as many play as there are controllers.
+
+- Who is in: `g_joined` in `coop.c`, a bit per player (bit 0, Player 1, always).
+  `g_n` is the highest player's number, so the loops over players go to it; a
+  player who left is a gap - no Link (`g_extra` 0), everything kept for him
+  cleared (`slot_reset`), skipped by the HUD's rows, the action slots
+  (`doaction_frame`) and the hearts (`in_game`). Numbers stay: the others keep
+  theirs (and their colours) when one leaves, and the next to join takes the
+  lowest free number - or the one his controller had before, if it is free
+  (`coop_pad_path_N`, `pad_saved_player`). Those who are in stay in for the
+  next file (a Game Over, Quit to Start Screen); co-op turned off leaves Player
+  1 alone from the next file.
+- Joining (`input.c`: `coop_waiting`, `coop_join_pad`): in play, a controller
+  that is neither Player 1's nor a player's waits. Its Plus held 0.75 s
+  (`JOIN_HOLD_MS`, `coop_wait_press`) asks to join (`coop_join_want`); let go
+  sooner, nothing comes of it, and nothing else of it reaches the game. Player 1's controller
+  doesn't move to another one in play then (`pad_pinned`): a spare one's press
+  is for joining. Out of play (the title, file select) it does, as upstream
+  (#455). The controller is the player's while the ask is pending and once he
+  is in; it waits again when he is out (`coop_drop_poll`).
+- The benched (`g_bench`, since 2026-11-16): with co-op on, the player
+  creator makes a Link for every other player as the level loads
+  (`coop_create`: players 2..8), and those who aren't in are benched (`bench`):
+  parked out of sight (y -1000, as a lost player is), switched off with their
+  own items (the actor's virtual `+0xc0`: flags `&= ~0x700`, its components'
+  too), and their updates skipped - the Link's, his camera's (`+0x318`) and his
+  items' (`bench_of`, `COOP_ACTOR_EXEC_SITE`). Kept switched off every frame (`coop_tick`): a
+  level load switches on every actor it has - benched as the file loaded, they
+  were on again some 70 frames later (frame 1664), and after each level change,
+  standing visible where they were made while their updates were skipped (user
+  2026-11-16: a player who left vanished, the others stayed). The game makes Links as levels
+  load: one made in play missed something that load gives the actors made then
+  (his hookshot went through the enemies until the next level load: "The
+  hookshot and the boomerang" below), and every Link a player plays is one made
+  at a load this way. Alone, the creator's hooks act while it makes another
+  player's Link (`g_creating`), the creation and the skipping of benched
+  updates run too (`alone_hook` 0, 15, 16). When play ends the benched are
+  killed with the others and made again with the next file. Checked: the seven
+  made at a file load cost no load time measurable in the tests (frame ~1800 at
+  32 s with and without); the grass test with seven benched (their cameras not
+  updating) - nothing came back in view, as with co-op off; a Game Over and
+  Continue - all killed, made again, Player 2 back.
+- The join itself (`coop_join`, game thread, `joins_tick`): once Player 1 is on
+  his feet in play (no event, walk-in or level change: `link_state_kind` 0). His
+  benched Link is woken (`wake`: switched on - the actor's virtual `+0xc8` - with
+  his items, put beside Player 1) and he is in. Only with none benched (co-op
+  turned on in play, no load since) is one made in play: the
+  player creator is run for the new player, as when the level loads, with an
+  empty event action - only the zone set-up reads it, and that is Player 1's
+  only (`COOP_ZONE_SITE`). The player counts as in from the start of it (rolled
+  back if no Link comes of it): the co-op hooks the creator meets have to act,
+  and with Player 1 alone until then they were dormant - the first test of a
+  join after the last other player left crashed in the zone set-up for that
+  reason. The creator makes its Link the game manager's player and switches the
+  scene camera to it: the switch is skipped for a join (`COOP_JOIN_CAMERA_SITE`,
+  the `bl main+0xbfda0` at `main+0x83a5e4`, its result an empty shared_ptr), and
+  Player 1's Link is set back as the manager's player with the game's own
+  setter (`COOP_SET_PLAYER`, `main+0x8387c0`, a reference to him held
+  meanwhile). The new Link is then put beside Player 1 (`ride_on_host`). (Its
+  hookshot goes through the enemies until the next level load.)
+- Leaving: a player's Minus held on its own: after 0.3 s (`LEAVE_WAIT_MS`) a
+  ring over his Link fills in his colour for 2.5 s (`LEAVE_HOLD_MS`), then he
+  is out - 3.1 s in all. Any other button pressed with it ends that hold
+  without leaving, and a colour change (below) done within the 0.3 s shows no
+  ring. The ring's fill is worked out from when Minus went down as it is drawn
+  (`coop_leave_progress`, `runtime/ui/coop_hud.mm`, with either hearts
+  setting): kept by the controllers' poll, it moved only as often as that ran
+  and filled in steps (user 2026-11-15). His Link is benched (`bench`), to be
+  woken if he joins again; all kept for him forgotten.
+- Colour: Minus with L or R steps that player's colour back or on (saved;
+  the tunic follows at once). His L and R don't reach the game while his Minus
+  is down.
+
+Tests: `tools/coop_tests/dropin.sh` (test controllers - virtual ones SDL lists
+like real ones, `LARECOMP_HOST_INPUT` `vpad:<n>/<button>` - hold Plus, Minus,
+R: two join, a Plus tapped joins nobody, a colour steps, one leaves after 3.1 s
+and joins again);
+`LARECOMP_COOP_JOIN` / `LARECOMP_COOP_LEAVE=<frame>:<player>,...` ask for joins
+and leaves directly. Checked 2026-11-15 on Field_13P: a leave down to Player 1
+alone, a join into the gap above (player 3, then player 2), the camera staying
+Player 1's throughout, the joined player moving with his own input, no crash.
+Not checked: a join in a dungeon or a side-view room, with real controllers.
+
 **Spawns.** A placement at a spawn point (`COOP_PLACE_SITE`) is run for each
 player on the same spot, Player 1 last (`COOP_PLACE_PLAYER_SITE` picks the
 Link). A spawn check whose object is gone with more Links is skipped
@@ -92,9 +179,10 @@ it's in a slot (`tools/test_active_pad.c`, with two players and three pads).
   stick's noise undid another's held direction and a stick resting near 0.3
   stepped the menu by itself (user 2026-11-01: "menu freaks out randomly with
   no one doing controllers on it"). Not checked with real pads.
-- The slots follow the player count in effect (`coop_players_now`: the game's,
-  which changes out of play only). Changed mid-play, a pad let go took over
-  Player 1's Link at its next press while its own Link stood still.
+- The slots follow who is in (`coop_joined`; "Drop-in"): a controller whose
+  player is out is let go and waits to join. (Before drop-in they followed the
+  player count, which changed out of play only: changed mid-play, a pad let go
+  took over Player 1's Link at its next press while its own Link stood still.)
 - A pad gets its own open before a slot takes it, also when the count changed
   before its "added" event (set with the menu up): the slot's open was its only
   one, and letting the slot go closed it until it was plugged in again.
@@ -471,6 +559,103 @@ lifted last (`doaction_get`: `carried_by`) has him for "Link" while it updates
 (`carrier`: by its address and its name, 5 minutes at most). Checked in Marin
 and Tarin's house: Player 2 lifts a pot facing west, turns east and throws - it
 flies east (before: north, Player 1's way); Player 1 the same: east, as before.
+
+**The hookshot and the boomerang.** Each Link has his own (`PlayerHookshot`,
+`PlayerBoomerang`: actors the player creator makes with him - seen 2026-11-15,
+with `g_creating` set). The hook reads "Link" in its own update as it hits
+something; for another player's that was Player 1, and Player 2's hookshot
+went through the enemies (user 2026-11-15). Another player's own items
+(`AC_PLAYER_ITEM`, `player_item_made` as the creator makes them, `g_items`)
+have him for "Link" in their updates (`player_item_of` in `actor_exec_begin`).
+Seen in a scripted run (Goponga Swamp, Player 2 shooting at a Like Like): his
+hook's read at the hit now gives him - right, but not why his hook went
+through the enemies (user 2026-11-15: still did).
+
+*Why it does: a Link made in play (drop-in), open.* Found 2026-11-15 with an
+Octorok on open grass in Field_12D (Player 1 put beside it with
+`LARECOMP_PLACE`, Player 2 with `LARECOMP_COOP_MOVE`, his Y every 30 frames,
+the Octorok traced to pick the frames it is in line): Player 2 in from the
+start - his Link made as the level loads - stuns it (stars), whether it goes
+for him or for Player 1; Player 2 joined in play - the hook flies through it,
+also with the Octorok made after the join (Player 1 away, then back: its screen
+made again); joined in play, then a level load (a warp) - stuns it. So a Link
+made in play misses a step a level load gives every actor:
+- Activation (the actor's virtual `+0xc8`, `main+0x1e8d0`: flags `+0x40 |=
+  0x700`, and its components'). A Link made in play had `0x10f`, his hook
+  `0x11f`, its attack component (the engine's generic attack collision, made
+  at `main+0xd81244`, at the hook's `+0x2c8`) `0x11d`, against `0x71f` /
+  `0x71d` after a level load. `coop_join` now activates the Link and his own
+  items (`activate`): flags as after a level load - and the hook still goes
+  through.
+- How the hook hurts an enemy: not its ray (the Shot update's cast,
+  `main+0xd69f10`, filter `[hook+0x4fc]` = 0x810200d5 for every hook - the same
+  in both cases): from the start the ray logged no hit (the Octorok stopped the
+  hook first), joined it hit the wall behind the Octorok 8 times
+  (`LARECOMP_HOOKSHOT_LOG`). It is the attack collision: its collision object
+  (`[comp+0x170]`, "enabled" byte `+0x20` = 1 in both), its first shape
+  (`+0x28`), that shape's engine shape (`+0x18`, vtable `0x7001c8df60`) with its
+  filter data at `+0x50` and `+0x60`: words `0x21`, an index, 0, `0x80000001`.
+  The index (`+0x64`): Player 1's hook 9, Player 2's from the start 6, Player 2's
+  joined in play `0x69b` - but not the cause: one joined before a level load got
+  `0x235`, kept it through the load, and hit after it. A running count. The
+  shape's engine actor (`+0x28`, vtable `0x7001c8c2a0`) is the same apart from
+  pointers; its `+0x18` is a record named `player:hook` (the hook's collision
+  body, also the attack component's `+0x190`), made at a level load next to the
+  other players' (`0x7240d0....`), made in play elsewhere. Its `+0x20` / `+0x28`
+  / `+0x30` are a list (begin, end, capacity: `main+0x10315d0` adds a pointer
+  once), not engine objects remade by a load - it only grew; entries are added
+  to the joined hook's too, every few frames.
+- Function profiles (`LARECOMP_FNPROF` over the first shots, joined vs from the
+  start, diffed) differ by ~1,800 functions: mostly the Octorok's own doings
+  (spitting a rock in one run and not the other: the attack-collision queries
+  seen, `main+0x10bbee0` from `main+0x94bbf0`, are on the rock it makes), so a
+  profile diff needs a target that does the same in both runs.
+- Where the hit is lost (2026-11-16, the profiler logging every call with `x0`
+  the hook's attack component, or a component of the Octorok - `[x0+0x48]`):
+  each attack / damage component has a contact callback (function object,
+  call operator `main+0xd76c0`) calling its contact handler `main+0xd67d0`.
+  From the start, it runs on the hook's component and on the Octorok's damage
+  component (the same class, vtable `0x7001b5aef8`; it then calls the
+  Octorok's `main+0x554130`). Joined, only on the hook's (its other contacts):
+  the engine never delivers the hook-vs-Octorok pair. The calls on the hook's
+  component are otherwise the same. A byte-for-byte snapshot of the joined
+  hook's chain (hook, component, collision object, shape, engine shape and
+  actor) is unchanged across the level load that fixes it: what the load
+  does is outside them (the engine's pair filtering, or a table it uses).
+  Overwriting the filter index on a joined hook's shape (both copies) with a
+  small one: no change - which may not reach the engine's own copy.
+- A write-up to hand on: `hookshot-drop-in-investigation.md` in the install
+  folder.
+- The Link is made through the same spawn steps as any actor spawned in play
+  (`main+0x83da50`, its slots `0x78` / `0x20`, flags `|= 8`, `main+0xfab540`:
+  the same template as 412 other spawn sites, `main+0x30d9c` one), so it is the
+  moment, not the path: something a level load sets up around the actors made
+  then.
+- Gone through and not it: the "start" step's order (the registration command,
+  `main+0xfae760`, run from the manager's queue: `main+0xfab540` /
+  `main+0xfae3a0`, the singleton at `main+0x1cc6d98` - for a joined Link it ran
+  inside the creator, before activation; calling its slot `0x50` again after
+  activation: no change), slots `0x28` / `0x90` / `0x98` after activation (no
+  change),
+  placing him (`main+0xd337a0`, the spawn placement's call, Player 1's
+  transform as the spot: no change, taken out). An earlier lead - the attack
+  component's `+0xe0` - was two different objects compared (watched
+  `+0xe0..+0xe8` through a level load and shots: nothing writes it).
+- The sword of a Player 2 joined in play hits (an Octorok killed in both
+  cases): his Link's own attack collision is fine; his items' aren't.
+Meanwhile a door or any level change puts it right (the warp test).
+
+*Since 2026-11-16 nobody plays a Link made in play* (unless co-op was turned on
+in play: no load since): the benched (the Drop-in section, top) are made as the
+level loads and woken as players join. Checked with `hook_join.sh`: `join`
+(Player 2 leaves - benched - and joins again: woken) and `bench` (co-op on in
+the settings, Player 1 alone as the file loads, Player 2 benched through a warp
+and woken at 2300) - the Octorok stunned in both; and in play (user 2026-11-16: "it worked"). A hook made at a load and
+switched off and on again (virtual `+0xc0`, `+0xc8`) still hits; one made in
+play and switched off and on still doesn't. What a load gives is still not
+known - the open question in the shared `las-internals` repository.
+`tools/coop_tests/hook_join.sh <id> join|start` is the test (the Octorok wanders:
+look at the frames it prints).
 
 **Like Likes** read "Link" in their state handlers (main+0x4a64c0 to
 main+0x4ab1d0, x19 the Like Like), which run outside its update, where "Link"
@@ -1064,15 +1249,16 @@ end and in both `patches_v1_0_*.h` tables, in the same order.
 ## Settings (Controls tab)
 
 Right under Inputs (`coop_options` in `runtime/ui/controls_ui.mm`): with co-op
-off, the Players row and the Camera heading (`zoom_options`; its zoom rows
+off, the Local co-op row and the Camera heading (`zoom_options`; its zoom rows
 only with "Zoom out" Always). On, four headings:
 
 | Heading | Row | Key | Default | |
 |---|---|---|---|---|
-| Co-op | Players | coop_players | 1 | 1 = off, 2..8 Links (from the next file loaded); greyed out on 1.0.0 |
+| Co-op | Local co-op | coop_players | 1 | Off (1) / On (2; any count above 1 saved before drop-in is On): other controllers join with Plus in play; greyed out on 1.0.0 |
 | | Tunic colors | | | shown only when the file is missing or comes with Quit to Start Screen |
 | | Player N color | coop_colours | 0,1,2,... | each player's colour set (Green, Red, Blue, Yellow, Purple, Pink, Black, White); its description names his controller; red when he has none or shares the colour, with a note after the label saying which ("no controller", "same as Player 2") |
-| | Player N controller | coop_pad_path_N | (none) | choose, then press a button on the controller for that player; swapped with whoever had it, remembered by device path |
+| | Player N controller | coop_pad_path_N | (none) | choose, then press a button on the controller for that player; swapped with whoever had it, remembered by device path - for a player who isn't in, the controller joins as him |
+| | (the rows) | | | Player 1, the players in the game and those a controller is remembered for, Player 2 at least |
 | Co-op hearts | Hearts | coop_health | 1 | 0 shared, 1 each player's own |
 | | Out of hearts | coop_knockout | 0 | 0 knocked out until revived, 1 game over for all (own hearts) |
 | | Revive time | coop_revive_s | 4 | seconds of holding A to revive (knocked out) |

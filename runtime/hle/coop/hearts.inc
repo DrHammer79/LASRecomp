@@ -362,6 +362,7 @@ static void hearts_tick(Cpu *c) {
     g_heal_pending = 0;
     g_game_hp = h;
     for (int i = 1; i < g_n; i++) {
+        if (!in_game(i)) continue;  // (one who left: none - he joins again with full hearts)
         if (g_hp[i] < 0 || g_settings.cheat_hearts) g_hp[i] = g_max_hp;
         if (!g_down[i]) g_hp[i] = g_hp[i] + gained > g_max_hp ? g_max_hp : g_hp[i] + gained;
     }

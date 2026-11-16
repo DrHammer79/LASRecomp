@@ -1261,6 +1261,10 @@ _COOP_HOOKS = {
     # steps a frame) the first step's pass ran before it, with the camera as the game left it: zoomed out, it culled
     # for the view the game would have without the zoom, and enemies and objects past it flickered or stayed gone.
     A.COOP_CULL_SITE: (0xbd456b6a, (), 'ldr s10, [x27, #0x568]: the culling pass reads the view camera'),
+    # The creator makes its new Link's camera the scene's (bl main+0xbfda0: the camera manager switched to it, x3 the
+    # camera, a shared_ptr back at sp+0x50). Only Player 1's camera is the scene's: for another player's Link, made
+    # as a level starts or as he joins in play, the switch is skipped and nothing comes back.
+    A.COOP_JOIN_CAMERA_SITE: (0x97e215ef, (), 'bl main+0xbfda0: the scene camera switched to the new Link\'s - Player 1 only'),
 }
 HOOKS.update({a: h for a, h in _COOP_HOOKS.items() if a})
 

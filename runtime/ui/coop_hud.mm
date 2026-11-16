@@ -2,7 +2,8 @@
 // colours, in the bottom corners or the top right (setting coop_hud) - and a "P1" tag beside the game's own hearts. A
 // knocked-out player's hearts are grey and a breathing "Zzz" bubble is over him (at the window's edge when he is off
 // screen), where a bar fills while another player revives him - "(A) Revive" shows under a player close enough. Drawn
-// over the game (not on the pause menu's pages): the game's own HUD is untouched.
+// over the game (not on the pause menu's pages): the game's own HUD is untouched. A player holding Minus to leave
+// (drop-in co-op, runtime/hle/input.c) has a ring over his head filling in his colour - with either hearts setting.
 #include <float.h>
 #include <math.h>
 #include <stdint.h>
@@ -12,8 +13,11 @@
 #include "../settings.h"
 
 extern "C" {
-typedef struct { int hp, max, down; float revive; uint32_t rgb; } CoopHudRow;
+typedef struct { int player, hp, max, down; float revive; uint32_t rgb; } CoopHudRow;
 int coop_hud_rows(CoopHudRow *rows, int cap);
+float coop_leave_progress(int player);  // (runtime/hle/input.c: player n's Minus hold so far, 0..1)
+uint32_t coop_colour_rgb(int player);   // (runtime/hle/coop/players.inc: from 0)
+int game_in_play(void);
 bool coop_player_screen(int player, float w, float h, float *sx, float *sy, bool *edge);  // (his head; off screen: the edge)
 bool coop_revive_prompt(int player, float w, float h, float *sx, float *sy);  // (below a knocked-out one, someone beside)
 bool inventory_items_page_shown(void);  // inventory_overlay.mm
@@ -72,11 +76,33 @@ static void revive_prompt(ImDrawList *dl, ImFont *font, float scale, float x, fl
 
 static CoopHudRow g_rows[8];
 static int g_nrows;
+static float g_leaving[8];  // (players 2..8's leave holds, [1]..[7])
+static bool g_any_leaving;
 
 extern "C" bool coop_hud_wanted(void) {
     bool paused = inventory_items_page_shown() || tracker_map_page_shown();
     g_nrows = g_settings.coop_health == COOP_HEALTH_OWN && !paused ? coop_hud_rows(g_rows, 8) : 0;
-    return g_nrows > 1;
+    g_any_leaving = false;
+    for (int i = 1; i < 8; i++)
+        g_any_leaving |= (g_leaving[i] = !paused && game_in_play() ? coop_leave_progress(i + 1) : 0) > 0;
+    return g_nrows > 1 || g_any_leaving;
+}
+
+// The leave ring over player i's head (from 0): a dark disc, his colour filling clockwise from the top, the minus sign.
+static void leave_ring(ImDrawList *dl, float scale, int i, float f, ImVec2 display) {
+    float hx, hy;
+    bool edge;
+    if (!coop_player_screen(i, display.x, display.y, &hx, &hy, &edge)) return;
+    float r = 32 * scale, th = 8 * scale;
+    ImVec2 c(hx, edge ? hy : hy - r - 8 * scale);
+    uint32_t rgb = coop_colour_rgb(i);
+    ImU32 col = IM_COL32(rgb >> 16 & 255, rgb >> 8 & 255, rgb & 255, 255);
+    dl->AddCircleFilled(c, r + th * 0.5f + 2 * scale, IM_COL32(20, 20, 20, 190), 40);
+    dl->AddCircle(c, r, IM_COL32(90, 90, 90, 220), 40, th);
+    float a0 = -3.14159265f / 2;
+    dl->PathArcTo(c, r, a0, a0 + f * 6.2831853f, 40);
+    dl->PathStroke(col, 0, th);
+    dl->AddLine(ImVec2(c.x - r * 0.45f, c.y), ImVec2(c.x + r * 0.45f, c.y), IM_COL32(250, 250, 250, 255), th * 0.8f);
 }
 
 static ImU32 rgb_col(uint32_t rgb, float k, int a) {
@@ -164,7 +190,7 @@ static void rows_panel(ImDrawList *dl, ImFont *font, float scale, ImVec2 display
         const CoopHudRow &r = g_rows[i];
         float hx = x0 + pad + lw + 10 * scale;
         char t[4];
-        snprintf(t, sizeof t, "P%d", i + 1);
+        snprintf(t, sizeof t, "P%d", r.player + 1);
         tag_text(dl, font, tag, scale, ImVec2(x0 + pad, y), r.rgb, r.down, t);
         bool colour = g_settings.coop_heart_colours;
         ImU32 full = r.down ? IM_COL32(110, 110, 110, 255) : colour ? rgb_col(r.rgb, 1, 255) : IM_COL32(235, 40, 40, 255);
@@ -179,8 +205,10 @@ static void rows_panel(ImDrawList *dl, ImFont *font, float scale, ImVec2 display
 }
 
 extern "C" void coop_hud_draw(ImVec2 display, ImFont *font, float scale) {
-    if (g_nrows < 2) return;
     ImDrawList *dl = ImGui::GetBackgroundDrawList();
+    for (int i = 1; i < 8 && g_any_leaving; i++)
+        if (g_leaving[i] > 0) leave_ring(dl, scale, i, g_leaving[i], display);
+    if (g_nrows < 2) return;
     float bx, by, bw, bh, tag = 30 * scale;  // (the game's hearts start at its HUD box's top left)
     hud_box(display, &bx, &by, &bw, &bh);
     {   // "P1" beside the game's own hearts
@@ -193,14 +221,14 @@ extern "C" void coop_hud_draw(ImVec2 display, ImFont *font, float scale) {
     for (int i = 1; i < g_nrows; i++) {  // the knocked-out players' bubbles, over their heads (or at the edge)
         float hx, hy;
         bool edge;
-        if (g_rows[i].down && coop_player_screen(i, display.x, display.y, &hx, &hy, &edge))
+        if (g_rows[i].down && coop_player_screen(g_rows[i].player, display.x, display.y, &hx, &hy, &edge))
             zzz_bubble(dl, font, scale, hx, hy, edge, g_rows[i]);
     }
     float placed[8][2];  // "(A) Revive" under each knocked-out one who can be revived (two on one spot: one under the other)
     int np = 0;
     for (int i = 0; i < g_nrows; i++) {
         float px, py, w = 130 * scale, h = 38 * scale;
-        if (!coop_revive_prompt(i, display.x, display.y, &px, &py)) continue;
+        if (!coop_revive_prompt(g_rows[i].player, display.x, display.y, &px, &py)) continue;
         // (below each one it overlaps, at most once past each: tested with |py - y| < h, py = y + h could still be
         // short of h by a rounding and was moved there again forever - the game locked up as two players stood by a
         // knocked-out one, user 2026-10-28)

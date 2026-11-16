@@ -22,6 +22,7 @@ extern "C" {
 #include "../settings.h"
 
 extern "C" bool coop_supported(void);       // (... false once the game is a version without co-op)
+extern "C" uint32_t coop_joined(void);       // (runtime/hle/coop.c: the players in the game, a bit each)
 extern "C" const char *input_player_pad_name(int player);  // (runtime/hle/input.c: a player's controller, or NULL)
 extern "C" void input_assign_begin(int player);  // (runtime/hle/input.c: the next button pressed gives its controller)
 extern "C" int input_assign_waiting(void);       // (... the player waiting for one, or -1)
@@ -351,23 +352,32 @@ static void coop_options(void) {
     opt_section("Co-op");
     bool supported = coop_supported();
     {
-        static const char *const players[] = {"Off", "2 players", "3 players", "4 players", "5 players", "6 players",
-                                              "7 players", "8 players"};
-        int i = supported ? g_settings.coop_players - 1 : 0;
-        if (i < 0 || i > 7) i = 0;
+        // (on or off: as many play as there are controllers in - drop-in, runtime/hle/input.c coop_join_pad. Any
+        // count above 1 saved before drop-in is On)
+        static const char *const onoff[] = {"Off", "On"};
+        int on = supported && g_settings.coop_players > 1;
         if (!supported) opt_disable_next();
-        if (opt_choice("Players", &i, players, 8, 0,
-                       supported ? "Local co-op: one Link per controller; Player 1 also has the keyboard. Starts when "
-                                   "you next load a file. Lost? Press both sticks in (L3 + R3) to jump back to Player 1."
+        if (opt_choice("Local co-op", &on, onoff, 2, 0,
+                       supported ? "In play, hold Plus on another controller for 3/4 of a second to join as the next player, "
+                                   "beside Player 1. Hold Minus about 3 seconds to leave (a ring fills); Minus with L or R "
+                                   "changes your color. "
+                                   "Player 1 also has the keyboard. Lost? Press both sticks in (L3 + R3) to jump back "
+                                   "to Player 1."
                                  : "Local co-op needs the game files of version 1.0.1 or 1.1.0.",
                        false))
-            g_settings.coop_players = i + 1;
+            g_settings.coop_players = on ? 2 : 1;
     }
     if (g_settings.coop_players <= 1 || !supported) {
         if (supported) zoom_options(false);
         return;
     }
     opt_indent(1);
+    // (the rows: the players in the game, and those a controller is remembered for - it joins as him - and Player 2
+    // at least)
+    int rows = 2;
+    uint32_t joined = coop_joined();
+    for (int i = 1; i < 8; i++)
+        if ((joined >> i & 1) || g_settings.coop_pad_path[i][0]) rows = i + 1;
     static const char *const colours[COOP_COLOURS] = {"Green", "Red", "Blue", "Yellow", "Purple", "Pink", "Black",
                                                       "White"};
     static char descs[8][440];
@@ -380,12 +390,12 @@ static void coop_options(void) {
 #else
     const char *xinput = "";
 #endif
-    for (int i = 0; i < g_settings.coop_players && i < 8; i++) {
+    for (int i = 0; i < rows; i++) {
         // (whose controller is whose: a Link that doesn't move is the likeliest first problem; a color two players
         // share, or no controller, shows in red - with a note saying which: the red alone was taken for a color clash)
         const char *pad = input_player_pad_name(i);
         int same = 0;  // (the first other player with this color, from 1)
-        for (int j = 0; j < g_settings.coop_players && j < 8 && !same; j++)
+        for (int j = 0; j < rows && !same; j++)
             if (j != i && g_settings.coop_colour[j] == g_settings.coop_colour[i]) same = j + 1;
         char label[32], note[48] = "", also[48] = "";
         snprintf(label, sizeof label, "Player %d color", i + 1);
@@ -394,9 +404,10 @@ static void coop_options(void) {
             snprintf(descs[i], sizeof descs[i], "Player 1's tunic (the Red and Blue Mail stay as they are) and hearts. Controller: keyboard%s%s.%s",
                      pad ? " and " : "", pad ? pad : "", also);
         else
-            snprintf(descs[i], sizeof descs[i], "Player %d's tunic and hearts. Controller: %s.%s%s", i + 1,
-                     pad ? pad : "none connected - this Link stands still", !pad && i >= 4 ? xinput : "", also);
-        if (i > 0 && !pad) snprintf(note, sizeof note, "no controller");
+            snprintf(descs[i], sizeof descs[i], "Player %d's tunic and hearts (Minus with L or R in play). %s%s.%s%s",
+                     i + 1, joined >> i & 1 ? "Controller: " : "Not in the game - ", pad ? pad : joined >> i & 1 ? "none connected - this Link stands still" : "hold Plus on a controller to join",
+                     !pad && i >= 4 ? xinput : "", also);
+        if (i > 0 && !pad && (joined >> i & 1)) snprintf(note, sizeof note, "no controller");
         if (same) snprintf(note + strlen(note), sizeof note - strlen(note), "%ssame as Player %d", *note ? ", " : "", same);
         if (*note) opt_warn_next(), opt_note_next(note);
         opt_choice(label, &g_settings.coop_colour[i], colours, COOP_COLOURS, i, descs[i], true);
@@ -408,13 +419,14 @@ static void coop_options(void) {
     if (was_waiting >= 0 && waiting < 0) settings_save();
     was_waiting = waiting;
     static char pdesc[8][300];
-    for (int i = 0; i < g_settings.coop_players && i < 8; i++) {
+    for (int i = 0; i < rows; i++) {
         const char *pad = input_player_pad_name(i);
         char label[32];
         snprintf(label, sizeof label, "Player %d controller", i + 1);
         snprintf(pdesc[i], sizeof pdesc[i],
                  "Choose this, then press any button on the controller Player %d should use. If another player had it, "
-                 "they get Player %d's in its place. Remembered for next time. Escape cancels.%s", i + 1, i + 1,
+                 "they get Player %d's in its place. Remembered for next time%s. Escape cancels.%s", i + 1, i + 1,
+                 i && !(joined >> i & 1) ? ": its Plus, held, joins as this player" : "",
                  i ? "" : " Player 1 keeps the keyboard too.");
         if (waiting == i) opt_mark_next();
         if (opt_action(label, waiting == i ? "Press a button..." : pad ? pad : i ? "None" : "Keyboard only", pdesc[i],

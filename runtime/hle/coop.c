@@ -42,8 +42,21 @@ const char *coop_fork_name(void) {
            "https://github.com/DrHammer79/LASRecomp/issues";
 }
 
-static int g_n = -1;                // players (rt_coop_players; read again out of play: coop_tick)
+// Players join and leave in play (drop-in co-op): player i + 1 is in the game while bit i of g_joined is set (bit 0,
+// Player 1, always). A controller's Plus asks to join, its Minus held alone asks to leave (runtime/hle/input.c, UI
+// thread: g_join_want / g_leave_want); coop_tick carries them out on the game thread when it can (coop_join, coop_leave).
+// Their numbers stay: one leaving leaves a gap, which the next to join takes. g_n is the highest player's number: the
+// loops over players go to it, a gap's Link (g_extra) 0.
+static int g_n = -1;                // the highest player's number (rt_coop_players; 1: Player 1 alone - co-op dormant)
+static _Atomic uint32_t g_joined = 1;                 // the players in the game, a bit each (bit 0: Player 1)
+static _Atomic uint32_t g_join_want, g_leave_want;    // asked from their controllers (input.c)
+static bool in_game(int i) { return i == 0 || (i > 0 && i < COOP_MAX && (g_joined >> i & 1)); }  // (not a gap)
 static uint64_t g_extra[COOP_MAX];  // players 2..8: their Link actors ([0] unused: Player 1 is the game's own)
+// The benched: a Link made for each player who isn't in, as the level loads (coop_create), parked out of sight and
+// switched off until he joins (wake) - the game makes Links as levels load; one made in play missed what the load
+// gives the actors made then (his hookshot went through the enemies: docs/coop.md, "The hookshot and the boomerang")
+static uint64_t g_bench[COOP_MAX];
+static void bench(Cpu *c, int i, uint64_t link);
 static int g_creating = -1;         // the player coop_create is making a Link for (-1: none)
 static int g_placing = -1;          // the player coop_place is placing (-1: none)
 static uint32_t g_pad_limit = 1;    // the controller manager's player limit as last set (COOP_PAD_STATE_SITE)
@@ -54,7 +67,9 @@ static bool g_lost_parked[COOP_MAX];     // ... standing again, parked out of si
 
 RT_ON_RESET(coop_reset) {
     g_n = -1;
+    g_joined = 1, g_join_want = g_leave_want = 0;
     memset(g_extra, 0, sizeof g_extra);
+    memset(g_bench, 0, sizeof g_bench);
     g_creating = g_placing = -1;
     g_pad_limit = 1;
     g_entering = 0;
@@ -65,10 +80,18 @@ extern uint64_t renderer_present_count(void);
 
 #define CLOG(...) do { if (ENV("LARECOMP_COOP_LOG")) LOG(__VA_ARGS__); } while (0)
 
-int coop_players_setting(void);
+static int joined_top(uint32_t joined) {  // (the highest player's number)
+    int n = 1;
+    for (int i = 1; i < COOP_MAX; i++)
+        if (joined >> i & 1) n = i + 1;
+    return n;
+}
+static int coop_players_setting(void);
 int rt_coop_players(void) {
-    if (g_n < 0) {
-        g_n = GA(COOP_CREATE_SITE) ? coop_players_setting() : 1;  // (1.0.1 only)
+    if (g_n < 0) {  // (first asked: the players already in - none but Player 1, or a test's: coop_players_setting)
+        int n = GA(COOP_CREATE_SITE) ? coop_players_setting() : 1;  // (1.0.1 only)
+        g_joined = n > 1 ? (1u << n) - 1 : 1;
+        g_n = joined_top(g_joined);
         if (g_n > 1) LOG("[coop] %d players\n", g_n);
     }
     return g_n;
@@ -79,22 +102,36 @@ int rt_coop_on(void) { return rt_coop_players() > 1; }
 // False once the game is known to be a version without co-op (1.0.0: its tables have no COOP_* sites).
 bool coop_supported(void) { return !g_ga || GA(COOP_CREATE_SITE); }
 
-// The player count from the setting (and LARECOMP_COOP), also before the game has booted: input.c opens the
-// controllers. 1 once the game is known to be a version without co-op (its tables have no COOP_* sites).
-int coop_players_setting(void) {
-    if (g_ga && !GA(COOP_CREATE_SITE)) return 1;
+// Local co-op on (setting coop_players above 1, the Controls tab): other controllers can join. Also before the game has
+// booted (input.c). Off once the game is known to be a version without co-op (its tables have no COOP_* sites).
+bool coop_enabled(void) {
+    if (g_ga && !GA(COOP_CREATE_SITE)) return false;
     const char *e = ENV("LARECOMP_COOP");
-    int n = e ? atoi(e) : g_settings.coop_players;
-    unsigned long at;  // LARECOMP_COOP_AT=<frame>:<n> (test): the setting changed to n at that frame, as from the menu
+    return e ? atoi(e) > 1 : g_settings.coop_players > 1;
+}
+
+// The players in the game as a file starts: Player 1 alone - the others join with their controllers' Plus. A test
+// starts with more (LARECOMP_COOP=<n>: players 1..n in; LARECOMP_COOP_AT=<frame>:<n>: n from that frame, out of play,
+// as before drop-in).
+static int coop_players_setting(void) {
+    if ((g_ga && !GA(COOP_CREATE_SITE)) || !coop_enabled()) return 1;
+    const char *e = ENV("LARECOMP_COOP");
+    int n = e ? atoi(e) : 1;
+    unsigned long at;
     int later;
     if ((e = ENV("LARECOMP_COOP_AT")) && sscanf(e, "%lu:%d", &at, &later) == 2 && renderer_present_count() >= at)
         n = later;
     return n < 1 ? 1 : n > COOP_MAX ? COOP_MAX : n;
 }
 
-// The count in effect (input.c gives players 2.. their controllers by it): the game's once it has one - it changes
-// out of play only (coop_tick) - else the setting.
-int coop_players_now(void) { return g_n > 0 ? g_n : coop_players_setting(); }
+// The players in the game, a bit each (bit 0 Player 1): input.c gives each one's controller to his npad.
+uint32_t coop_joined(void) { return g_n > 0 ? g_joined : 1; }
+int coop_players_now(void) { return g_n > 0 ? g_n : 1; }  // (the highest player's number)
+
+// A controller asks to join as player i + 1 (its slot, input.c), or to leave (UI thread): coop_tick does it.
+void coop_join_want(int i) { if (i > 0 && i < COOP_MAX) atomic_fetch_or(&g_join_want, 1u << i); }
+void coop_leave_want(int i) { if (i > 0 && i < COOP_MAX) atomic_fetch_or(&g_leave_want, 1u << i); }
+uint32_t coop_join_pending(void) { return atomic_load(&g_join_want); }  // (asked, not yet in: input.c keeps its pad)
 
 // Player 1's Link: the game manager's player (+0x4b8), as for the game itself. Co-op never writes that slot: the
 // game's reads of it ask rt_coop_player, which gives an updating enemy the Link it goes for (g_as_link).
@@ -160,18 +197,41 @@ static void ride_on_host(int i) {
 #include "coop/field.inc"
 
 
+// The benched player whose Link, Link's camera (+0x318) or own item (g_items) this actor is; 0: none.
+static int bench_of(uint64_t actor) {
+    for (int i = 1; i < COOP_MAX; i++) {
+        uint64_t b = g_bench[i];
+        if (!b) continue;
+        if (actor == b || actor == LD64(b + 0x318)) return i;
+        for (int k = 0; k < PLAYER_ITEMS; k++)
+            if (g_items[i][k] == actor) return i;
+    }
+    return 0;
+}
+static bool bench_any(void) {
+    for (int i = 1; i < COOP_MAX; i++)
+        if (g_bench[i]) return true;
+    return false;
+}
+
 // Alone (no co-op) only these run: the zoom's, with the zoom on - the camera (and once more as it goes off: the camera's
 // own values back), the Field's boxes of screens, the shadow map's box, and on the Field the actors' updates for the
 // cut grass and thrown rocks kept gone in view (zoomed out, the screen Player 1 just left is still in view); and the
 // controller manager's update until its player limit is the game's 1 again (COOP_PAD_STATE_SITE).
 static bool alone_hook(int which) {
     switch (which) {
-    case 15: case 16: return ENV("LARECOMP_COOP_TRACE") || ENV("LARECOMP_TRACK_RESPAWN");  // (test logs, alone too)
     case 17: return zoom_on() || g_back != 0;
     case 33: case 34: case 35: return g_back_on;
     case 38: return g_zoom > 1.0f;
     case 58: return g_back != 0;
     case 10: return g_pad_limit != 1;
+    // (co-op on, or Links benched: the creator makes the benched Links as the level loads - coop_create - and their
+    // updates are skipped while they are; the update's end clears what its start set)
+    case 0: return coop_enabled() || bench_any();
+    case 15: case 16: return bench_any() || ENV("LARECOMP_COOP_TRACE") || ENV("LARECOMP_TRACK_RESPAWN");
+    // (co-op on, Player 1 alone so far: the actors and their parts are kept as they are made, so that one who joins
+    // mid-level finds them known - the enemies already there go after him too)
+    case 51: case 52: case 53: case 54: case 55: case 56: case 57: return coop_enabled();
     }
     return false;
 }
@@ -186,7 +246,8 @@ static int skip_update(Cpu *c) {
 }
 
 int rt_coop_hook(Cpu *c, int which) {
-    if (!rt_coop_on() && !alone_hook(which)) return 0;
+    // (alone, the hooks the creator meets act while it makes another player's Link - g_creating - as with co-op)
+    if (!rt_coop_on() && g_creating < 0 && !alone_hook(which)) return 0;
     switch (which) {
     case 0:  // COOP_CREATE_SITE
         return coop_create(c);
@@ -260,6 +321,7 @@ int rt_coop_hook(Cpu *c, int which) {
         if (!on_game_thread()) return 0;
         uint64_t a = heap_ptr(c->x[0]) ? LD64(c->x[0] + 8) : 0;
         g_updating = heap_ptr(a) ? a : 0;
+        if (g_updating && bench_of(g_updating)) return skip_update(c);  // (a benched Link, his camera, his items)
         // A Link's (only Links are lost: another actor made where a Link was isn't one of them): off the map after
         // falling through it (lost_tick)
         if (rt_coop_on() && g_updating && LD64(g_updating) == GA(PLAYER_VTABLE) && lost_away(g_updating))
@@ -400,6 +462,13 @@ int rt_coop_hook(Cpu *c, int which) {
     case 58:  // COOP_CULL_SITE - ldr s10, [x27, #0x568]: the culling pass reads the view camera (x27)
         camera_cull(c);
         return 0;
+    case 59:  // COOP_JOIN_CAMERA_SITE - bl main+0xbfda0: the creator switches the scene camera to the new Link's (x0
+              // where the switch's shared_ptr comes back). Another player's Link: skipped, nothing back - the scene
+              // camera stays Player 1's (as he joins in play: coop_join; as a level starts it was his anyway, made last)
+        if (g_creating <= 0) return 0;
+        ST64(c->x[0], 0);
+        ST64(c->x[0] + 8, 0);
+        return 1;
     }
     return 0;
 }
@@ -507,18 +576,179 @@ bool coop_romfs_patch(const char *path, uint64_t off, uint64_t size, ssize_t (*r
 // went on into the next file: until 2026-11-13 they were parked under the level and taken back by its players, and
 // one that wasn't (fewer players, co-op turned off) copied Player 1 - with co-op off, the game's own creator would find
 // one of them for its "a Link exists already" check (COOP_DUP_SITE) and make no Link.
+static void kill_link(Cpu *c, int i) {  // (player i + 1's Link killed, as the game kills an actor)
+    if (!g_extra[i] || LD64(g_extra[i]) != GA(PLAYER_VTABLE)) return;
+    uint64_t saved[31], sp = c->sp, pc = c->pc;
+    memcpy(saved, c->x, sizeof saved);
+    c->x[0] = g_extra[i];
+    guest_call(c, GA(ACTOR_KILL));
+    memcpy(c->x, saved, sizeof saved);
+    c->sp = sp, c->pc = pc;
+}
+
+// Everything kept for player i + 1 forgotten: he joins afresh, or he left (the enemies he was the target of choose
+// again, nobody revives him or is revived by him).
+static void slot_reset(int i) {
+    g_extra[i] = 0;
+    g_hp[i] = -1, g_down[i] = false, g_safe_until[i] = 0, g_revive[i] = 0, g_can_revive[i] = false;
+    g_reviving[i] = 0, g_revive_hit[i] = g_revive_reach[i] = g_revive_a[i] = false;
+    for (int k = 0; k < COOP_MAX; k++) g_reviving[k] &= ~(1u << i);
+    g_down_hit_at[i] = g_down_moved_until[i] = g_down_enemy_at[i] = 0, g_down_hits[i] = 0, g_down_move[i] = false;
+    g_anim_actor[i] = g_anim_target[i] = 0, g_asleep[i] = false, g_sleep_anim[i] = 0;
+    g_lost_until[i] = 0, g_lost_parked[i] = g_lost_known[i] = false, g_lost_stood[i] = 0;
+    g_pass[i] = false;
+    memset(g_act[i], 0, sizeof g_act[i]), memset(g_act_res[i], 0, sizeof g_act_res[i]);
+    g_claim[i].comp = g_claim[i].until = 0, g_a_held[i] = false, g_a_pressed[i] = 0;
+    g_carried[i].obj = g_carried[i].tag = g_carried[i].until = 0;
+    for (int s = 0; s < TARGET_SLOTS; s++)
+        if (g_target[s].who == i) g_target[s].actor = 0, g_target[s].who = -1;
+}
+
+static void joined_set(uint32_t joined) {  // (the players in the game: the count follows - g_n, the controllers' npads)
+    int n = joined_top(joined);
+    g_joined = joined;
+    if (n != g_n) {
+        extern void input_style_changed(void);  // (the game reads which controllers are connected again)
+        g_n = n;
+        input_style_changed();
+    }
+}
+
+// Player i + 1 joins in play: his Link made by the player creator (its event action unused for him: only its zone
+// set-up reads it, skipped for another player's Link - COOP_ZONE_SITE), put on Player 1. The creator makes its Link the
+// game manager's player (COOP_SET_PLAYER, +0x4b8) and would switch the scene camera to his (skipped:
+// COOP_JOIN_CAMERA_SITE): Player 1's Link is set back as the manager's player, a reference to it held meanwhile.
+// He is in from the start of it - the co-op hooks the creator meets act for him even when Player 1 was alone till
+// now (rt_coop_on) - and out again if no Link came of it.
+//
+// Then his Link and his own items (his hookshot, his boomerang: g_items) are activated, as a level load activates
+// every actor: their activation (the actor's virtual +0xc8, main+0x1e8d0 for most classes) sets their flags' 0x700
+// (+0x40) and walks their components, setting theirs. The creator runs as a level loads and counts on that pass; made in
+// play, nothing activated them - the hook (flags 0x11f, its attack component's 0x11d, against 0x71f / 0x71d after a
+// level load) went through the enemies (user 2026-11-15; tools/coop_tests/hook_join.sh). Only one not yet active.
+static void activate_as(Cpu *c, uint64_t actor, const char *what, bool on) {
+    if (!heap_ptr(actor) || ((LD32(actor + 0x40) & 0x600) == 0x600) == on) return;
+    uint64_t vt = LD64(actor), fn = heap_ptr(vt) || vt >= MAIN_BASE ? LD64(vt + (on ? 0xc8 : 0xc0)) : 0;
+    if (fn < MAIN_BASE || fn >= GA(MAIN_IMAGE_SCAN_END)) return;
+    uint32_t was = LD32(actor + 0x40);
+    uint64_t saved[31], sp = c->sp, pc = c->pc;
+    memcpy(saved, c->x, sizeof saved);
+    c->x[0] = actor;
+    guest_call(c, fn);
+    memcpy(c->x, saved, sizeof saved);
+    c->sp = sp, c->pc = pc;
+    CLOG("[coop] %.30s %#llx %s: flags %#x -> %#x\n", what, (unsigned long long)actor, on ? "activated" : "deactivated",
+         was, LD32(actor + 0x40));
+}
+static void activate(Cpu *c, uint64_t actor, const char *what) { activate_as(c, actor, what, true); }
+
+// Player i + 1's Link benched (g_bench, from g_extra or just made): parked out of sight (y -1000, as a lost player is:
+// his update doesn't run, so he stays) and switched off with his own items (the actor's virtual +0xc0: flags +0x40
+// &= ~0x700, its components' too - their collision off). Woken (wake) as he joins.
+static void bench(Cpu *c, int i, uint64_t link) {
+    uint64_t q = collision_of(link);
+    if (q) ST32(q + 0x84, 0xc47a0000u), ST32(link + 0x1b44, 0xc47a0000u);
+    activate_as(c, link, "Link", false);
+    for (int k = 0; k < PLAYER_ITEMS; k++)
+        if (g_items[i][k]) activate_as(c, g_items[i][k], (const char *)(uintptr_t)(g_items[i][k] + 0x18), false);
+    g_bench[i] = link;
+    CLOG("[coop] player %d's Link %#llx benched\n", i + 1, (unsigned long long)link);
+}
+static void wake(Cpu *c, int i) {
+    uint64_t link = g_bench[i];
+    g_bench[i] = 0;
+    g_extra[i] = link;
+    activate(c, link, "Link");
+    for (int k = 0; k < PLAYER_ITEMS; k++)
+        if (g_items[i][k]) activate(c, g_items[i][k], (const char *)(uintptr_t)(g_items[i][k] + 0x18));
+    ride_on_host(i);
+}
+
+static bool coop_join(Cpu *c, int i) {
+    if (g_bench[i] && LD64(g_bench[i]) == GA(PLAYER_VTABLE)) {  // (his benched Link: made as the level loaded)
+        slot_reset(i);
+        joined_set(g_joined | 1u << i);
+        wake(c, i);
+        LOG("[coop] player %d joined: Link %#llx (benched)\n", i + 1, (unsigned long long)g_extra[i]);
+        return true;
+    }
+    // None benched (co-op turned on in play: no load has made one yet): made now. His items' collision then misses
+    // what a level load gives - his hookshot goes through the enemies until the next one.
+    LOG("[coop] player %d: no benched Link - made in play\n", i + 1);
+    uint64_t mgr = LD64(GA(GAME_MGR)), p1 = mgr ? LD64(mgr + 0x4b8) : 0, p1c = mgr ? LD64(mgr + 0x4c0) : 0;
+    if (!GA(COOP_SET_PLAYER) || !p1 || LD64(p1) != GA(PLAYER_VTABLE) || !heap_ptr(p1c)) return false;
+    uint64_t saved[31], sp = c->sp, pc = c->pc;
+    memcpy(saved, c->x, sizeof saved);
+    c->sp -= 0x40;
+    uint64_t scratch = c->sp;  // (+0 the creator's action object, unused; +0x10 Player 1's shared_ptr)
+    ST64(scratch, 0), ST64(scratch + 8, 0), ST64(scratch + 0x10, p1), ST64(scratch + 0x18, p1c);
+    __atomic_fetch_add((uint64_t *)(uintptr_t)(p1c + 8), 1, __ATOMIC_ACQ_REL);  // (held while he isn't the manager's)
+    slot_reset(i);
+    uint32_t before = g_joined;
+    joined_set(before | 1u << i);
+    g_creating = i;
+    c->x[0] = scratch;
+    guest_call(c, GA(COOP_CREATE_SITE));
+    g_creating = -1;
+    uint64_t made = LD64(mgr + 0x4b8);
+    c->x[0] = mgr, c->x[1] = scratch + 0x10;
+    guest_call(c, GA(COOP_SET_PLAYER));  // (Player 1 back: his reference taken again, the new Link's let go)
+    __atomic_fetch_sub((uint64_t *)(uintptr_t)(p1c + 8), 1, __ATOMIC_ACQ_REL);  // (the manager holds him again)
+    memcpy(c->x, saved, sizeof saved);
+    c->sp = sp, c->pc = pc;
+    if (!made || made == p1 || LD64(made) != GA(PLAYER_VTABLE)) {
+        LOG("[coop] player %d couldn't join: no Link made\n", i + 1);
+        joined_set(before);
+        return false;
+    }
+    g_extra[i] = made;
+    activate(c, made, "Link");
+    for (int k = 0; k < PLAYER_ITEMS; k++)
+        if (g_items[i][k]) activate(c, g_items[i][k], (const char *)(uintptr_t)(g_items[i][k] + 0x18));
+    ride_on_host(i);
+    LOG("[coop] player %d joined: Link %#llx\n", i + 1, (unsigned long long)made);
+    return true;
+}
+
+// Player i + 1 leaves: his Link benched (to be woken if he joins again), all kept for him forgotten; his controller
+// waits again (input.c).
+static void coop_leave(Cpu *c, int i) {
+    uint64_t link = g_extra[i];
+    if (link && LD64(link) == GA(PLAYER_VTABLE)) bench(c, i, link);
+    slot_reset(i);
+    joined_set(g_joined & ~(1u << i));
+    LOG("[coop] player %d left\n", i + 1);
+}
+
+// The joins and leaves the controllers asked for (game thread, each frame). A join waits until Player 1 is in play and
+// on his feet - not in an event, a door's walk-in, a level change - and is dropped with co-op off.
+static void joins_tick(Cpu *c, bool play) {
+    uint32_t leave = atomic_exchange(&g_leave_want, 0) & g_joined & ~1u;
+    for (int i = 1; i < COOP_MAX; i++)
+        if (leave >> i & 1) coop_leave(c, i);
+    uint32_t want = atomic_load(&g_join_want) & ~g_joined;
+    if (!coop_enabled()) {
+        atomic_fetch_and(&g_join_want, ~want);
+        return;
+    }
+    if (!want || !play || link_state_kind(host_player()) != 0) return;
+    for (int i = 1; i < COOP_MAX; i++)
+        if (want >> i & 1) {
+            coop_join(c, i);  // (the ask let go after: until then input.c keeps his controller - coop_join_pending)
+            atomic_fetch_and(&g_join_want, ~(1u << i));
+        }
+}
+
 static void play_ended(Cpu *c) {
     for (int i = 1; i < COOP_MAX; i++) {
+        if (g_bench[i] && !g_extra[i]) g_extra[i] = g_bench[i];  // (a benched one: killed the same way)
+        g_bench[i] = 0;
         if (!g_extra[i] || LD64(g_extra[i]) != GA(PLAYER_VTABLE)) continue;
         CLOG("[coop] play ended: player %d's Link %#llx killed\n", i + 1, (unsigned long long)g_extra[i]);
-        uint64_t saved[31], sp = c->sp, pc = c->pc;
-        memcpy(saved, c->x, sizeof saved);
-        c->x[0] = g_extra[i];
-        guest_call(c, GA(ACTOR_KILL));
-        memcpy(c->x, saved, sizeof saved);
-        c->sp = sp, c->pc = pc;
+        kill_link(c, i);
     }
     memset(g_extra, 0, sizeof g_extra);
+    memset(g_items, 0, sizeof g_items);
     targets_forget();
     camera_back_put();  // (the camera can go on into the next file: its own values, not the moved-back ones)
     cameras_forget();
@@ -570,14 +800,55 @@ void coop_tick(Cpu *c) {
     if (in_play && !play) play_ended(c);
     in_play = play;
     zoom_tick(play);
-    if (!play && GA(COOP_CREATE_SITE)) {  // (out of play: the player count for the next file - its Links come as it loads)
-        int n = coop_players_setting();
-        if (n != g_n) {
-            extern void input_style_changed(void);  // (the game reads which controllers are connected again)
-            LOG("[coop] %d players from the next file\n", n);
-            g_n = n;
-            input_style_changed();
-            actor_types_forget();  // (made while co-op was off, actors and parts weren't kept: start afresh)
+    if (!play && GA(COOP_CREATE_SITE) && g_n > 0) {  // (out of play: who is in for the next file - its Links come as
+        uint32_t joined = g_joined;                   // it loads: those who joined stay in)
+        if (!coop_enabled()) joined = 1;  // (co-op turned off: Player 1 alone)
+        else if (ENV("LARECOMP_COOP") || ENV("LARECOMP_COOP_AT")) {  // (a test's players)
+            int n = coop_players_setting();
+            joined = n > 1 ? (1u << n) - 1 : 1;
+        }
+        if (joined != g_joined) {
+            LOG("[coop] %d players from the next file\n", joined_top(joined));
+            for (int i = 1; i < COOP_MAX; i++)
+                if (!(joined >> i & 1)) slot_reset(i);
+            joined_set(joined);
+            actor_types_forget();  // (start afresh: the next file's actors)
+        }
+    }
+    {   // LARECOMP_COOP_JOIN / LARECOMP_COOP_LEAVE=<frame>:<player>[,...] (test): that player asks to join / leave at that
+        // frame, as his controller's Plus / Minus held would (input.c coop_join_pad, coop_drop_poll)
+        static const char *const vars[2] = {"LARECOMP_COOP_JOIN", "LARECOMP_COOP_LEAVE"};
+        static uint32_t done[2];  // (bits: the list's entries already asked)
+        uint64_t now = renderer_present_count();
+        for (int v = 0; v < 2; v++) {
+            const char *e = getenv(vars[v]);  // (not ENV: it keeps one value per place it is used)
+            for (int k = 0; e && *e && k < 32; k++) {
+                unsigned long at;
+                int p;
+                if (sscanf(e, "%lu:%d", &at, &p) == 2 && now >= at && !(done[v] >> k & 1)) {
+                    done[v] |= 1u << k;
+                    LOG("[coop] test: player %d asks to %s\n", p, v ? "leave" : "join");
+                    (v ? coop_leave_want : coop_join_want)(p - 1);
+                }
+                e = strchr(e, ',');
+                if (e) e++;
+            }
+        }
+    }
+    joins_tick(c, play);
+    // The benched kept switched off: a level load switches on every actor it has (the actors' virtual +0xc8, flags
+    // 0x700) - benched as the file loaded, they were on again a moment later, standing where they were made (user
+    // 2026-11-16: a player who left vanished, the others stayed); a level change does it too.
+    for (int i = 1; i < COOP_MAX; i++) {
+        uint64_t b = g_bench[i];
+        if (!b || LD64(b) != GA(PLAYER_VTABLE)) continue;
+        bool on = (LD32(b + 0x40) & 0x600) != 0;
+        for (int k = 0; k < PLAYER_ITEMS && !on; k++)
+            on = g_items[i][k] && (LD32(g_items[i][k] + 0x40) & 0x600);
+        if (on) {
+            CLOG("[coop] player %d's benched Link switched on (frame %llu): off again\n", i + 1,
+                 (unsigned long long)renderer_present_count());
+            bench(c, i, b);
         }
     }
     g_hud_host = host_player(), g_hud_cam = view_camera();  // (for the HUD: as the frame starts)

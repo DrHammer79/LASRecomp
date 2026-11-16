@@ -223,6 +223,7 @@ static void doaction_frame(Cpu *c) {
     uint32_t cool = LD32(GA(DOACTION_COOLDOWN));
     g_act_calls = 1;
     for (int i = 1; i < g_n; i++) {
+        if (!in_game(i)) continue;  // (one who left: no slots of his)
         uint64_t before, now;
         memcpy(&before, g_act[i] + 16, 8);
         slot_swap(GA(DOACTION_PENDING), g_act[i]);

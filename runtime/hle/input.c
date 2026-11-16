@@ -302,45 +302,25 @@ static const char *pad_key(SDL_JoystickID id, char *buf, size_t n) {
     return buf;
 }
 
-// The player a controller was assigned to (pad_key), or -1. (input_assign_begin, below) Only with co-op on: alone, Player 1's
-// controller is whichever one is used, as upstream's (#455), whatever was assigned for co-op.
+// The player a controller last played as (pad_key), or -1. (input_assign_begin, below; a join, coop_join_pad) Only with
+// co-op on: alone, Player 1's controller is whichever one is used, as upstream's (#455), whatever was assigned for co-op.
+extern bool coop_enabled(void);
+extern uint32_t coop_joined(void);
 static int pad_saved_player(SDL_JoystickID id) {
-    extern int coop_players_now(void);
-    if (coop_players_now() < 2) return -1;
+    if (!coop_enabled()) return -1;
     char buf[80];
     const char *key = pad_key(id, buf, sizeof buf);
     for (int k = 0; *key && k < 8; k++)
         if (!strcmp(key, g_settings.coop_pad_path[k])) return k;
     return -1;
 }
-// (a slot whose player's assigned controller is connected: kept for it)
-static bool slot_kept(int slot) {
-    const char *want = slot + 1 < 8 ? g_settings.coop_pad_path[slot + 1] : "";
-    int n = 0;
-    bool kept = false;
-    SDL_JoystickID *ids = *want ? SDL_GetGamepads(&n) : NULL;
-    for (int i = 0; ids && i < n && !kept; i++) {
-        char buf[80];
-        kept = !strcmp(pad_key(ids[i], buf, sizeof buf), want);
-    }
-    SDL_free(ids);
-    return kept;
-}
 
-// A controller that isn't Player 1's: its player's slot when it was assigned one, else the first free slot not kept for
-// another's, while co-op is on (UI thread).
+// A controller that isn't Player 1's, connecting again: back to its player if he is still in the game with no
+// controller (one let go mid-play, or its battery). Others wait to join (coop_join_pad). UI thread.
 static void coop_pad_open(SDL_JoystickID id) {
-    extern int coop_players_now(void);  // (coop.c: the count in effect - the setting before the game boots)
-    int n = coop_players_now() - 1;
-    if (n < 1 || (pad && SDL_GetGamepadID(pad) == id) || coop_slot_of(id) >= 0) return;
+    if (!coop_enabled() || (pad && SDL_GetGamepadID(pad) == id) || coop_slot_of(id) >= 0) return;
     int i = pad_saved_player(id) - 1;
-    if (i < 0 || i >= n || i >= COOP_PADS || coop_pad[i]) {
-        i = -1;
-        for (int pass = 0; pass < 2 && i < 0; pass++)
-            for (int k = 0; k < n && k < COOP_PADS && i < 0; k++)
-                if (!coop_pad[k] && (pass || !slot_kept(k))) i = k;
-    }
-    if (i < 0) return;
+    if (i < 0 || i >= COOP_PADS || coop_pad[i] || !(coop_joined() >> (i + 1) & 1)) return;
     coop_pad[i] = SDL_OpenGamepad(id);
     if (!coop_pad[i]) return;
     SDL_SetGamepadPlayerIndex(coop_pad[i], i + 1);  // (the controller's own player light, where it has one)
@@ -440,7 +420,9 @@ void input_reset(void) {
     recompute_keyboard();
 }
 
+static void coop_drop_poll(void);
 void input_pad_poll(void) {
+    coop_drop_poll();
     if (!atomic_exchange(&pad_stale, false)) return;
     recompute_pad();
     pad_buttons = 0;  // (a button still held from the menu - the B that closed it - isn't a press for the game)
@@ -451,7 +433,29 @@ volatile int g_interp_ring_request;  // F10 or backslash (F10 can be a media key
 
 // Events a test pushes (LARECOMP_HOST_INPUT type: / sdlkey: / sdlpad: / sdlaxis: / mouse:) carry this device id: they go the whole way, menu first.
 #define TEST_DEVICE 0x7E57u
+// ... and "frame:vpad:<n>/<button>:frames" holds a button of test controller n (1..4): a virtual controller SDL lists
+// like any other (SDL_AttachVirtualJoystick, attached on its first use), its events coming the way a real one's do -
+// for the drop-in co-op tests (a controller's Plus joins, its Minus held leaves). Test controller 1 can be Player 1's;
+// the others never are (open_pad). Not blocked as the user's (input_user_blocked).
+#define TEST_PADS 4
+static SDL_JoystickID test_pad_id[TEST_PADS];
+static SDL_Joystick *test_pad_joy[TEST_PADS];
+static int test_pad_of(SDL_JoystickID id) {  // (its number, 1..; 0: not a test controller)
+    for (int n = 0; id && n < TEST_PADS; n++)
+        if (test_pad_id[n] == id) return n + 1;
+    return 0;
+}
 static bool test_event(const SDL_Event *e) {
+    switch (e->type) {
+    case SDL_EVENT_GAMEPAD_ADDED: return test_pad_of(e->gdevice.which) > 0;
+    case SDL_EVENT_JOYSTICK_ADDED: return test_pad_of(e->jdevice.which) > 0;
+    case SDL_EVENT_JOYSTICK_BUTTON_DOWN: case SDL_EVENT_JOYSTICK_BUTTON_UP: return test_pad_of(e->jbutton.which) > 0;
+    case SDL_EVENT_JOYSTICK_AXIS_MOTION: return test_pad_of(e->jaxis.which) > 0;
+    default: break;
+    }
+    if ((e->type == SDL_EVENT_GAMEPAD_BUTTON_DOWN || e->type == SDL_EVENT_GAMEPAD_BUTTON_UP) && test_pad_of(e->gbutton.which))
+        return true;
+    if (e->type == SDL_EVENT_GAMEPAD_AXIS_MOTION && test_pad_of(e->gaxis.which)) return true;
     switch (e->type) {
     case SDL_EVENT_KEY_DOWN: case SDL_EVENT_KEY_UP: return e->key.which == TEST_DEVICE;
     case SDL_EVENT_TEXT_INPUT: return e->text.windowID == TEST_DEVICE;
@@ -628,6 +632,7 @@ static int pad_rank(SDL_JoystickID id) {
 #endif
 static void open_pad(SDL_JoystickID id) {
     if (!SDL_GetGamepadFromID(id)) SDL_OpenGamepad(id);
+    if (test_pad_of(id) > 1) return;  // (a test's other players' controllers: never Player 1's)
     // (the first is Player 1's - or the one assigned to him, as it connects)
     bool assigned = pad_saved_player(id) == 0 && (!pad || pad_saved_player(SDL_GetGamepadID(pad)) != 0);
 #ifdef __ANDROID__
@@ -639,8 +644,11 @@ static void open_pad(SDL_JoystickID id) {
     if (!pad || assigned) use_pad(id, "");
 #endif
 }
-// (Player 1 has the controller assigned to him: a press on a spare one doesn't take it over)
-static bool pad_pinned(void) { return pad && pad_saved_player(SDL_GetGamepadID(pad)) == 0; }
+// (Player 1 has the controller assigned to him: a press on a spare one doesn't take it over - nor, with co-op on, in
+// play: there a spare one's press is for joining, coop_waiting)
+static bool pad_pinned(void) {
+    return pad && (pad_saved_player(SDL_GetGamepadID(pad)) == 0 || (coop_enabled() && game_in_play()));
+}
 
 // ---- Whose controller is whose (the Controls tab's "Player N controller", runtime/ui/controls_ui.mm). The row waits
 // for a button (input_assign_begin): the next press, on any controller, gives that controller to the player - taken
@@ -662,12 +670,24 @@ static void slot_set(int k, SDL_Gamepad *g) {
     if (g) SDL_SetGamepadPlayerIndex(g, k + 1);
     coop_recompute(k);
 }
+// Controller `id` remembered as player `player`'s (settings coop_pad_path_N; saved by the caller): no other player's.
+static void remember_pad(int player, SDL_JoystickID id) {
+    char buf[80];
+    const char *key = pad_key(id, buf, sizeof buf);
+    for (int p = 0; p < 8; p++)
+        if (p != player && !strcmp(g_settings.coop_pad_path[p], key)) g_settings.coop_pad_path[p][0] = 0;
+    snprintf(g_settings.coop_pad_path[player], sizeof g_settings.coop_pad_path[player], "%s", key);
+}
 static void assign_pad(int player, SDL_JoystickID id) {
-    extern int coop_players_now(void);
     SDL_Gamepad *g = SDL_GetGamepadFromID(id);
     if (!g) g = SDL_OpenGamepad(id);
     int from = coop_slot_of(id), k = player - 1;
-    if (!g || (player > 0 && (k >= coop_players_now() - 1 || k >= COOP_PADS)) || (player ? from == k : g == pad)) return;
+    if (!g || player >= 8 || (player ? from == k : g == pad)) return;
+    if (player > 0 && (k >= COOP_PADS || !(coop_joined() >> player & 1))) {  // (he isn't in: it joins as him - its Plus)
+        remember_pad(player, id);
+        LOG("[input] Player %d's controller (as he joins): %s\n", player + 1, SDL_GetGamepadName(g));
+        return;
+    }
     if (!player) {
         SDL_Gamepad *old = pad;
         use_pad(id, " (assigned)");
@@ -685,11 +705,9 @@ static void assign_pad(int player, SDL_JoystickID id) {
         slot_set(k, g);
     }
     LOG("[input] Player %d's controller: %s\n", player + 1, SDL_GetGamepadName(g));
-    for (int p = 0; p < 8; p++) {
+    for (int p = 0; p < 8; p++) {  // (the players with one now: theirs; the others keep the one they joined with)
         SDL_Gamepad *h = p == 0 ? pad : p <= COOP_PADS ? coop_pad[p - 1] : NULL;
-        char buf[80];
-        snprintf(g_settings.coop_pad_path[p], sizeof g_settings.coop_pad_path[p], "%s",
-                 h ? pad_key(SDL_GetGamepadID(h), buf, sizeof buf) : "");
+        if (h) remember_pad(p, SDL_GetGamepadID(h));
     }  // (saved by the menu, as the row stops waiting)
 }
 bool input_assign_event(const SDL_Event *e) {
@@ -703,6 +721,121 @@ bool input_assign_event(const SDL_Event *e) {
     assign_player = -1;
     assign_pad(player, e->gbutton.which);
     return true;
+}
+
+// ---- Drop-in co-op (co-op on: runtime/hle/coop.c coop_enabled). In play a controller that is neither Player 1's nor a
+// player's waits: its Plus held JOIN_HOLD_MS asks to join (coop_join_pad) - as the first free player, or the one it
+// played as before when he is free (pad_saved_player); the player is in once his Link is made (coop.c coop_join), and
+// his controller goes back to waiting once he is out (coop_drop_poll). A player's Minus held on its own asks to leave:
+// after LEAVE_WAIT_MS a ring fills over his Link for LEAVE_HOLD_MS (coop_leave_progress, runtime/ui/coop_hud.mm), then
+// he is out; Minus with L or R steps his tunic colour, and no leave comes of that hold - nor a ring, done within the
+// wait. (Players 2..8's Plus and Minus never reach the game: coop_fill.) UI thread. (Times: user 2026-11-15)
+#define JOIN_HOLD_MS 750
+#define LEAVE_WAIT_MS 300
+#define LEAVE_HOLD_MS 2500
+extern void coop_join_want(int player_index), coop_leave_want(int player_index);
+static _Atomic uint64_t minus_since[COOP_PADS];  // (Minus went down on that player's controller, SDL ms; 0: up)
+static _Atomic bool minus_spoiled[COOP_PADS];     // (another button with it this hold: no leave)
+static _Atomic bool minus_held[COOP_PADS];  // (for the game thread: his L and R don't reach the game meanwhile)
+static struct { SDL_JoystickID id; uint64_t since; } plus_hold[8];  // (waiting controllers' Plus held: since, SDL ms)
+
+static bool coop_waiting(SDL_JoystickID id) {
+    return coop_enabled() && game_in_play() && pad && SDL_GetGamepadID(pad) != id && coop_slot_of(id) < 0;
+}
+
+static void coop_join_pad(SDL_JoystickID id) {
+    uint32_t joined = coop_joined();
+    int k = pad_saved_player(id) - 1;
+    if (k < 0 || k >= COOP_PADS || coop_pad[k] || (joined >> (k + 1) & 1)) {  // (its own number taken: the first free)
+        k = -1;
+        for (int i = 0; i < COOP_PADS && k < 0; i++)
+            if (!coop_pad[i] && !(joined >> (i + 1) & 1)) k = i;
+    }
+    SDL_Gamepad *g = SDL_GetGamepadFromID(id);
+    if (!g) g = SDL_OpenGamepad(id);
+    if (k < 0 || !g) return;  // (eight players in, or no controller)
+    slot_set(k, g);
+    minus_since[k] = 0, minus_held[k] = false;
+    remember_pad(k + 1, id);
+    settings_save();
+    LOG("[input] Player %d joins: %s\n", k + 2, SDL_GetGamepadName(g));
+    coop_join_want(k + 1);
+}
+
+// A waiting controller's Plus (Start) going down or up: its hold starts, or ends short of a join.
+static void coop_wait_press(SDL_JoystickID id, const SDL_Event *e) {
+    if ((e->type != SDL_EVENT_GAMEPAD_BUTTON_DOWN && e->type != SDL_EVENT_GAMEPAD_BUTTON_UP) ||
+        e->gbutton.button != SDL_GAMEPAD_BUTTON_START)
+        return;
+    int free = -1;
+    for (int i = 0; i < 8; i++) {
+        if (plus_hold[i].id == id) plus_hold[i].id = 0;
+        if (!plus_hold[i].id && free < 0) free = i;
+    }
+    if (e->gbutton.down && free >= 0) plus_hold[free].id = id, plus_hold[free].since = SDL_GetTicks();
+}
+
+// A player's press with Minus down: L / R step his colour (runtime/hle/coop.c tunic colours: COOP_COLOURS of them),
+// anything else spoils the leave. Minus itself starts the hold.
+static void coop_drop_press(int k, const SDL_Event *e) {
+    if (!coop_enabled() || (e->type != SDL_EVENT_GAMEPAD_BUTTON_DOWN && e->type != SDL_EVENT_GAMEPAD_BUTTON_UP)) return;
+    int b = e->gbutton.button;
+    if (b == SDL_GAMEPAD_BUTTON_BACK) {
+        minus_since[k] = e->gbutton.down ? SDL_GetTicks() | 1 : 0;
+        minus_spoiled[k] = false, minus_held[k] = e->gbutton.down;
+        return;
+    }
+    if (!e->gbutton.down || !minus_since[k]) return;
+    minus_spoiled[k] = true;
+    if (b == SDL_GAMEPAD_BUTTON_LEFT_SHOULDER || b == SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER) {
+        int *col = &g_settings.coop_colour[k + 1];
+        *col = (*col + (b == SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER ? 1 : COOP_COLOURS - 1)) % COOP_COLOURS;
+        LOG("[input] Player %d's colour: %d\n", k + 2, *col);
+        settings_save();
+    }
+}
+
+// Each frame (input_pad_poll): a Minus held long enough asks to leave; a controller whose player is out waits again.
+static void coop_drop_poll(void) {
+    uint64_t now = SDL_GetTicks();
+    for (int i = 0; i < 8; i++) {  // (a waiting controller's Plus held long enough: it joins)
+        SDL_JoystickID id = plus_hold[i].id;
+        if (!id) continue;
+        if (!coop_waiting(id)) plus_hold[i].id = 0;  // (play ended, Player 1 took it, gone...)
+        else if (now - plus_hold[i].since >= JOIN_HOLD_MS) plus_hold[i].id = 0, coop_join_pad(id);
+    }
+    // (read after the joins just asked; the asks before who is in: the game thread lets an ask go only once he is in,
+    // so a join done between the two reads still shows as one or the other)
+    extern uint32_t coop_join_pending(void);
+    uint32_t pending = coop_join_pending();
+    uint32_t joined = coop_joined();
+    for (int k = 0; k < COOP_PADS; k++) {
+        bool in = joined >> (k + 1) & 1, asked = pending >> (k + 1) & 1;
+        if (coop_pad[k] && !in && !asked) {  // (left, a join that came to nothing, co-op off: the controller waits)
+            LOG("[input] Player %d's controller waits again\n", k + 2);
+            slot_set(k, NULL);
+            minus_since[k] = 0, minus_held[k] = false;
+            continue;
+        }
+        if (!in || !minus_since[k] || minus_spoiled[k]) continue;
+        if (now - minus_since[k] >= LEAVE_WAIT_MS + LEAVE_HOLD_MS) {
+            minus_since[k] = 0, minus_held[k] = false;
+            LOG("[input] Player %d leaves\n", k + 2);
+            coop_leave_want(k + 1);
+        }
+    }
+}
+
+// Player n's leave hold so far (0..1; runtime/ui/coop_hud.mm draws it), worked out from when his Minus went down as
+// it is drawn: a value kept by coop_drop_poll moved only as often as that ran, and the ring filled in steps (user
+// 2026-11-15: "loads in chunks"). Render thread.
+float coop_leave_progress(int player) {
+    if (player < 2 || player > COOP_PADS + 1) return 0;
+    uint64_t since = minus_since[player - 2], now = SDL_GetTicks();
+    if (!since || minus_spoiled[player - 2] || !(coop_joined() >> (player - 1) & 1) || now < since + LEAVE_WAIT_MS)
+        return 0;
+    float f = (float)(now - since - LEAVE_WAIT_MS) / LEAVE_HOLD_MS;
+    return f > 1 ? 1 : f;
 }
 
 bool input_gamepad_connected(void) { return pad != NULL; }
@@ -722,8 +855,6 @@ static void touch_pad_used(void) {}
 
 void input_handle_event(const SDL_Event *e) {
     // (pads present at startup: their ADDED event may have gone to the start screen's loop - pads_scanned)
-    extern int coop_players_now(void);
-    static int coop_n = -1;  // (local co-op: the player count the slots were last filled for)
     if (!pads_scanned) {
         pads_scanned = true;
         int n = 0;
@@ -732,30 +863,20 @@ void input_handle_event(const SDL_Event *e) {
         SDL_free(ids);
     }
     if (touch_handle_event(e)) return;
-    // Local co-op: the others are players 2.. - again when the count in effect changes (the game's own, which changes
-    // out of play only: a controller let go mid-play took over Player 1's Link, and its own stood still)
-    if (coop_players_now() != coop_n) {
-        coop_n = coop_players_now();
-        for (int i = coop_n - 1; i < COOP_PADS; i++)  // (slots past the count let go)
-            if (i >= 0 && coop_pad[i]) coop_pad_close(SDL_GetGamepadID(coop_pad[i]));
-        int n = 0;
-        SDL_JoystickID *ids = SDL_GetGamepads(&n);
-        for (int i = 0; ids && i < n; i++) {
-            // (its own open first, as when it's added: one plugged in with the menu up was listed here before its
-            // ADDED event - the slot's open was its only one, and letting the slot go closed it for good)
-            if (coop_slot_of(ids[i]) < 0) open_pad(ids[i]);
-            coop_pad_open(ids[i]);
-        }
-        SDL_free(ids);
-    }
-    // Local co-op: another player's controller is his alone (not Player 1's pad, not the menus' taps)
+    // Local co-op: another player's controller is his alone (not Player 1's pad, not the menus' taps). With co-op on, in
+    // play, a controller that is neither waits: its Plus joins, nothing else of it reaches the game (coop_join_pad).
     SDL_JoystickID which = e->type == SDL_EVENT_GAMEPAD_BUTTON_DOWN || e->type == SDL_EVENT_GAMEPAD_BUTTON_UP ? e->gbutton.which
                            : e->type == SDL_EVENT_GAMEPAD_AXIS_MOTION ? e->gaxis.which : 0;
     if (which && which != TEST_DEVICE) {
         int slot = coop_slot_of(which);
         if (slot >= 0) {
+            coop_drop_press(slot, e);
             coop_event_press(slot, e);
             coop_recompute(slot);
+            return;
+        }
+        if (coop_waiting(which)) {
+            coop_wait_press(which, e);
             return;
         }
     }
@@ -935,6 +1056,29 @@ static void test_push(uint64_t frame, unsigned long start, unsigned long len, co
         SDL_PushEvent(&e);
         return;
     }
+    if (!strcmp(dev, "vpad")) {  // <n>/<button>: test controller n's button (SDL name: start, back, leftshoulder...)
+        int n = 0;
+        char bn[32] = "";
+        if ((frame != start && frame != start + len) || sscanf(arg, "%d/%31s", &n, bn) != 2 || n < 1 || n > TEST_PADS)
+            return;
+        SDL_GamepadButton b = SDL_GetGamepadButtonFromString(bn);
+        if (b == SDL_GAMEPAD_BUTTON_INVALID) return;
+        if (!test_pad_joy[n - 1]) {
+            static char names[TEST_PADS][32];
+            snprintf(names[n - 1], sizeof names[n - 1], "LAS Recomp test controller %d", n);
+            SDL_VirtualJoystickDesc d;
+            SDL_INIT_INTERFACE(&d);
+            d.type = SDL_JOYSTICK_TYPE_GAMEPAD, d.naxes = SDL_GAMEPAD_AXIS_COUNT, d.nbuttons = SDL_GAMEPAD_BUTTON_COUNT;
+            d.name = names[n - 1];
+            SDL_JoystickID id = SDL_AttachVirtualJoystick(&d);
+            test_pad_id[n - 1] = id;
+            test_pad_joy[n - 1] = id ? SDL_OpenJoystick(id) : NULL;
+            LOG("[input] test controller %d: %s\n", n, test_pad_joy[n - 1] ? "attached" : SDL_GetError());
+            if (!test_pad_joy[n - 1]) return;
+        }
+        SDL_SetJoystickVirtualButton(test_pad_joy[n - 1], (int)b, frame == start);
+        return;
+    }
     if (!strcmp(dev, "sdlpad")) {
         int b = bind_pad_from_name(arg);
         if (b < 0 || b >= SDL_GAMEPAD_BUTTON_COUNT || (frame != start && frame != start + len)) return;
@@ -989,7 +1133,7 @@ static void host_test_frame(uint64_t frame) {
             unsigned long start = 0, len = 10;
             char dev[8] = "", name[400] = "";
             if (sscanf(tok, "%lu:%7[a-z]:%399[^:]:%lu", &start, dev, name, &len) < 3) continue;
-            if (!strcmp(dev, "type") || !strcmp(dev, "sdlpad") || !strcmp(dev, "sdlaxis") || !strcmp(dev, "sdlkey") || !strcmp(dev, "shot") ||
+            if (!strcmp(dev, "type") || !strcmp(dev, "sdlpad") || !strcmp(dev, "vpad") || !strcmp(dev, "sdlaxis") || !strcmp(dev, "sdlkey") || !strcmp(dev, "shot") ||
                 !strcmp(dev, "resize") || !strcmp(dev, "move") || !strcmp(dev, "mouse")) {
                 test_push(frame, start, len, dev, name);
                 continue;
@@ -1176,6 +1320,8 @@ static void coop_fill(uint8_t *s, int i) {
     // (+ and -, the pause menu and the map, are Player 1's: the menu and a save take their spot from his - the hold,
     // runtime/hle/coop.c hold_on_p1 - and no other player's)
     uint64_t own = ~((1ull << BTN_PLUS) | (1ull << BTN_MINUS));
+    if (minus_held[i])  // (his Minus down: L and R step his colour - coop_drop_press - not the game's)
+        own &= ~(pad_bits(SDL_GAMEPAD_BUTTON_LEFT_SHOULDER) | pad_bits(SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER));
     uint64_t b = ((menu ? 0 : held | tap[i]) | (off ? 0 : coop_script_btn[i])) & own;
     int32_t lx = clamp_axis((menu ? 0 : coop_axis[i][0]) + (off ? 0 : coop_script_axis[i][0]));
     int32_t ly = clamp_axis((menu ? 0 : coop_axis[i][1]) + (off ? 0 : coop_script_axis[i][1]));
@@ -1225,7 +1371,8 @@ static void fill_state(Cpu *c) {
     if (nlog < 6 && (sampling % 600) == 1) { nlog++; LOG("[input] GetNpadState id %#x lr %llx\n", id, c->x[30]); }
     if (id >= 1 && id < 8) {  // local co-op: npad 2..8 are players 2..8 (their own controller, or none: standing)
         extern int rt_coop_players(void);
-        if ((int)id < rt_coop_players()) coop_fill(s, (int)id - 1);
+        extern uint32_t coop_joined(void);
+        if (rt_coop_players() > 1 && (coop_joined() >> id & 1)) coop_fill(s, (int)id - 1);
         return;
     }
     if (id != 0) return;  // docked: only player 1 (FullKey); Handheld stays disconnected
@@ -1368,8 +1515,9 @@ HLE_FUNC("_ZN2nn3hid15GetNpadStyleSetERKj", hid_style_set) {
     uint32_t id = *(uint32_t *)(uintptr_t)c->x[0];
     static int nlog;
     if (nlog++ < 4) LOG("[input] GetNpadStyleSet id %#x\n", id);
-    extern int rt_coop_players(void);  // (local co-op: npad 2.. for players 2..)
-    c->x[0] = id == 0 || (id < 8 && (int)id < rt_coop_players()) ? 1 : 0;  // docked: no handheld controller
+    extern int rt_coop_players(void);  // (local co-op: npad 2.. for players 2.. in the game)
+    extern uint32_t coop_joined(void);
+    c->x[0] = id == 0 || (id < 8 && rt_coop_players() > 1 && (coop_joined() >> id & 1)) ? 1 : 0;  // docked: no handheld
 }
 
 // BindNpadStyleSetUpdateEvent(id, SystemEventType*, clear mode): signaled once so the game sees a

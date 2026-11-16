@@ -103,3 +103,6 @@ GA_ADDR(DOACTION_TRIGGER,                 0x0)
 // Local co-op (runtime/hle/coop/targets.inc; 0 = not in this version): the actor factory's type table (0x58 bytes a
 // type, +0x50 its name)
 GA_ADDR(ACTOR_TYPES,                      0x0)
+// Local co-op (runtime/hle/coop/spawn.inc; 0 = not in this version): the game manager's player set (x0 the manager,
+// x1 a shared_ptr: its +0x4b8 / +0x4c0 assigned, references counted)
+GA_ADDR(COOP_SET_PLAYER,                  0x0)

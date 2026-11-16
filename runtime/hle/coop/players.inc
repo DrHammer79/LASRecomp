@@ -160,19 +160,22 @@ int coop_revive_reach(int i) {
     return own_hearts() && i >= 0 && i < COOP_MAX && (g_revive_reach[i] || g_revive_a[i]);
 }
 
-// The HUD (runtime/ui/coop_hud.mm): each player's hearts, maximum, knocked out / revive progress and colour.
-typedef struct { int hp, max, down; float revive; uint32_t rgb; } CoopHudRow;
+// The HUD (runtime/ui/coop_hud.mm): each player's in the game - Player 1 first, then the others by number (one who
+// left is a gap: no row) - his number (from 0), hearts, maximum, knocked out / revive progress and colour.
+typedef struct { int player, hp, max, down; float revive; uint32_t rgb; } CoopHudRow;
 uint32_t coop_colour_rgb(int player);
 uint32_t coop_colour_rgb_of(int colour);
 
 int coop_hud_rows(CoopHudRow *rows, int cap) {
     extern int game_in_play(void);
     if (g_n < 2 || !g_max_hp || !game_in_play()) return 0;  // (UI thread: the count once the game has set it)
-    int n = g_n < cap ? g_n : cap;
-    for (int i = 0; i < n; i++) {
+    int n = 0;
+    uint32_t joined = g_joined;
+    for (int i = 0; i < g_n && n < cap; i++) {
+        if (i && !(joined >> i & 1)) continue;
         int h = i ? g_hp[i] : game_hearts();
-        rows[i] = (CoopHudRow){h < 0 ? g_max_hp : h, g_max_hp, i ? g_down[i] : 0, i ? g_revive[i] : 0,
-                               coop_colour_rgb(i)};
+        rows[n++] = (CoopHudRow){i, h < 0 ? g_max_hp : h, g_max_hp, i ? g_down[i] : 0, i ? g_revive[i] : 0,
+                                 coop_colour_rgb(i)};
     }
     return n;
 }

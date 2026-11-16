@@ -172,7 +172,7 @@ static bool on_game_thread(void) {  // (per call of the actor hooks: pthread_sel
 // dungeons' collapse tiles measure the player in a job of their own instead: tile_player.
 // The kinds by type come from the game's own actor table (ACTOR_TYPES: 0x58 bytes a type, +0x50 its name), read once:
 // its enemy types ("Enemy..."), and the few kinds named below.
-enum { AC_OTHER, AC_ENEMY, AC_ENEMY_NEAREST, AC_ENEMY_PART, AC_FLOOR, AC_TRAP };
+enum { AC_OTHER, AC_ENEMY, AC_ENEMY_NEAREST, AC_ENEMY_PART, AC_FLOOR, AC_TRAP, AC_PLAYER_ITEM };
 #define AT_TYPES 1024
 #define AT_SETS 32768
 #define AT_WAYS 4
@@ -196,7 +196,8 @@ static void actor_types_read(void) {
         {"EnemyZolGreen", AC_ENEMY_NEAREST},      {"EnemyZolRed", AC_ENEMY_NEAREST},
         {"EnemyMiniZol", AC_ENEMY_NEAREST},       {"ObjHouseCollapseTile", AC_FLOOR},
         {"ObjKataKataFloor", AC_FLOOR},           {"ObjMatFaceFallFloor", AC_FLOOR},
-        {"ObjBrokenFloorLv5", AC_FLOOR},          {"ObjBladeTrap", AC_TRAP}};
+        {"ObjBrokenFloorLv5", AC_FLOOR},          {"ObjBladeTrap", AC_TRAP},
+        {"PlayerHookshot", AC_PLAYER_ITEM},       {"PlayerBoomerang", AC_PLAYER_ITEM}};
     g_types_n = 0;
     // (some types have no entry - no name -, up to a few in a row; 40 in a row: past the table's end)
     for (int t = 0, gap = 0; t < AT_TYPES && GA(ACTOR_TYPES) && gap < 40; t++) {
@@ -229,8 +230,33 @@ static ActorType *actor_set(uint64_t actor) {  // (a multiplicative hash's top b
 // factory's, a mini-boss its builder wakes later, a Link) copies its spawn info's key and type into it (+0x98, +0xa0:
 // COOP_ACTOR_TYPE_SITE, as it stores the type). Kept until the actor base class's destructor (main+0xfa7970:
 // COOP_ACTOR_GONE_SITE, actor_gone). (Entries are written whole before their actor is: read without the lock.)
+// Each Link's own hookshot and boomerang (AC_PLAYER_ITEM: actors the player creator makes with him, his for good):
+// another player's has him for "Link" in its update (actor_exec_begin). The hook reads "Link" as it hits - Player 2's
+// went through the enemies (user 2026-11-15). (Player 1's: none kept, his are the game's)
+#define PLAYER_ITEMS 4
+static uint64_t g_items[COOP_MAX][PLAYER_ITEMS];
+static void player_item_made(uint64_t actor, uint32_t type) {
+    if (g_creating <= 0 || g_creating >= COOP_MAX) return;
+    if (g_types_n < 0) actor_types_read();
+    if ((int)type >= g_types_n || g_type_kind[type] != AC_PLAYER_ITEM) return;
+    for (int k = 0; k < PLAYER_ITEMS; k++)
+        if (!g_items[g_creating][k] || g_items[g_creating][k] == actor) {
+            g_items[g_creating][k] = actor;
+            CLOG("[coop] player %d's %.30s %#llx\n", g_creating + 1, (const char *)(uintptr_t)(actor + 0x18),
+                 (unsigned long long)actor);
+            return;
+        }
+}
+static int player_item_of(uint64_t actor) {  // (the other player whose own item it is; 0: none)
+    for (int i = 1; i < g_n; i++)
+        for (int k = 0; k < PLAYER_ITEMS; k++)
+            if (g_items[i][k] == actor) return i;
+    return 0;
+}
+
 static void actor_made(uint64_t actor, uint64_t key, uint32_t type, bool part) {
     if (!heap_ptr(actor)) return;
+    if (!part) player_item_made(actor, type);
     pthread_mutex_lock(&g_at_lock);
     ActorType *set = actor_set(actor), *e = NULL;
     for (int w = 0; w < AT_WAYS && !e; w++)
@@ -250,6 +276,9 @@ static void actor_made(uint64_t actor, uint64_t key, uint32_t type, bool part) {
 }
 
 static void actor_gone(uint64_t actor) {
+    for (int i = 1; i < COOP_MAX; i++)  // (a player's item gone with his Link: another actor may come at its address)
+        for (int k = 0; k < PLAYER_ITEMS; k++)
+            if (g_items[i][k] == actor) g_items[i][k] = 0;
     pthread_mutex_lock(&g_at_lock);
     ActorType *set = actor_set(actor);
     for (int w = 0; w < AT_WAYS; w++)
@@ -425,7 +454,8 @@ static void actor_exec_begin(Cpu *c) {
     if (g_as_on) return;
     uint64_t actor = g_updating;
     if (!actor) return;
-    int t = carrier(actor);
+    int t = player_item_of(actor);
+    if (!t) t = carrier(actor);
     if (t) goto swap;
     uint8_t what = actor_kind(actor);
     if (what == AC_FLOOR) {
