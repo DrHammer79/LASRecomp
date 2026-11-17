@@ -30,16 +30,26 @@ KEvent *kernel_create_event_pair(uint32_t *w, uint32_t *r) { abort(); }
 KSharedMem *kernel_create_shared_memory(uint64_t size, void (*on_map)(KSharedMem *), uint32_t *handle) { abort(); }
 Service *service_new(const char *n, ServiceHandler h, void *state) { abort(); }
 void ipc_return_object(IpcResp *r, Service *s) { abort(); }
-int game_in_play(void) { abort(); }
+static int in_play;  // (the game: on a file, not at the title - drop-in joins happen only then)
+int game_in_play(void) { return in_play; }
 int cheats_link_health(int *max) { abort(); }
 int bind_label_family(void) { abort(); }
 int16_t g_bind_pad[BIND_PAD_COUNT], g_bind_key[BIND_KEY_COUNT];  // (A on the bottom button, as by default)
 int bind_pad_host(int slot) { return g_bind_pad[slot]; }  // (by position: Confirm button "Right")
 pthread_mutex_t g_klock = PTHREAD_MUTEX_INITIALIZER;
-static int players = 1;  // (local co-op's player count: runtime/hle/coop.c)
-int coop_players_setting(void) { return players; }
-int coop_players_now(void) { return players; }
-int rt_coop_players(void) { return players; }
+void settings_save(void) {}
+// Local co-op as runtime/hle/coop.c has it for input.c: on or off (the Players setting), the players in (a bit each,
+// Player 1's always), the joins asked and not yet carried out. A join is carried out on the game thread (coop_tick ->
+// coop_join): here admit(); a leave at once.
+static bool coop_on;
+static uint32_t joined = 1, want;
+bool coop_enabled(void) { return coop_on; }
+uint32_t coop_joined(void) { return coop_on ? joined : 1; }
+uint32_t coop_join_pending(void) { return want; }
+int rt_coop_players(void) { return coop_on ? 2 : 1; }
+void coop_join_want(int i) { want |= 1u << i; }
+void coop_leave_want(int i) { joined &= ~(1u << i); }
+static void admit(void) { joined |= want, want = 0; }
 
 static SDL_JoystickID attach(const char *name) {
     SDL_VirtualJoystickDesc d;
@@ -121,63 +131,102 @@ int main(void) {
     pump();
     assert(input_active_pad() == 0 && !pad_buttons);
 
-    // local co-op, two players and three pads: the second is Player 2's and never the game's (Player 1's) pad
-    players = 2;
-    input_handle_event(&none);
+    // local co-op, drop-in (co-op on, in play): Player 1's pad is the first; the others wait - a press or a stick of
+    // theirs reaches nobody and doesn't take Player 1's pad
+    coop_on = true, in_play = 1;
     SDL_JoystickID c1 = attach("co-op 1 (virtual)"), c2 = attach("co-op 2 (virtual)"), c3 = attach("spare (virtual)");
     pump();
-    assert(input_active_pad() == c1 && coop_slot_of(c2) == 0 && coop_slot_of(c3) < 0);
+    assert(input_active_pad() == c1 && coop_slot_of(c2) < 0 && coop_slot_of(c3) < 0);
+    button(c2, SDL_GAMEPAD_BUTTON_SOUTH, true);
+    assert(input_active_pad() == c1 && !(pad_buttons & south()) && !coop_btn[0]);
+    button(c2, SDL_GAMEPAD_BUTTON_SOUTH, false);
+    axis(c3, SDL_GAMEPAD_AXIS_LEFTX, 32767);
+    assert(input_active_pad() == c1 && pad_lx == 0);
+    axis(c3, SDL_GAMEPAD_AXIS_LEFTX, 0);
+    // a waiting pad's Plus held JOIN_HOLD_MS asks to join, as Player 2 (the first free); let go sooner, nothing
+    button(c2, SDL_GAMEPAD_BUTTON_START, true);
+    SDL_Delay(JOIN_HOLD_MS / 2);
+    input_pad_poll();
+    button(c2, SDL_GAMEPAD_BUTTON_START, false);
+    SDL_Delay(JOIN_HOLD_MS);
+    input_pad_poll();
+    assert(!want && coop_slot_of(c2) < 0);
+    button(c2, SDL_GAMEPAD_BUTTON_START, true);
+    SDL_Delay(JOIN_HOLD_MS + 50);
+    input_pad_poll();
+    assert(want == 1u << 1 && coop_slot_of(c2) == 0);
+    button(c2, SDL_GAMEPAD_BUTTON_START, false);
+    input_pad_poll();  // (asked, not in yet: his pad is kept)
+    assert(coop_slot_of(c2) == 0);
+    admit();
+    input_pad_poll();
+    assert(coop_slot_of(c2) == 0);
+    // in: his presses and stick are his, never the game's (Player 1's) pad
     button(c2, SDL_GAMEPAD_BUTTON_SOUTH, true);
     assert(input_active_pad() == c1 && !(pad_buttons & south()) && (coop_btn[0] & 1ull << BIND_A));
     button(c2, SDL_GAMEPAD_BUTTON_SOUTH, false);
     axis(c2, SDL_GAMEPAD_AXIS_LEFTX, 32767);
     assert(input_active_pad() == c1 && pad_lx == 0 && coop_axis[0][0] == 32767);
     axis(c2, SDL_GAMEPAD_AXIS_LEFTX, 0);
-    // the spare one still takes Player 1's pad; unplugged, Player 1 goes back to his first, not Player 2's
-    button(c3, SDL_GAMEPAD_BUTTON_SOUTH, true);
-    assert(input_active_pad() == c3 && (pad_buttons & south()));
-    button(c3, SDL_GAMEPAD_BUTTON_SOUTH, false);
-    assert(SDL_DetachVirtualJoystick(c3));
-    pump();
-    assert(input_active_pad() == c1 && coop_slot_of(c2) == 0);
-    assert(SDL_DetachVirtualJoystick(c1));
-    pump();
-    assert(input_active_pad() == 0 && coop_slot_of(c2) == 0);
-    // back to one player: Player 2's pad is let go but stays open, and a press makes it the game's
-    players = 1;
-    pump();
-    input_handle_event(&none);
-    assert(coop_slot_of(c2) < 0);
-    button(c2, SDL_GAMEPAD_BUTTON_SOUTH, true);
-    assert(input_active_pad() == c2 && (pad_buttons & south()));
-    button(c2, SDL_GAMEPAD_BUTTON_SOUTH, false);
-    assert(SDL_DetachVirtualJoystick(c2));
-    pump();
-    assert(input_active_pad() == 0);
-
-    // two players again before the pads come (set with the menu up: nothing reached input.c), then plugged in: the
-    // first is Player 1's, the second Player 2's - with an open of its own, so let go it stays open
-    players = 2;
-    SDL_JoystickID d1 = attach("late 1 (virtual)"), d2 = attach("late 2 (virtual)");
-    pump();
-    assert(input_active_pad() == d1 && coop_slot_of(d2) == 0);
-    // a quick tap on Player 2's pad - pressed and released before the events are read - still reaches him
-    SDL_Joystick *j2 = SDL_GetJoystickFromID(d2);
+    // a quick tap on his pad - pressed and released before the events are read - still reaches him
+    SDL_Joystick *j2 = SDL_GetJoystickFromID(c2);
     assert(SDL_SetJoystickVirtualButton(j2, SDL_GAMEPAD_BUTTON_SOUTH, true));
     SDL_UpdateJoysticks();
     assert(SDL_SetJoystickVirtualButton(j2, SDL_GAMEPAD_BUTTON_SOUTH, false));
     pump();
     assert(!(coop_btn[0] & 1ull << BIND_A) && (coop_tap[0] & 1ull << BIND_A));
-    players = 1;
-    input_handle_event(&none);
-    assert(coop_slot_of(d2) < 0 && SDL_GetGamepadFromID(d2));
-    button(d2, SDL_GAMEPAD_BUTTON_SOUTH, true);
-    assert(input_active_pad() == d2);
-    button(d2, SDL_GAMEPAD_BUTTON_SOUTH, false);
-    assert(SDL_DetachVirtualJoystick(d1) && SDL_DetachVirtualJoystick(d2));
+    // Minus held with L (a colour step): no leave, no ring
+    int colour = g_settings.coop_colour[1];
+    button(c2, SDL_GAMEPAD_BUTTON_BACK, true);
+    button(c2, SDL_GAMEPAD_BUTTON_LEFT_SHOULDER, true);
+    button(c2, SDL_GAMEPAD_BUTTON_LEFT_SHOULDER, false);
+    assert(g_settings.coop_colour[1] == (colour + COOP_COLOURS - 1) % COOP_COLOURS);
+    SDL_Delay(LEAVE_WAIT_MS + LEAVE_HOLD_MS + 50);
+    input_pad_poll();
+    assert(joined >> 1 & 1 && coop_leave_progress(2) == 0);
+    button(c2, SDL_GAMEPAD_BUTTON_BACK, false);
+    // Minus held on its own: no ring for LEAVE_WAIT_MS, then it fills over LEAVE_HOLD_MS, then he is out and his
+    // pad waits again
+    button(c2, SDL_GAMEPAD_BUTTON_BACK, true);
+    assert(coop_leave_progress(2) == 0);
+    SDL_Delay(LEAVE_WAIT_MS + LEAVE_HOLD_MS / 2);
+    input_pad_poll();
+    float half = coop_leave_progress(2);
+    assert(joined >> 1 & 1 && half > 0.2f && half < 0.8f);
+    SDL_Delay(LEAVE_HOLD_MS / 2 + 50);
+    input_pad_poll();
+    assert(!(joined >> 1 & 1));
+    button(c2, SDL_GAMEPAD_BUTTON_BACK, false);
+    input_pad_poll();
+    assert(coop_slot_of(c2) < 0 && input_active_pad() == c1);
+    // in again (its own number again: remembered as Player 2's); Player 1's pad unplugged: a waiting one takes over,
+    // never a player's
+    button(c2, SDL_GAMEPAD_BUTTON_START, true);
+    SDL_Delay(JOIN_HOLD_MS + 50);
+    input_pad_poll();
+    button(c2, SDL_GAMEPAD_BUTTON_START, false);
+    admit();
+    assert(coop_slot_of(c2) == 0);
+    assert(SDL_DetachVirtualJoystick(c1));
+    pump();
+    assert(input_active_pad() == c3 && coop_slot_of(c2) == 0);
+    // co-op set Off: Player 2's pad is let go but stays open, and a press makes it the game's
+    coop_on = false;
+    input_pad_poll();
+    assert(coop_slot_of(c2) < 0 && SDL_GetGamepadFromID(c2));
+    button(c2, SDL_GAMEPAD_BUTTON_SOUTH, true);
+    assert(input_active_pad() == c2 && (pad_buttons & south()));
+    button(c2, SDL_GAMEPAD_BUTTON_SOUTH, false);
+    // co-op on but not in play (the title, the file select): no one waits - a press takes the game's pad, as alone
+    coop_on = true, in_play = 0;
+    button(c3, SDL_GAMEPAD_BUTTON_SOUTH, true);
+    assert(input_active_pad() == c3 && coop_slot_of(c3) < 0);
+    button(c3, SDL_GAMEPAD_BUTTON_SOUTH, false);
+    assert(SDL_DetachVirtualJoystick(c2) && SDL_DetachVirtualJoystick(c3));
     pump();
     SDL_Quit();
     puts("PASS: press / stick on port 2 takes the game's pad and holds stay held; drift and in-use guard; unplug fallback;"
-         " co-op: another player's pad never the game's, pads plugged in after the count changed, quick taps");
+         " drop-in co-op: waiting pads reach nobody, Plus held joins, a player's pad never the game's, quick taps, Minus held"
+         " leaves (the ring's timing; not with a colour step), co-op off lets go");
     return 0;
 }
