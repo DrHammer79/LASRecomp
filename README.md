@@ -23,7 +23,7 @@ native Windows, macOS, Linux, Android and iOS application.
 > - Linux - x86-64, Vulkan graphics backend (AppImage)
 > - Android - arm64, Vulkan graphics backend
 > - iPhone and iPad - arm64, Metal graphics backend (sideloaded: see [iPhone and iPad](#iphone-and-ipad))
-> - Linux aarch64 (ARM) - **experimental**: the latest build is on the [Experimental builds](https://github.com/peiikai/LASRecomp/releases/tag/experimental) page; reports welcome
+> - Linux aarch64 (ARM) - **experimental**: on the [nightly](https://github.com/peiikai/LASRecomp/releases/tag/nightly) page; reports welcome
 >   ([docs/linux.md](docs/linux.md) lists what to include)
 
 ## This fork: local co-op
@@ -116,6 +116,10 @@ These are the minimums during the beta and may change as development continues.
 | GPU driver | Vulkan 1.3. Older Adreno phones ship a Vulkan 1.1 driver: pick a Turnip driver package in Settings > System. The latest we've tested is [Turnip 26.3.0 R6](https://github.com/StevenMXZ/Adreno-Tools-Drivers/releases/tag/v37) (`Turnip_v26.3.0-R6.zip`) from StevenMXZ's Adreno-Tools-Drivers |
 | RAM | 8 GB |
 | Storage | About 15 GB free |
+
+> [!NOTE]
+> Some Qualcomm (Adreno) GPU drivers have many bugs, even on newer phones. If you see graphical issues, try a Turnip
+> driver (Settings > System, see the GPU driver row above) before you open an issue report.
 
 > [!TIP]
 > We recommend turning on Dynamic resolution and choosing an FPS target. The resolution then adjusts to what your device

@@ -292,7 +292,8 @@ bool menu_handle_event(const SDL_Event *e) {
         if (e->key.scancode == SDL_SCANCODE_RETURN || e->key.scancode == SDL_SCANCODE_KP_ENTER) { g_kbd = 2; return true; }
         if (e->key.scancode == SDL_SCANCODE_ESCAPE) { g_kbd = 3; return true; }
     }
-    if (g_kbd.load() == 1 && e->type == SDL_EVENT_GAMEPAD_BUTTON_DOWN && e->gbutton.button == SDL_GAMEPAD_BUTTON_START) {
+    if (g_kbd.load() == 1 && e->type == SDL_EVENT_GAMEPAD_BUTTON_DOWN &&
+        e->gbutton.button == bind_ui_host(BIND_UI_OK)) {  // (LAS Menu's OK)
         g_kbd = 2;
         return true;
     }
@@ -391,8 +392,16 @@ bool menu_handle_event(const SDL_Event *e) {
             q.key = ImGuiKey_GamepadRStickUp; q.value = dir_value(4, axis, -1); push(q);
             q.key = ImGuiKey_GamepadRStickDown; q.value = dir_value(5, axis, 1); push(q);
             break;
-        case SDL_GAMEPAD_AXIS_LEFT_TRIGGER: q.key = ImGuiKey_GamepadL2; q.value = axis_max(axis, 1); push(q); break;
-        case SDL_GAMEPAD_AXIS_RIGHT_TRIGGER: q.key = ImGuiKey_GamepadR2; q.value = axis_max(axis, 1); push(q); break;
+        case SDL_GAMEPAD_AXIS_LEFT_TRIGGER: case SDL_GAMEPAD_AXIS_RIGHT_TRIGGER: {
+            bool left = axis == SDL_GAMEPAD_AXIS_LEFT_TRIGGER, tdown;
+            ImGuiKey tk;  // (a LAS Menu action on a trigger: pad_nav.h)
+            if (ui_pad_trigger(e->gaxis.which, axis, e->gaxis.value, &tk, &tdown)) {
+                QEvent t = {}; t.kind = QEvent::KEY; t.key = tk; t.down = tdown; push(t);
+            }
+            // (the analog value: the most pushed of every controller's - axis_max, as the sticks)
+            q.key = left ? ImGuiKey_GamepadL2 : ImGuiKey_GamepadR2; q.value = axis_max(axis, 1); push(q);
+            break;
+        }
         default: break;
         }
         return true;
