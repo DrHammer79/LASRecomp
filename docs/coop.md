@@ -107,6 +107,14 @@ too"). There is no player count to set: as many play as there are controllers.
   32 s with and without); the grass test with seven benched (their cameras not
   updating) - nothing came back in view, as with co-op off; a Game Over and
   Continue - all killed, made again, Player 2 back.
+  A switched-off actor is still drawn, as its model last was - the model
+  follows the actor's position in his update. So a player who leaves (`coop_leave`:
+  `bench` settling) keeps updating, parked, for `BENCH_SETTLE` (3) frames - his
+  model goes down with him - and only then is switched off (`coop_tick`). Switched
+  off at once, he stood drawn where he left, his colour gone (user 2026-11-16:
+  "Still leaving old links that never joined on leaving";
+  `tools/coop_tests/stray.sh`: player 3 joins, leaves, Player 1 walks away, 3
+  joins again). Those benched as they are made were never drawn: off at once.
 - The join itself (`coop_join`, game thread, `joins_tick`): once Player 1 is on
   his feet in play (no event, walk-in or level change: `link_state_kind` 0). His
   benched Link is woken (`wake`: switched on - the actor's virtual `+0xc8` - with
@@ -125,10 +133,10 @@ too"). There is no player count to set: as many play as there are controllers.
   setter (`COOP_SET_PLAYER`, `main+0x8387c0`, a reference to him held
   meanwhile). The new Link is then put beside Player 1 (`ride_on_host`). (Its
   hookshot goes through the enemies until the next level load.)
-- Leaving: a player's Minus held on its own: after 0.3 s (`LEAVE_WAIT_MS`) a
-  ring over his Link fills in his colour for 2.5 s (`LEAVE_HOLD_MS`), then he
-  is out - 3.1 s in all. Any other button pressed with it ends that hold
-  without leaving, and a colour change (below) done within the 0.3 s shows no
+- Leaving: a player's Minus held on its own: after 0.33 s (`LEAVE_WAIT_MS`) a
+  ring over his Link fills in his colour for 2 s (`LEAVE_HOLD_MS`), then he
+  is out - 2.33 s in all. Any other button pressed with it ends that hold
+  without leaving, and a colour change (below) done within the 0.33 s shows no
   ring. The ring's fill is worked out from when Minus went down as it is drawn
   (`coop_leave_progress`, `runtime/ui/coop_hud.mm`, with either hearts
   setting): kept by the controllers' poll, it moved only as often as that ran
@@ -300,6 +308,18 @@ which walks Player 1 on. Indoors every camera has it set, so only Player 1's
 camera answers (`COOP_CAMERA_SCROLL_SITE`). The mod renamed the ZeldaScroll
 event for this. The recompiled code can't catch the game's "not found" throw
 that renaming causes, so `COOP_SCROLL_SITE` leaves the event alone.
+The benched Links' cameras listen too: the manager calls every camera, so
+skipping a benched camera's update doesn't stop it answering. They never get the
+level's set-up (`camera_setup_tick` is for the players in), so `+0x515` stays
+set, in the Field as well. Right after each load one of them answered a new
+scroll area, and the scroll event walked Player 1 half a tile on - alone, with
+co-op on (user 2026-11-16: "Main link keeps walking to the right weirdly"). The
+event's steps: a level jump within the level, then an event action
+(main+0x111400: `direction`, `speed`, `distance`, `timeOut`) walks Link through
+main+0xd6eb50 into the walk-in (main+0xd555b0: state 0x10, 2.25 a second). So
+"only Player 1's camera answers" holds whenever other Links exist, benched ones
+too (hook 25 is an `alone_hook` while any is benched; `tools/coop_tests/crowd.sh`:
+alone, Player 1 stays on the spawn and walks as with co-op off).
 
 **The cameras' level set-up** (`camera_setup_tick`, 2026-11-15). As a level
 starts, the game sets up the camera of the game manager's Link only

@@ -56,7 +56,8 @@ static uint64_t g_extra[COOP_MAX];  // players 2..8: their Link actors ([0] unus
 // switched off until he joins (wake) - the game makes Links as levels load; one made in play missed what the load
 // gives the actors made then (his hookshot went through the enemies: docs/coop.md, "The hookshot and the boomerang")
 static uint64_t g_bench[COOP_MAX];
-static void bench(Cpu *c, int i, uint64_t link);
+static uint64_t g_bench_settle[COOP_MAX];  // (one who just left: his update runs till this frame, then off - bench)
+static void bench(Cpu *c, int i, uint64_t link, bool settle);
 static int g_creating = -1;         // the player coop_create is making a Link for (-1: none)
 static int g_placing = -1;          // the player coop_place is placing (-1: none)
 static uint32_t g_pad_limit = 1;    // the controller manager's player limit as last set (COOP_PAD_STATE_SITE)
@@ -70,6 +71,7 @@ RT_ON_RESET(coop_reset) {
     g_joined = 1, g_join_want = g_leave_want = 0;
     memset(g_extra, 0, sizeof g_extra);
     memset(g_bench, 0, sizeof g_bench);
+    memset(g_bench_settle, 0, sizeof g_bench_settle);
     g_creating = g_placing = -1;
     g_pad_limit = 1;
     g_entering = 0;
@@ -229,6 +231,8 @@ static bool alone_hook(int which) {
     // updates are skipped while they are; the update's end clears what its start set)
     case 0: return coop_enabled() || bench_any();
     case 15: case 16: return bench_any() || ENV("LARECOMP_COOP_TRACE") || ENV("LARECOMP_TRACK_RESPAWN");
+    // (another Link's camera doesn't scroll the screen - the benched have theirs too: camera_scroll)
+    case 25: return bench_any();
     // (co-op on, Player 1 alone so far: the actors and their parts are kept as they are made, so that one who joins
     // mid-level finds them known - the enemies already there go after him too)
     case 51: case 52: case 53: case 54: case 55: case 56: case 57: return coop_enabled();
@@ -321,7 +325,10 @@ int rt_coop_hook(Cpu *c, int which) {
         if (!on_game_thread()) return 0;
         uint64_t a = heap_ptr(c->x[0]) ? LD64(c->x[0] + 8) : 0;
         g_updating = heap_ptr(a) ? a : 0;
-        if (g_updating && bench_of(g_updating)) return skip_update(c);  // (a benched Link, his camera, his items)
+        if (g_updating) {  // (a benched Link, his camera, his items - not while he settles: bench)
+            int b = bench_of(g_updating);
+            if (b && !g_bench_settle[b]) return skip_update(c);
+        }
         // A Link's (only Links are lost: another actor made where a Link was isn't one of them): off the map after
         // falling through it (lost_tick)
         if (rt_coop_on() && g_updating && LD64(g_updating) == GA(PLAYER_VTABLE) && lost_away(g_updating))
@@ -645,18 +652,28 @@ static void activate(Cpu *c, uint64_t actor, const char *what) { activate_as(c, 
 // Player i + 1's Link benched (g_bench, from g_extra or just made): parked out of sight (y -1000, as a lost player is:
 // his update doesn't run, so he stays) and switched off with his own items (the actor's virtual +0xc0: flags +0x40
 // &= ~0x700, its components' too - their collision off). Woken (wake) as he joins.
-static void bench(Cpu *c, int i, uint64_t link) {
+//
+// Switched off, a Link is still drawn - as his model last was: his update sets it, and his update is skipped while
+// benched. One who played (settle: a leave) would stand where he left, seen as a Link that never joined (user
+// 2026-11-16: "Still leaving old links ... on leaving"; tools/coop_tests/stray.sh). So his update runs on for
+// BENCH_SETTLE frames, parked - his model goes down with him - and only then is he switched off (coop_tick:
+// g_bench_settle). One just made (a load: coop_create) or switched on by a load (coop_tick) has no model drawn up
+// there: switched off at once.
+#define BENCH_SETTLE 3  // (frames; 1 was enough in the test - the update that reads the parked position)
+static void bench(Cpu *c, int i, uint64_t link, bool settle) {
     uint64_t q = collision_of(link);
     if (q) ST32(q + 0x84, 0xc47a0000u), ST32(link + 0x1b44, 0xc47a0000u);
+    g_bench[i] = link;
+    g_bench_settle[i] = settle ? renderer_present_count() + BENCH_SETTLE : 0;
+    CLOG("[coop] player %d's Link %#llx benched%s\n", i + 1, (unsigned long long)link, settle ? " (settling)" : "");
+    if (settle) return;
     activate_as(c, link, "Link", false);
     for (int k = 0; k < PLAYER_ITEMS; k++)
         if (g_items[i][k]) activate_as(c, g_items[i][k], (const char *)(uintptr_t)(g_items[i][k] + 0x18), false);
-    g_bench[i] = link;
-    CLOG("[coop] player %d's Link %#llx benched\n", i + 1, (unsigned long long)link);
 }
 static void wake(Cpu *c, int i) {
     uint64_t link = g_bench[i];
-    g_bench[i] = 0;
+    g_bench[i] = 0, g_bench_settle[i] = 0;
     g_extra[i] = link;
     activate(c, link, "Link");
     for (int k = 0; k < PLAYER_ITEMS; k++)
@@ -714,7 +731,7 @@ static bool coop_join(Cpu *c, int i) {
 // waits again (input.c).
 static void coop_leave(Cpu *c, int i) {
     uint64_t link = g_extra[i];
-    if (link && LD64(link) == GA(PLAYER_VTABLE)) bench(c, i, link);
+    if (link && LD64(link) == GA(PLAYER_VTABLE)) bench(c, i, link, true);
     slot_reset(i);
     joined_set(g_joined & ~(1u << i));
     LOG("[coop] player %d left\n", i + 1);
@@ -742,7 +759,7 @@ static void joins_tick(Cpu *c, bool play) {
 static void play_ended(Cpu *c) {
     for (int i = 1; i < COOP_MAX; i++) {
         if (g_bench[i] && !g_extra[i]) g_extra[i] = g_bench[i];  // (a benched one: killed the same way)
-        g_bench[i] = 0;
+        g_bench[i] = 0, g_bench_settle[i] = 0;
         if (!g_extra[i] || LD64(g_extra[i]) != GA(PLAYER_VTABLE)) continue;
         CLOG("[coop] play ended: player %d's Link %#llx killed\n", i + 1, (unsigned long long)g_extra[i]);
         kill_link(c, i);
@@ -785,6 +802,36 @@ void coop_level_change(const char *level, const char *locator) {
 }
 
 // Once per frame on the game thread (runtime/hle/input.c, npad 1's poll).
+// LARECOMP_COOP_LOG: every 30 frames, each player's position and the camera - with Player 1 alone
+// too (user 2026-11-16: Player 1 walked right on his own with nobody joined: docs/coop.md, Camera areas).
+static void coop_log_line(void) {
+    static uint64_t next;
+    uint64_t frame = renderer_present_count();
+    if (ENV("LARECOMP_COOP_LOG") && frame >= next) {
+        next = frame + 30;
+        char line[512];
+        int k = snprintf(line, sizeof line, "[coop] frame %llu", (unsigned long long)frame);
+        // (k: what snprintf would have written - past the end once a part is cut short: kept to the line from then on)
+#define LINE_K(n) (k = k + (n) < (int)sizeof line ? k + (n) : (int)sizeof line - 1)
+        for (int i = 0; i < (g_n > 0 ? g_n : 1) && k < (int)sizeof line - 40; i++) {  // (Player 1 alone: g_n can be 0)
+            float p[3] = {0};
+            player_pos(coop_player(i), p);
+            LINE_K(snprintf(line + k, sizeof line - k, " P%d (%.2f %.2f %.2f)", i + 1, p[0], p[1], p[2]));
+        }
+        float hp[3], v[3], sx = 0, sy = 0;
+        if (g_cam[0] && player_pos(host_player(), hp)) {
+            cam_view(g_cam[0], hp, v);
+            bool on = coop_project(hp, 1280, 720, &sx, &sy);
+            LINE_K(snprintf(line + k, sizeof line - k, " | cam %#llx P1 view (%.2f %.2f %.2f) screen %d (%.0f %.0f) fovy %.3f",
+                            (unsigned long long)g_cam[0], v[0], v[1], v[2], on, sx, sy,
+                            *(const float *)(uintptr_t)(g_cam[0] + 0x564)));
+        }
+        if (g_zoom != 1.0f) LINE_K(snprintf(line + k, sizeof line - k, " zoom %.3f", g_zoom));
+#undef LINE_K
+        LOG("%s\n", line);
+    }
+}
+
 void coop_tick(Cpu *c) {
     g_game_thread = pthread_self(), g_game_thread_known = true;
     tunic_tick();
@@ -838,20 +885,26 @@ void coop_tick(Cpu *c) {
     joins_tick(c, play);
     // The benched kept switched off: a level load switches on every actor it has (the actors' virtual +0xc8, flags
     // 0x700) - benched as the file loaded, they were on again a moment later, standing where they were made (user
-    // 2026-11-16: a player who left vanished, the others stayed); a level change does it too.
+    // 2026-11-16: a player who left vanished, the others stayed); a level change does it too. One who just left is
+    // switched off once his model has gone down with him (bench: settle).
     for (int i = 1; i < COOP_MAX; i++) {
         uint64_t b = g_bench[i];
         if (!b || LD64(b) != GA(PLAYER_VTABLE)) continue;
+        if (g_bench_settle[i]) {
+            if (renderer_present_count() >= g_bench_settle[i]) bench(c, i, b, false);
+            continue;
+        }
         bool on = (LD32(b + 0x40) & 0x600) != 0;
         for (int k = 0; k < PLAYER_ITEMS && !on; k++)
             on = g_items[i][k] && (LD32(g_items[i][k] + 0x40) & 0x600);
         if (on) {
             CLOG("[coop] player %d's benched Link switched on (frame %llu): off again\n", i + 1,
                  (unsigned long long)renderer_present_count());
-            bench(c, i, b);
+            bench(c, i, b, false);
         }
     }
     g_hud_host = host_player(), g_hud_cam = view_camera();  // (for the HUD: as the frame starts)
+    coop_log_line();
     if (!rt_coop_on()) return;
     camera_setup_tick();
     p1_event_tick();
@@ -906,29 +959,5 @@ void coop_tick(Cpu *c) {
         // both sticks pressed in: back to Player 1 (the mod's CheckAndTeleport)
         uint64_t b = input_coop_buttons(i);
         if ((b & 0x30) == 0x30) ride_on_host(i);
-    }
-    static uint64_t next;
-    if (ENV("LARECOMP_COOP_LOG") && frame >= next) {
-        next = frame + 30;
-        char line[512];
-        int k = snprintf(line, sizeof line, "[coop] frame %llu", (unsigned long long)frame);
-        // (k: what snprintf would have written - past the end once a part is cut short: kept to the line from then on)
-#define LINE_K(n) (k = k + (n) < (int)sizeof line ? k + (n) : (int)sizeof line - 1)
-        for (int i = 0; i < g_n && k < (int)sizeof line - 40; i++) {
-            float p[3] = {0};
-            player_pos(coop_player(i), p);
-            LINE_K(snprintf(line + k, sizeof line - k, " P%d (%.2f %.2f %.2f)", i + 1, p[0], p[1], p[2]));
-        }
-        float hp[3], v[3], sx = 0, sy = 0;
-        if (g_cam[0] && player_pos(host_player(), hp)) {
-            cam_view(g_cam[0], hp, v);
-            bool on = coop_project(hp, 1280, 720, &sx, &sy);
-            LINE_K(snprintf(line + k, sizeof line - k, " | cam %#llx P1 view (%.2f %.2f %.2f) screen %d (%.0f %.0f) fovy %.3f",
-                            (unsigned long long)g_cam[0], v[0], v[1], v[2], on, sx, sy,
-                            *(const float *)(uintptr_t)(g_cam[0] + 0x564)));
-        }
-        if (g_zoom != 1.0f) snprintf(line + k, sizeof line - k, " zoom %.3f", g_zoom);
-#undef LINE_K
-        LOG("%s\n", line);
     }
 }

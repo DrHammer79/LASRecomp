@@ -33,7 +33,7 @@ static int coop_create(Cpu *c) {
     }
     g_creating = -1;
     for (int i = 1; i < COOP_MAX; i++)  // (those not in: benched as made - after Player 1's, the scene's own)
-        if (g_extra[i] && !(g_joined >> i & 1)) bench(c, i, g_extra[i]), g_extra[i] = 0;
+        if (g_extra[i] && !(g_joined >> i & 1)) bench(c, i, g_extra[i], false), g_extra[i] = 0;
     CLOG("[coop] creator: player 1 Link %#llx\n", (unsigned long long)host_player());
 
     return 2;  // (to the creator's ret)

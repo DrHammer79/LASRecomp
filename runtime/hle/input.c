@@ -729,10 +729,11 @@ bool input_assign_event(const SDL_Event *e) {
 // his controller goes back to waiting once he is out (coop_drop_poll). A player's Minus held on its own asks to leave:
 // after LEAVE_WAIT_MS a ring fills over his Link for LEAVE_HOLD_MS (coop_leave_progress, runtime/ui/coop_hud.mm), then
 // he is out; Minus with L or R steps his tunic colour, and no leave comes of that hold - nor a ring, done within the
-// wait. (Players 2..8's Plus and Minus never reach the game: coop_fill.) UI thread. (Times: user 2026-11-15)
+// wait. (Players 2..8's Plus and Minus never reach the game: coop_fill.) UI thread. (Times: user 2026-11-15; the
+// leave's 0.33 s and 2 s: user 2026-11-17)
 #define JOIN_HOLD_MS 750
-#define LEAVE_WAIT_MS 300
-#define LEAVE_HOLD_MS 2500
+#define LEAVE_WAIT_MS 330
+#define LEAVE_HOLD_MS 2000
 extern void coop_join_want(int player_index), coop_leave_want(int player_index);
 static _Atomic uint64_t minus_since[COOP_PADS];  // (Minus went down on that player's controller, SDL ms; 0: up)
 static _Atomic bool minus_spoiled[COOP_PADS];     // (another button with it this hold: no leave)
