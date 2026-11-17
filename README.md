@@ -48,19 +48,21 @@ co-op branch is kept on top of it. It calls itself LAS Recomp Co-Op (0.1.0): the
 **Playing**
 1. This fork has no prebuilt releases: build it as in [Building from source](#building-from-source), with your own game
    files, as for upstream. Co-op needs game version 1.0.1 or 1.1.0 (on 1.0.0 its option is greyed out).
-2. Connect a controller for each player, up to 8.
-3. In the menu's Controls tab, under Co-op, set Players. For each player, choose "Player N controller" and press a
-   button on that player's controller.
-4. Load a save: the other Links join from the next file loaded.
+2. In the menu's Controls tab, under Co-op, turn Local co-op On.
+3. Load a save. Player 1 plays as usual (a controller, or the keyboard).
+4. To join, hold Plus on another controller for 3/4 of a second: a Link in that player's colour appears beside
+   Player 1. Up to 8 players.
+5. To leave, hold Minus on your controller: a ring fills over your Link, and when it's full you're out. Minus with
+   L or R changes your colour.
 
 **Settings** (Controls tab, right under Inputs)
 
 | Option | What it does | Default |
 |---|---|---|
 | **Co-op** | | |
-| Players | 1 is off; 2 to 8 Links from the next file loaded | 1 |
-| Player N color | each player's colour: Green, Red, Blue, Yellow, Purple, Pink, Black or White | all different |
-| Player N controller | choose it, then press a button on that player's controller | none |
+| Local co-op | On: in play, other controllers join with Plus (held 3/4 of a second) and leave with Minus (held) | Off |
+| Player N color | each player's colour: Green, Red, Blue, Yellow, Purple, Pink, Black or White (Minus with L / R in play) | all different |
+| Player N controller | optional: choose it, then press a button on the controller that player should use (otherwise a controller becomes the player it joins as, and is remembered) | none |
 | **Co-op hearts** | | |
 | Hearts | Shared: the game's one set. Each player's own: a hit costs only that player's hearts, and hearts picked up go to everyone | each player's own |
 | Out of hearts | Knocked out: lie down until a teammate holds A beside you (or Player 1 reaches a new room), back with 30% of full hearts. Game over for all: as when Player 1 runs out | knocked out |
