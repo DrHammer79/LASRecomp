@@ -442,12 +442,14 @@ int rt_coop_hook(Cpu *c, int which) {
         c->x[20] = (uint32_t)got;
         return 0;
     }
-    case 50:  // COOP_RESTART_SITE - ldr x1, [x20, #0x4a8]: a Link's update (x19) looks up the player entity
-        // The game keeps the save's restart point in the player entity's object (+0x680: the spot on safe ground, snapped
-        // to 0.75; +0x690 the facing; +0x694 set), which each Link's update writes (main+0xd355c0) - every Link's, so it
+    case 50:  // COOP_RESTART_SITE - ldr x1, [x20, #0x4a8]: a Link's update (x19) looks up the scene
+        // The game keeps the save's restart point in the scene - the game manager's +0x4a8 is the game state machine,
+        // its +0x88 the scene, through main+0x11b70 (first taken for a "player entity": las-internals) - at +0x680 (the
+        // spot on safe ground, snapped to 0.75; +0x690 the facing; +0x694 set), which each Link's update writes
+        // (main+0xd355c0) - every Link's, so it
         // was the last one updated, the first one made: a save with him away restarted Player 1 on his spot, and one with
         // him fallen through the ground had Link falling forever (user 2026-10-28). The save copies it (main+0xdfc710 ->
-        // main+0xdfcb90, file +0x559c). Another player's Link finds no entity there, the game's own path for that
+        // main+0xdfcb90, file +0x559c). Another player's Link finds no scene there, the game's own path for that
         // (main+0xd35788 cbz): only Player 1's keeps the restart point, as alone. (Until 2026-11-13 the others' 19
         // position copies were held on Player 1's spot while the pause menu was open.)
         if (!coop_index(c->x[19])) return 0;

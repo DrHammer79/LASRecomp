@@ -7,7 +7,7 @@
 
 // The creator, once for each other player, then for Player 1 - last: the scene's camera is the last Link's (made first,
 // the camera wasn't his), and it leaves the game manager's player (+0x4b8) on him. (Each Link's update writes the
-// save's restart point into the player entity's object - only Player 1's does: COOP_RESTART_SITE.)
+// save's restart point into the scene - only Player 1's does: COOP_RESTART_SITE.)
 //
 // With co-op on, every other player gets one - those who aren't in benched (bench: parked, switched off, their updates
 // skipped) until they join (coop_join wakes theirs): drop-in co-op's Links are made as the level loads, as the game

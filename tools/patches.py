@@ -1237,8 +1237,9 @@ _COOP_HOOKS = {
     # (rt_coop_damage) is here, not at the lsl: there, Player 1's hits were halved and the others' weren't (user
     # 2026-11-02, "P1 takes hardly any damage, and other players take full damage").
     A.COOP_DAMAGE_HALVED_SITE: (0x79410908, (), 'ldrh w8, [x8, #0x84]: an enemy\'s hit (w20), after its halving'),
-    # A Link's update (main+0xd355c0, x19 the Link) looks up the player entity's object (the game manager's +0x4a8,
-    # main+0x11b70) and keeps his spot on safe ground in it (+0x680, snapped; +0x690 his facing; +0x694 set): the
+    # A Link's update (main+0xd355c0, x19 the Link) looks up the scene (the game manager's +0x4a8 is the game state
+    # machine, its +0x88 the scene, through main+0x11b70; the description below says "player entity", the older
+    # reading - kept, as it is in the generated code) and keeps his spot on safe ground in it (+0x680, snapped; +0x690 his facing; +0x694 set): the
     # save's restart point (main+0xdfc710 -> main+0xdfcb90, file +0x559c). Every Link did, so it was the last one
     # updated - the first one made. Only Player 1's finds the object.
     A.COOP_RESTART_SITE: (0xf9425681, (), 'ldr x1, [x20, #0x4a8]: a Link\'s update looks up the player entity (its restart point)'),

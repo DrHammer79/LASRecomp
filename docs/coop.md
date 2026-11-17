@@ -53,7 +53,7 @@ seen updating in the last 2 s), and one not taken back was parked under the
 map, its update skipped, with co-op off too (`g_leftover`); one not taken back
 in time copied Player 1. And with co-op turned off at a Game Over, the game's
 own creator made no Link (a crash just after it, `main+0x83a5a4`). A note on
-what was looked at first: the player entity (the game manager's `+0x4a8`)
+what was looked at first: the scene (the game manager's `+0x4a8`, then taken for a player entity)
 seemed to hold three references to the first Link made (`+0x208`, `+0x2e8`,
 `+0x3c8`). It doesn't: those lie in other objects (each with its vtable and a
 pointer to itself at `+0x1c0`, `+0x2a0`, `+0x380`: that Link's own
@@ -1185,19 +1185,20 @@ another player far away restarted Player 1 on that player's spot, and one
 saved with him fallen through the ground loaded with Link falling forever at
 the map's origin (the user's two files, 2026-10-28: restart point y -7). Found
 on 2026-11-13, as upstream's review (item 2) asked:
-- The save copies the restart point (file `+0x559c`) from the player
-  entity's object: the game manager's `+0x4a8` is the player entity,
-  `main+0x11b70` gives its object (`+0x88`), and `main+0xdfc710` ->
-  `main+0xdfcb90` copies the object's `+0x680` (the spot, snapped to 0.75)
-  when its `+0x694` is set, else `+0x660` (the arrival point).
-- Each Link's update (`main+0xd355c0`, x19 the Link) looks up that object
+- The save copies the restart point (file `+0x559c`) from the scene: the
+  game manager's `+0x4a8` is the game state machine, `main+0x11b70` gives
+  its scene (`+0x88`; first taken for a "player entity" and its object),
+  and `main+0xdfc710` -> `main+0xdfcb90` copies the scene's `+0x680` (the
+  spot, snapped to 0.75) when its `+0x694` is set, else `+0x660` (the
+  arrival point).
+- Each Link's update (`main+0xd355c0`, x19 the Link) looks up the scene
   (`ldr x1, [x20, #0x4a8]` at `main+0xd35778`, then `main+0x11b70`) and,
   standing on safe ground, writes its own spot into `+0x680` (and its facing
   `+0x690`, `+0x694` set). Every Link did, so it was the last one updated:
   the first one made (Player 1's is made last). Found by watching the save
-  buffer's `+0x559c` being written (`LARECOMP_WATCH_ADDR`), then the object's
+  buffer's `+0x559c` being written (`LARECOMP_WATCH_ADDR`), then the scene's
   `+0x680`.
-- At `COOP_RESTART_SITE` another player's Link finds no entity, and the game's own path for no object (`cbz` at
+- At `COOP_RESTART_SITE` another player's Link finds no scene, and the game's own path for none (`cbz` at
   `main+0xd35788`) skips that part of his update: only Player 1's keeps the
   restart point, as alone. Checked with `tools/coop_tests/savetest.sh`: 2
   players, Player 1 at 197.62 and Player 2 9 units away: the file holds
@@ -1252,7 +1253,7 @@ the game's reads of it by the RomFS index's patch list, while co-op is on
 | COOP_TILE_PLAYER_SITE | 0x7000b01c70 | ldr x8, [x20, #0x4b8] | a collapse tile measures the player nearest it (39) |
 | COOP_LIKELIKE_SITE_0..8 | 0x70004a65f4, a7040, a7fb8, a89f4, a8ce8, a9400, a9898, aac54, ab1f0 | ldr x22/x21/x9/x8, [x20 or x21, #0x4b8] | a Like Like's "Link" is the player it goes for (40-48) |
 | COOP_DAMAGE_HALVED_SITE | 0x7000d4c750 | ldrh w8, [x8, #0x84] | an enemy's hit split after the game halves it (49) |
-| COOP_RESTART_SITE | 0x7000d35778 | ldr x1, [x20, #0x4a8] | a Link's update looks up the player entity, for the save's restart point: only Player 1's finds it (50) |
+| COOP_RESTART_SITE | 0x7000d35778 | ldr x1, [x20, #0x4a8] | a Link's update looks up the scene, for the save's restart point: only Player 1's finds it (50) |
 | COOP_ACTOR_TYPE_SITE | 0x700001be64 | strh w8, [x19, #0xa0] | an actor made: kept with its type (51) |
 | COOP_ACTOR_GONE_SITE | 0x7000fa7970 | stp x22, x21, [sp, #-0x30]! | an actor's base destructor: forgotten (52) |
 | COOP_PART_SITE_0..2 | 0x700012fb5c, 0x7000c53ac0, 0x7000e24c1c | str x8, [x19 / x20 / x22] | a reaction component, an effect player made: kept (53-55) |
