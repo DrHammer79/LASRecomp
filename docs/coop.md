@@ -11,8 +11,10 @@ Everything is in `runtime/hle/coop.c` (game logic: laid out in parts,
 `runtime/hle/coop/*.inc` - hearts, camera, players, targets, spawn, events,
 field - included by it in order as one translation unit, since they share the
 players' state and each other's helpers), `runtime/ui/coop_hud.mm`
-(the other players' hearts, the "Zzz" bubbles) and hook sites in
-`tools/patches.py` (`_COOP_HOOKS`). Co-op is off by default: with
+(the other players' hearts, the "Zzz" bubbles) and hook sites in the game
+code generator - `runtime/gen/patches.cpp` (the C++ one every build and the
+app's setup run) and `tools/patches.py` (`_COOP_HOOKS`; the Python one it is
+checked against, byte for byte: `tools/test_gen_cpp.py`). Co-op is off by default: with
 `coop_players = 1`, every hook returns 0 and runs its own instruction, so the
 game plays exactly as without the feature. Turned on, it stays dormant - the
 same - while Player 1 plays alone (until someone joins: "Drop-in") - unless "Zoom out" is set to
@@ -491,9 +493,10 @@ from its game manager's player slot (`[GAME_MGR]+0x4b8`). Every 64-bit load
 at `+0x4b8` in the main program - 696 in 1.0.1, 531 of them with the game
 manager as their base as a pass through each function sees it, the rest with
 a base it couldn't follow; no `ldp` reaches it - is listed in
-`runtime/game_addresses/coop_player_reads_v1_0_1.txt` (made by
+`runtime/game_addresses/coop_player_reads_v1_0_1.h` (made by
 `tools/coop_player_reads.py` from the game's main) and replaced
-(`tools/patches.py` `_player_read`) by a call that loads the slot and asks
+(`runtime/gen/patches.cpp` `player_read`, `tools/patches.py` `_player_read`: both read that
+file) by a call that loads the slot and asks
 `rt_coop_player(base, value)`. It gives the Link the updating enemy goes for
 (`g_as_link`, set by `actor_exec_begin`, cleared by `actor_exec_end`) only on
 the game thread and only when the base is the game manager; any other read -
@@ -727,7 +730,8 @@ and zoomed out the view had reached past the screens made.
 - **Shared:** the game's one set, as without co-op.
 - **Each player's own:** Player 1 keeps the game's hearts (PlayerStatus `+0x84`)
   and its HUD; the others' hearts are in coop.c. The damage patches
-  (`DAMAGE_*` in `tools/patches.py`) call `rt_coop_damage_of(c, rt_damage(...),
+  (`damage_lsl` / `damage_fixed` in `runtime/gen/patches.cpp`, `DAMAGE_*` in
+  `tools/patches.py`) call `rt_coop_damage_of(c, rt_damage(...),
   link)`, and a hit on players 2.. comes off their own hearts. The Link hit is
   the one the game's code holds: the enemy-hit function's x21
   (`COOP_DAMAGE_HALVED_SITE`, or the third lsl site where a version has no

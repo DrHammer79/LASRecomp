@@ -4,6 +4,7 @@ Widescreen: the game's camera code loads a 16:9 aspect-ratio literal (0x70016afb
 projection aspect. These loads are redirected to rt_aspect_site(), which returns the aspect for the
 current output shape (or 16:9) per site, so only the 3D cameras widen.
 """
+import re
 import struct
 from game_addresses import ADDRESS as A, addr_text
 
@@ -1272,8 +1273,9 @@ HOOKS.update({a: h for a, h in _COOP_HOOKS.items() if a})
 
 # ---- local co-op: "Link" for an enemy. The game's code reads "Link" from its game manager's player slot (+0x4b8);
 # with co-op an enemy goes for the player nearest it, so while one updates its reads have to give that player. Each
-# `ldr xT, [xN, #0x4b8]` of the main program (runtime/game_addresses/coop_player_reads_<version>.txt, made by
-# tools/coop_player_reads.py) is rt_coop_player(xN) (runtime/hle/coop.c), which loads it - or gives the Link to use: with co-op off, off the game
+# `ldr xT, [xN, #0x4b8]` of the main program (runtime/game_addresses/coop_player_reads_<version>.h, made by
+# tools/coop_player_reads.py; runtime/gen/patches.cpp includes the same file) is rt_coop_player(xN)
+# (runtime/hle/coop.c), which loads it - or gives the Link to use: with co-op off, off the game
 # thread, outside an enemy's update or for another object's +0x4b8 (it checks xN is the game manager), what the slot
 # holds. The slot itself is never written. Not the sites that are hooks already (the Like Like's, the collapse tile's,
 # the placement's: those decide for themselves).
@@ -1289,13 +1291,13 @@ def _player_reads():
     import game_addresses
     if not A.COOP_ACTOR_EXEC_SITE:  # (a version without co-op: no list)
         return {}
-    # (beside the address tables: in the repository, or bundled with the generator - game_addresses.TABLE_DIR)
-    path = game_addresses.TABLE_DIR / f'coop_player_reads_{game_addresses.SELECTED}.txt'
+    # (beside the address tables: game_addresses.TABLE_DIR; its COOP_PLAYER_READ(<address>, <word>) lines)
+    path = game_addresses.TABLE_DIR / f'coop_player_reads_{game_addresses.SELECTED}.h'
     reads = {}
     for line in open(path):  # (missing: an error - without it the enemies would all go for Player 1, silently)
-        if line.strip() and not line.startswith('#'):
-            a, w = line.split()[:2]
-            reads[int(a, 16)] = int(w, 16)
+        m = re.match(r'COOP_PLAYER_READ\((0x[0-9a-f]+), (0x[0-9a-f]+)\)', line)
+        if m:
+            reads[int(m[1], 16)] = int(m[2], 16)
     assert reads, f'{path}: no reads listed'
     return reads
 

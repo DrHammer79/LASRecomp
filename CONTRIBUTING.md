@@ -17,7 +17,8 @@ Nothing owned by Nintendo may ever be committed or attached to an issue or pull 
 - no copies of the game in any form
 - no extracted game files (`extracted/`), no generated code (`generated/`), no fonts (`.bfttf` / Switch `.ttf`)
 - no game assets of any kind: textures, models, music, text, level files - also not "just one file for testing"
-- no randomizer seed folders (`rando/`) - they contain modified game files; share the **seed ID** instead
+- no randomizer seed folders (`rando/`) - they hold data built from the game's files (older ones: modified game
+  files); share the **seed ID** instead
 
 Pull requests that include Nintendo files can't be merged. Screenshots and short clips of the game in bug reports are fine.
 
@@ -58,9 +59,9 @@ if it has moved since you branched.
 
 See the README's "Building from source" for macOS, [docs/BUILD-windows.md](docs/BUILD-windows.md) for Windows,
 [docs/linux.md](docs/linux.md) for Linux and [docs/android.md](docs/android.md) for Android.
-In short: set up your own game files (v1.0.0, v1.0.1 or v1.1.0) on the start screen, `make gen` once to recompile the game code from
-them, then `make -j10`. The randomizer needs its Python environment in
-`third_party/LAS-Randomizer/venv`.
+In short: put your own game files (v1.0.0, v1.0.1 or v1.1.0) in `extracted/` (`exefs/` and `romfs/`), `make -j10`, `make gen`
+once to recompile the game code from them, then `make -j10` again. The generator (`runtime/gen/`) is C++ and builds
+with the app; no Python is needed for it.
 
 ## More documentation
 
@@ -71,10 +72,15 @@ them, then `make -j10`. The randomizer needs its Python environment in
 
 ## Project layout
 
-- `tools/gen.py` - the recompiler: translates the game's executables into C (`generated/`, never committed).
-  `tools/patches.py` holds code patches applied during generation; every patch site checks the original instruction
-  word, so a wrong address fails loudly instead of silently. `tools/chunk_bounds.py` holds where the C is split into
-  files (made with `gen.py --new-chunk-bounds`; new cuts make every file compile once).
+- `runtime/gen/` - the recompiler: translates the game's executables into C (`generated/`, never committed). The app
+  runs it during setup; `make lasgen` builds it as a command-line tool (`make gen`). `runtime/gen/patches.cpp` holds
+  code patches applied during generation; every patch site checks the original instruction word, so a wrong address
+  fails loudly instead of silently. `runtime/gen/chunk_bounds.inc` holds where the C is split into files (made with
+  `lasgen --new-chunk-bounds`; new cuts make every file compile once).
+- `tools/gen.py` and its modules - the Python generator the C++ one was ported from, kept as the reference until the
+  port has shipped. A change to the generator, a patch or the chunk cuts goes into both, and
+  `tools/test_gen_cpp.py build/lasgen <game folder>` must report the C identical (gen.py needs a Python with
+  unicorn, capstone and lz4, e.g. `python3 -m venv tools/venv && tools/venv/bin/pip install unicorn capstone lz4`).
 - `runtime/game_addresses/` - the game's addresses, one table per game version: `versions.h` lists the versions
   by the main program's build ID (1.0.1 and 1.1.0 share one), `patches_<version>.h` holds the addresses used by the
   patch generator (read by `tools/game_addresses.py`, part of the game-library identity) and `runtime_<version>.h`
@@ -89,9 +95,9 @@ them, then `make -j10`. The randomizer needs its Python environment in
   - `nvn/` - the graphics layer: command recording (`cmdbuf.c`), Metal (`renderer.m`, `metal.m`) and Vulkan
     (`vulkan/`) backends, the shader translator (`maxwell/translate.c`)
   - `ui/` - the ImGui overlay menu and the start screen
-- `tools/rando/` - randomizer tooling around LAS-Randomizer: the headless driver (`las_headless.py`), dungeon room
-  shuffle (`dungeon_gen.py`, `room_logic.py`), entrances, pots / bushes / digs, shop, souls, pets.
-- `third_party/LAS-Randomizer` - the vendored randomizer (MIT, with local changes marked "LAS Recomp" in comments).
+- `runtime/rando/` - the randomizer: seed generation (`solve/`), the game files a seed changes (`apply/`), the file
+  formats (`fmt/`). See [docs/randomizer.md](docs/randomizer.md).
+- `third_party/LAS-Randomizer` - the licence of LAS-Randomizer (MIT), whose randomizer `runtime/rando/` is ported from.
 
 ## Testing your change
 
@@ -103,7 +109,8 @@ them, then `make -j10`. The randomizer needs its Python environment in
   documented where they're defined - grep for `getenv("LARECOMP_`. Test runs use a scratch copy of the settings
   file; give them a scratch save folder too (`LARECOMP_SAVE_DIR`) so your own saves stay untouched.
 - Randomizer changes: generate several seeds with different settings and check they complete (every location
-  reachable). For dungeon room shuffle, `tools/doorjump_test.sh <seed>` walks every mismatched doorway.
+  reachable). For dungeon room shuffle, `tools/doorjump_test.sh <seed>` walks every mismatched doorway and
+  `tools/stairs_test.sh <seed>` every stairs and ladder.
 - State that belongs to a seed must be reset when the player switches seeds in place: use an `RT_ON_RESET` hook
   (see `runtime/hle.h`).
 - For an automated Vulkan validation run, set `LARECOMP_VK_VALIDATION_STOP=1`. This requires the Khronos validation
@@ -127,8 +134,12 @@ untranslated text shows in English.
 
 `python tools/test_powerup_music.py` checks power-up music toggles, guest-state preservation and reboot resets without game data.
 
-`third_party/LAS-Randomizer/venv/bin/python tools/test_keysanity_text.py [<romfs>]` checks that keysanity dungeon
-items picked up anywhere, floor key spots included, get a message naming their dungeon.
+The randomizer's native random numbers: `tools/test_pyrandom.cpp` (build line at its top) checks
+`runtime/rando/pyrandom.h` against values recorded from CPython's `random` (`tools/rando/pyrandom_golden.txt`), without
+game data. Seed IDs must keep giving the same seeds, so a mismatch is a bug in the C++ side.
+`tools/test_seed_record.c` (build line at its top) checks that seed records (`runtime/rando/seed.h`) answer every
+setting the runtime reads as the older `settings.json` readers did, without game data. How seeds are made and applied,
+`lasrando` and adding an option: [docs/randomizer.md](docs/randomizer.md).
 
 `python tools/test_text_speed.py` checks the Text speed hooks (Normal, Fast, Instant) without game data.
 

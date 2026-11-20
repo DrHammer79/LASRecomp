@@ -244,7 +244,7 @@ static bool capturing() { return g_open.load() || g_kbd.load() == 1; }
 #define PAD_OFF 0.35f
 static SDL_JoystickID g_axis_pad[PAD_SLOTS];  // (0: free - SDL's ids start at 1)
 static float g_axis[PAD_SLOTS][SDL_GAMEPAD_AXIS_COUNT];
-static bool g_dir_on[6];  // (LStick left, right, up, down; RStick up, down)
+static bool g_dir_on[6];  // (LStick left, right, up, down - left_stick_keys has its own rule now; RStick up, down)
 
 static float axis_max(int axis, float sign) {  // (the furthest any controller pushes that axis that way)
     float m = 0;
@@ -256,6 +256,17 @@ static float dir_value(int d, int axis, float sign) {
     float m = axis_max(axis, sign);
     g_dir_on[d] = m >= (g_dir_on[d] ? PAD_OFF : PAD_ON);
     return g_dir_on[d] ? m : 0;
+}
+// The left stick's menu keys: one direction at a time (pad_nav.h's ui_stick_dir: the way pushed clearly further), from
+// the controller pushing that axis furthest either way (as axis_max: any player's controller moves the menu).
+static void left_stick_keys(int axis) {
+    float plus = axis_max(axis, 1), minus = axis_max(axis, -1);
+    int d = ui_stick_dir(axis, plus >= minus ? plus : -minus);
+    static const ImGuiKey keys[4] = {ImGuiKey_GamepadLStickLeft, ImGuiKey_GamepadLStickRight, ImGuiKey_GamepadLStickUp,
+                                     ImGuiKey_GamepadLStickDown};
+    QEvent q = {};
+    q.kind = QEvent::ANALOG;
+    for (int i = 0; i < 4; i++) q.key = keys[i], q.value = d == i ? 1.0f : 0.0f, push(q);
 }
 // The game's name limit counts characters as the console's keyboard does, in UTF-16 units (a character past U+FFFF
 // takes two); the text is UTF-8. Cuts s after max_units of them, only between characters (a character left incomplete
@@ -350,17 +361,12 @@ bool menu_handle_event(const SDL_Event *e) {
         for (int s = 0; s < PAD_SLOTS; s++)
             if (g_axis_pad[s] == e->gdevice.which) g_axis_pad[s] = 0;
         if (capturing()) {  // (the menu's keys again, from the controllers left)
-            static const ImGuiKey dir_key[6] = {ImGuiKey_GamepadLStickLeft, ImGuiKey_GamepadLStickRight,
-                                                ImGuiKey_GamepadLStickUp, ImGuiKey_GamepadLStickDown,
-                                                ImGuiKey_GamepadRStickUp, ImGuiKey_GamepadRStickDown};
-            static const int dir_axis[6] = {SDL_GAMEPAD_AXIS_LEFTX, SDL_GAMEPAD_AXIS_LEFTX, SDL_GAMEPAD_AXIS_LEFTY,
-                                            SDL_GAMEPAD_AXIS_LEFTY, SDL_GAMEPAD_AXIS_RIGHTY, SDL_GAMEPAD_AXIS_RIGHTY};
+            left_stick_keys(SDL_GAMEPAD_AXIS_LEFTX);
+            left_stick_keys(SDL_GAMEPAD_AXIS_LEFTY);
             QEvent q = {};
             q.kind = QEvent::ANALOG;
-            for (int d = 0; d < 6; d++) {
-                q.key = dir_key[d], q.value = dir_value(d, dir_axis[d], d % 2 ? 1 : -1);
-                push(q);
-            }
+            q.key = ImGuiKey_GamepadRStickUp, q.value = dir_value(4, SDL_GAMEPAD_AXIS_RIGHTY, -1); push(q);
+            q.key = ImGuiKey_GamepadRStickDown, q.value = dir_value(5, SDL_GAMEPAD_AXIS_RIGHTY, 1); push(q);
             q.key = ImGuiKey_GamepadL2, q.value = axis_max(SDL_GAMEPAD_AXIS_LEFT_TRIGGER, 1); push(q);
             q.key = ImGuiKey_GamepadR2, q.value = axis_max(SDL_GAMEPAD_AXIS_RIGHT_TRIGGER, 1); push(q);
         }
@@ -380,13 +386,8 @@ bool menu_handle_event(const SDL_Event *e) {
         QEvent q = {};
         q.kind = QEvent::ANALOG;
         switch (axis) {
-        case SDL_GAMEPAD_AXIS_LEFTX:
-            q.key = ImGuiKey_GamepadLStickLeft; q.value = dir_value(0, axis, -1); push(q);
-            q.key = ImGuiKey_GamepadLStickRight; q.value = dir_value(1, axis, 1); push(q);
-            break;
-        case SDL_GAMEPAD_AXIS_LEFTY:
-            q.key = ImGuiKey_GamepadLStickUp; q.value = dir_value(2, axis, -1); push(q);
-            q.key = ImGuiKey_GamepadLStickDown; q.value = dir_value(3, axis, 1); push(q);
+        case SDL_GAMEPAD_AXIS_LEFTX: case SDL_GAMEPAD_AXIS_LEFTY:  // (one direction at a time: pad_nav.h)
+            left_stick_keys(axis);
             break;
         case SDL_GAMEPAD_AXIS_RIGHTY:  // (scrolls a right column of plain text: option_rows.mm)
             q.key = ImGuiKey_GamepadRStickUp; q.value = dir_value(4, axis, -1); push(q);
@@ -2252,6 +2253,7 @@ void menu_render(void *cmd, uint32_t target_w, uint32_t target_h) {
 #else
     ImGui_ImplVulkan_NewFrame();
 #endif
+    ui_nav_repeat(ImGui::GetIO(), g_text_busy);
     ImGui::NewFrame();
     g_touch.scroll_apply(touch_px);
 

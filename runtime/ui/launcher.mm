@@ -15,6 +15,7 @@
 #include <dirent.h>
 #include <limits.h>
 #include <pthread.h>
+#include <signal.h>
 #include <set>
 #include <string>
 #include <sys/stat.h>
@@ -53,6 +54,7 @@ extern "C" {
 #endif
 #include "paths.h"
 #include "gamebuild.h"
+#include "rando.h"
 #include "build_cache.h"
 #include "game_addresses.h"
 #include "gamelib.h"
@@ -149,6 +151,15 @@ static void save_png(id<MTLTexture> tex, const char *path) {
 #define LARECOMP_PLATFORM "linux-aarch64"
 #else
 #define LARECOMP_PLATFORM "linux-x86_64"
+#endif
+// This platform in release and nightly file names (LAS.Recomp-<version>-<this>.<ext>). The same as LARECOMP_PLATFORM,
+// which names the update manifest (update-<platform>.txt: builds out there fetch it by that name, so it never changes),
+// except Windows x64, whose files say windows-x64 since the nightly of 2026-11 (launchers pick a file by system and
+// processor). Nightlies of that time also carry the zip as -windows.zip, for the builds before that (nightly.yml).
+#if defined(_WIN32) && !defined(_M_ARM64)
+#define LARECOMP_FILE_PLATFORM "windows-x64"
+#else
+#define LARECOMP_FILE_PLATFORM LARECOMP_PLATFORM
 #endif
 extern "C" const char *larecomp_version(void) { return LARECOMP_VERSION; }  // (the shader caches' tag)
 
@@ -249,7 +260,7 @@ static void *update_thread(void *) {
     }
     if (LARECOMP_EXPERIMENTAL_STAMP && best.empty() && newest_experimental(body, LARECOMP_PLATFORM) > LARECOMP_EXPERIMENTAL_STAMP)
         best = "experimental";
-    if (LARECOMP_NIGHTLY_STAMP && newest_nightly(body, LARECOMP_PLATFORM) > LARECOMP_NIGHTLY_STAMP) best = "nightly";
+    if (LARECOMP_NIGHTLY_STAMP && newest_nightly(body, LARECOMP_FILE_PLATFORM) > LARECOMP_NIGHTLY_STAMP) best = "nightly";
     if (!best.empty()) fprintf(stderr, "[launcher] update available: %s (this build %s)\n", best.c_str(), LARECOMP_VERSION);
     pthread_mutex_lock(&g_update_lock);
     g_update_tag = best;
@@ -997,8 +1008,7 @@ static std::vector<std::string> list_seeds() {
     if (DIR *d = opendir("rando")) {
         while (struct dirent *e = readdir(d)) {
             if (e->d_name[0] == '.') continue;
-            std::string dir = std::string("rando/") + e->d_name;
-            if (file_exists(dir + "/settings.json") && file_exists(dir + "/romfs")) out.push_back(e->d_name);
+            if (rando_seed_there(e->d_name)) out.push_back(e->d_name);  // (seed.json or an older settings.json, + romfs)
         }
         closedir(d);
     }
@@ -1675,28 +1685,22 @@ static bool launcher_pad_event(const SDL_Event &e) {
             bool tdown;
             if (ui_pad_trigger(e.gaxis.which, e.gaxis.axis, e.gaxis.value, &tk, &tdown)) io.AddKeyEvent(tk, tdown);
         }
-        // the left stick also works as the d-pad (ImGui moves between items with the d-pad only; the stick scrolls):
-        // pressed past half way, released under 0.3
+        // the left stick also works as the d-pad (ImGui moves between items with the d-pad only; the stick scrolls),
+        // one direction at a time (pad_nav.h ui_stick_dir). Its own keys too, pressed or not, no analog value: ImGui
+        // scrolls the window under the cursor by it - the column moved with the selection, user 2026-11-13; the right
+        // stick scrolls: option_rows.mm stick_scroll
         if (e.gaxis.axis == SDL_GAMEPAD_AXIS_LEFTX || e.gaxis.axis == SDL_GAMEPAD_AXIS_LEFTY) {
-            static bool held[4];  // left, right, up, down
-            bool x = e.gaxis.axis == SDL_GAMEPAD_AXIS_LEFTX;
-            int neg = x ? 0 : 2, pos = neg + 1;
-            const ImGuiKey keys[4] = {ImGuiKey_GamepadDpadLeft, ImGuiKey_GamepadDpadRight, ImGuiKey_GamepadDpadUp,
+            static int held = -1;
+            int d = ui_stick_dir(e.gaxis.axis, v);
+            const ImGuiKey dpad[4] = {ImGuiKey_GamepadDpadLeft, ImGuiKey_GamepadDpadRight, ImGuiKey_GamepadDpadUp,
                                       ImGuiKey_GamepadDpadDown};
-            for (int i : {neg, pos}) {
-                float m = i == neg ? -v : v;
-                bool now = held[i] ? m > 0.3f : m > 0.5f;
-                if (now != held[i]) { held[i] = now; io.AddKeyEvent(keys[i], now); }
+            const ImGuiKey stick[4] = {ImGuiKey_GamepadLStickLeft, ImGuiKey_GamepadLStickRight, ImGuiKey_GamepadLStickUp,
+                                       ImGuiKey_GamepadLStickDown};
+            if (d != held) {
+                if (held >= 0) io.AddKeyEvent(dpad[held], false), io.AddKeyAnalogEvent(stick[held], false, 0);
+                if (d >= 0) io.AddKeyEvent(dpad[d], true), io.AddKeyAnalogEvent(stick[d], true, 0);
+                held = d;
             }
-        }
-        // (pressed or not, no analog value: ImGui scrolls the window under the cursor by it - the column moved with the
-        // selection, user 2026-11-13; the right stick scrolls: option_rows.mm stick_scroll)
-        if (e.gaxis.axis == SDL_GAMEPAD_AXIS_LEFTX) {
-            io.AddKeyAnalogEvent(ImGuiKey_GamepadLStickLeft, v < -0.3f, 0);
-            io.AddKeyAnalogEvent(ImGuiKey_GamepadLStickRight, v > 0.3f, 0);
-        } else if (e.gaxis.axis == SDL_GAMEPAD_AXIS_LEFTY) {
-            io.AddKeyAnalogEvent(ImGuiKey_GamepadLStickUp, v < -0.3f, 0);
-            io.AddKeyAnalogEvent(ImGuiKey_GamepadLStickDown, v > 0.3f, 0);
         } else if (e.gaxis.axis == SDL_GAMEPAD_AXIS_RIGHTY) {  // (scrolls a right column of plain text: option_rows.mm)
             io.AddKeyAnalogEvent(ImGuiKey_GamepadRStickUp, v < -0.1f, v < 0 ? -v : 0);
             io.AddKeyAnalogEvent(ImGuiKey_GamepadRStickDown, v > 0.1f, v > 0 ? v : 0);
@@ -2329,6 +2333,115 @@ static void load_fonts(void) {
     if (!g_font_menu) g_font_small = g_font_menu = g_font_title = io.Fonts->AddFontDefault();
 }
 
+// --game-files <folder> (runtime/main.c, LARECOMP_GAME_FILES): the data folder's game files (root) are the same version
+// as the ones there, ready to play. Not: the start screen sets them up from that folder (launcher_run), then plays.
+static int same_game_files(const std::string &root, const char *src) {  // 1 same version copied, 0 not, -1 none there
+    std::string exefs, romfs;
+    bool unusable = false;
+    find_game(src, exefs, romfs, unusable);
+    if (exefs.empty() || romfs.empty()) return -1;
+    char a[32], b[32];
+    const char *x = game_release_label(exefs.c_str(), a, sizeof a), *y = game_release_label((root + "/exefs").c_str(), b, sizeof b);
+    return x && y && !strcmp(x, y) && check_copied_files(root).empty();
+}
+extern "C" bool launcher_game_files_ready(const char *root, const char *src) {
+    return same_game_files(root, src) == 1 && check_game_files(root).empty();
+}
+
+// ---- for launchers (runtime/main.c)
+// --play: the shader preparation the start screen runs on every start (quick once the system's shader caches are warm:
+// runtime/nvn/shader_prep.h), before the game boots. true: done within a moment; false: still running - launcher_run
+// then shows its bar (the start screen's PLAY waiting for it) and plays (launcher_autoplay); also when the game files
+// aren't ready (once they are).
+extern "C" bool launcher_play_prepare(const char *root) {
+    g_root = root;
+    // (not ready - no game files, or game code from an older version: the start screen, which rebuilds it, then PLAY)
+    if (!check_game_files(g_root).empty()) return false;
+    ui_window_init();
+    start_background_prep();
+    for (int ms = 0; g_bg_prep && ms < 1500; ms += 10) SDL_Delay(10);
+    if (g_bg_prep) fprintf(stderr, "[launcher] --play: the shader preparation takes a while: showing its bar\n");
+    return !g_bg_prep;
+}
+static bool g_autoplay, g_cli_play;  // (PLAY on the first start screen; PLAY once a setup there is done)
+extern "C" void launcher_autoplay(void) { g_autoplay = g_cli_play = true; }
+
+// --prepare [--game-files <folder>]: the setup without a window, for a launcher's own setup screen. The game files
+// copied from the folder (unless that version is set up already), the game code built if needed, the shaders
+// prepared (a hidden window: the GPU device). Lines "progress <0..1> <step>" on stdout as it goes; the result last.
+// 0: ready to play; 1: it failed (the line before says why, the log has the details); 3: cancelled.
+extern "C" void rt_cli_print(const char *s);  // runtime/main.c (stdout; Windows: the console or pipe)
+static std::atomic<bool> g_prep_cli_done{false};
+static void *prepare_cli_report(void *) {
+    std::string last_job;
+    int last_pct = -1;
+    while (!g_prep_cli_done) {
+        float f = g_prep_frac >= 0 ? 0.8f + 0.2f * g_prep_frac : 0.8f * extract_progress();
+        pthread_mutex_lock(&g_lock);
+        std::string job = g_prep_frac >= 0 ? std::string(LN("Preparing shaders")) : g_job;
+        pthread_mutex_unlock(&g_lock);
+        int pct = (int)(f * 200);  // (a line per half percent at most)
+        if (!job.empty() && (pct != last_pct || job != last_job)) {
+            char line[512];
+            snprintf(line, sizeof line, "progress %.3f %s\n", f, job.c_str());
+            rt_cli_print(line);
+            last_pct = pct, last_job = job;
+        }
+        SDL_Delay(250);
+    }
+    return NULL;
+}
+// SIGINT / SIGTERM (the launcher's Cancel): the build and the shader step stop at their next check; finished build
+// pieces are kept, so the next --prepare resumes. Exit 3.
+static volatile sig_atomic_t g_prep_cli_stop;
+static void prepare_cli_signal(int) { g_prep_cli_stop = 1, g_cancel_build = true, g_prep_skip = 1; }
+extern "C" int launcher_prepare_cli(const char *root, const char *src) {
+    g_root = root;
+    signal(SIGINT, prepare_cli_signal);
+    signal(SIGTERM, prepare_cli_signal);
+    setenv("LARECOMP_HIDDEN", "1", 1);  // (the window only holds the GPU device: never shown)
+    bool have = src && *src;
+    int same = have ? same_game_files(g_root, src) : check_copied_files(g_root).empty();
+    if (have && same < 0) {
+        rt_cli_print("error No game files found in that folder.\n");
+        fprintf(stderr, "[launcher] --prepare: no game files in %s\n", src);
+        return 1;
+    }
+    if (!have && !same) {
+        rt_cli_print("error No game files set up yet. Pass --game-files <folder>.\n");
+        return 1;
+    }
+    ui_window_init();
+    pthread_t rep;
+    pthread_create(&rep, NULL, prepare_cli_report, NULL);
+    if (same == 1 && check_game_files(g_root).empty()) {  // (set up already: the shaders only)
+        fprintf(stderr, "[launcher] --prepare: game files set up already\n");
+        prepare_shaders();
+    } else {
+        g_src = same == 1 ? "" : src;  // (the same version copied: only the game code to build)
+        g_busy = true;
+        extract_thread(NULL);
+    }
+    g_prep_cli_done = true;
+    pthread_join(rep, NULL);
+    if (g_prep_cli_stop) {
+        rt_cli_print("error Cancelled.\n");
+        fprintf(stderr, "[launcher] --prepare: cancelled\n");
+        return 3;
+    }
+    std::string why = check_game_files(g_root);
+    if (!why.empty()) {
+        std::string line = "error " + (g_job_failed && !g_job.empty() ? g_job : why);
+        if (!g_job_hint.empty()) line += (strchr(".!?", line.back()) ? " " : ". ") + g_job_hint;
+        rt_cli_print((line + "\n").c_str());
+        fprintf(stderr, "[launcher] --prepare: %s\n", line.c_str());
+        return 1;
+    }
+    rt_cli_print("progress 1.000 Ready to play\n");
+    fprintf(stderr, "[launcher] --prepare: ready\n");
+    return 0;
+}
+
 extern "C" void launcher_run(const char *root) {
     g_root = root;
     g_start_screen = 1;
@@ -2444,6 +2557,8 @@ extern "C" void launcher_run(const char *root) {
     static int runs;  // (test: =once - only the first time, so a "Title screen" reboot lands on the start screen)
     const char *ap = getenv("LARECOMP_LAUNCHER_AUTOPLAY");
     if (ap && status.empty() && !(runs && !strcmp(ap, "once"))) play = true;  // (test: PLAY at once)
+    if (g_autoplay && status.empty()) play = true, g_cli_play = false;  // (--play: the preparation's bar, then PLAY)
+    g_autoplay = false;
     if (getenv("LARECOMP_LAUNCHER_PREPARE") && status.empty() && !runs) {  // (test) the setup's shader preparation
         g_busy = true;                                                      // alone, then PLAY with AUTOPLAY
         page = SETUP, play = false;
@@ -2493,6 +2608,22 @@ extern "C" void launcher_run(const char *root) {
         pthread_t th;
         pthread_create(&th, NULL, extract_thread, NULL);
         pthread_detach(th);
+    }
+    static bool game_files_once;  // (--game-files: the first start screen only, not after a "Title screen" reboot)
+    if (const char *gf = getenv("LARECOMP_GAME_FILES"); gf && *gf && !game_files_once) {
+        game_files_once = true;
+        int same = same_game_files(g_root, gf);
+        if (same == 1 && status.empty()) play = true;
+        else if (same == 1) g_cli_play = true;  // (the game code is out of date: rebuilt above, then PLAY)
+        else if (!g_busy) {  // (no files there, or not usable: the setup says what's wrong, as for a picked folder)
+            fprintf(stderr, "[launcher] --game-files: setting up the game files from %s\n", gf);
+            g_src = gf;
+            g_busy = true, g_cli_play = true;
+            page = SETUP;
+            pthread_t th;
+            pthread_create(&th, NULL, extract_thread, NULL);
+            pthread_detach(th);
+        }
     }
     if (getenv("LARECOMP_LAUNCHER_DELETE")) {  // (test) what DELETE GAME FILES does, logged; then the start screen
         double gb = rt_game_files_size(g_root.c_str()) / 1e9;
@@ -2658,6 +2789,8 @@ extern "C" void launcher_run(const char *root) {
             status = check_game_files(g_root);
             if (status.empty()) { if (!g_bg) load_background(dev); page = MAIN; }
             if (status.empty() && ap && getenv("LARECOMP_LAUNCHER_PREPARE")) play = true;
+            if (status.empty() && g_cli_play) play = true;
+            g_cli_play = false;
             g_auto_update = false;
         }
         was_busy = busy;
@@ -2749,6 +2882,7 @@ extern "C" void launcher_run(const char *root) {
             // a drag / flick (touch_ui.h): this frame's scroll, onto the page under the finger
             float touch_px = g_touch.frame(io.DeltaTime, [&](float x, float y) { io.AddMousePosEvent(x, y); },
                                            [&](bool down) { io.AddMouseButtonEvent(0, down); });
+            ui_nav_repeat(io, ui_text_busy());
             ImGui::NewFrame();
             g_touch.scroll_apply(touch_px);
             const Page frame_page = page;  // (menu_sfx_frame: B on the main page does nothing)

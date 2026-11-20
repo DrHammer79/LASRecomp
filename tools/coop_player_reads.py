@@ -9,7 +9,7 @@ object with something else at +0x4b8, so the runtime checks the base itself at e
 and loads with a register offset aren't listed: this prints how many ldp there are, to look at by hand.
 
 Usage: python tools/coop_player_reads.py <extracted>/exefs/main [out]
-       (out: runtime/game_addresses/coop_player_reads_<version>.txt, the version from the program's build ID)
+       (out: runtime/game_addresses/coop_player_reads_<version>.h, the version from the program's build ID)
 """
 import os
 import sys
@@ -115,13 +115,14 @@ def main():
         gm = t['GAME_MGR'] - MAIN_BASE
     reads, pairs = scan(n, gm)
     path = sys.argv[2] if len(sys.argv) > 2 else os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), '..', 'runtime', 'game_addresses', f'coop_player_reads_{key}.txt')
+        os.path.dirname(os.path.abspath(__file__)), '..', 'runtime', 'game_addresses', f'coop_player_reads_{key}.h')
     with open(path, 'w', newline='\n') as f:
-        f.write(f'# Every ldr xT, [xN, #0x4b8] in main ({key}): tools/coop_player_reads.py made this list; tools/patches.py\n'
-                f'# replaces each with rt_coop_player() (runtime/hle/coop.c). <address> <instruction word> <gm: xN holds\n'
-                f'# the game manager as a pass through the function sees it; ?: not known>\n')
+        f.write(f'// Every ldr xT, [xN, #0x4b8] in main ({key}): tools/coop_player_reads.py made this list; tools/patches.py and\n'
+                f'// runtime/gen/patches.cpp replace each with rt_coop_player() (runtime/hle/coop.c). COOP_PLAYER_READ(<address>,\n'
+                f'// <instruction word>), then whether xN holds the game manager as a pass through the function sees it (gm) or\n'
+                f'// isn\'t known (?).\n')
         for a, w, t in reads:
-            f.write(f'{MAIN_BASE + a:#x} {w:#010x} {"gm" if t else "?"}\n')
+            f.write(f'COOP_PLAYER_READ({MAIN_BASE + a:#x}, {w:#010x})  // {"gm" if t else "?"}\n')
     print(f'{key}: {len(reads)} reads of +0x4b8 ({sum(t for _, _, t in reads)} from the game manager), '
           f'{len(pairs)} ldp reaching +0x4b8 ({sum(t for _, _, t in pairs)} from the game manager) -> {path}')
     for a, w, t in pairs:

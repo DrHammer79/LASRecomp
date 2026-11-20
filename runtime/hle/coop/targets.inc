@@ -438,7 +438,7 @@ static int carrier(uint64_t actor) {  // (the other player who lifted it last; 0
 }
 
 // "Link" for the game's code: each read of the game manager's player slot (+0x4b8) in the main program is this call
-// (tools/patches.py _player_read, the reads in runtime/game_addresses/coop_player_reads_<version>.txt). While an
+// (tools/patches.py _player_read and runtime/gen/patches.cpp, the reads in runtime/game_addresses/coop_player_reads_<version>.h). While an
 // enemy updates on the game thread (actor_exec_begin), the game manager's reads give the Link it goes for; any other
 // read - another thread's (a worker job's), outside an update, with co-op off, another object's +0x4b8 (a read whose
 // base the list's scan couldn't follow) - what the slot holds. Until 2026-11-13 the slot itself was swapped for the
